@@ -1,6 +1,8 @@
 package io.lantern.messaging.store
 
+import android.content.Context
 import io.lantern.observablemodel.ObservableModel
+import io.lantern.secrets.Secrets
 import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.InvalidKeyIdException
@@ -14,10 +16,29 @@ import org.whispersystems.libsignal.state.SessionRecord
 import org.whispersystems.libsignal.state.SignalProtocolStore
 import org.whispersystems.libsignal.state.SignedPreKeyRecord
 import org.whispersystems.libsignal.util.KeyHelper
+import java.io.Closeable
+import java.io.File
 
 private val logger = KotlinLogging.logger {}
 
-class MessagingModel(private val db: ObservableModel) : SignalProtocolStore {
+class MessagingModel(
+    ctx: Context,
+    dbPath: String = File(ctx.filesDir, "messaging.db").absolutePath,
+    secretPrefsName: String = "secrets",
+    masterKeyName: String = "messagingMasterKey",
+    dbPasswordName: String = "messagingDbPassword",
+    dbPasswordBytes: Int = 20
+) : SignalProtocolStore, Closeable {
+    private val db: ObservableModel
+    private val secrets: Secrets
+
+    init {
+        val secretsPreferences = ctx.getSharedPreferences(secretPrefsName, Context.MODE_PRIVATE)
+        secrets = Secrets(masterKeyName, secretsPreferences)
+        val dbPassword = secrets.get(dbPasswordName, dbPasswordBytes)!!
+        db = ObservableModel.build(ctx, dbPath, dbPassword)
+    }
+
     override fun getIdentityKeyPair(): ECKeyPair {
         return db.mutate { tx ->
             val public = db.get<ByteArray>(PATH_IDENTITY_KEY_PUBLIC)
@@ -34,15 +55,26 @@ class MessagingModel(private val db: ObservableModel) : SignalProtocolStore {
         }
     }
 
-    override fun loadPreKey(preKeyId: Int): PreKeyRecord? {
-        return db.get<ByteArray>(oneTimePreKeyPath(preKeyId))?.let { PreKeyRecord(it) }
-            ?: throw InvalidKeyIdException("No one time preKey for id ${preKeyId}")
+    fun generatePreKeys(count: Int): List<PreKeyRecord> {
+        // TODO: handle the case of prekey ids rolling past MAX_INT
+        return db.mutate { tx ->
+            val nextId = tx.get(PATH_NEXT_ONE_TIME_PREKEY_ID) ?: 1
+            val oneTimePreKeys = KeyHelper.generatePreKeys(nextId, count)
+            oneTimePreKeys.forEach { preKey ->
+                tx.put(oneTimePreKeyPath(preKey.id), preKey.serialize())
+            }
+            tx.put(PATH_NEXT_ONE_TIME_PREKEY_ID, nextId + count)
+            oneTimePreKeys
+        }
     }
 
     override fun storePreKey(preKeyId: Int, record: PreKeyRecord?) {
-        db.mutate { tx ->
-            tx.put(oneTimePreKeyPath(preKeyId), record?.serialize())
-        }
+        throw AssertionError("storePreKey should never be called directly, please use generatePreKeys() to generate new keys")
+    }
+
+    override fun loadPreKey(preKeyId: Int): PreKeyRecord? {
+        return db.get<ByteArray>(oneTimePreKeyPath(preKeyId))?.let { PreKeyRecord(it) }
+            ?: throw InvalidKeyIdException("No one time preKey for id ${preKeyId}")
     }
 
     override fun containsPreKey(preKeyId: Int): Boolean {
@@ -53,6 +85,24 @@ class MessagingModel(private val db: ObservableModel) : SignalProtocolStore {
         db.mutate { tx ->
             tx.delete(oneTimePreKeyPath(preKeyId))
         }
+    }
+
+    val nextSignedPreKey: SignedPreKeyRecord
+        get() {
+            // TODO: handle the case of signred prekey ids rolling past MAX_INT
+            return db.mutate { tx ->
+                val currentId = tx.get(PATH_CURRENT_SIGNED_PREKEY_ID) ?: 0
+                val nextId = currentId + 1
+                val signedPreKey = KeyHelper.generateSignedPreKey(identityKeyPair, nextId)
+                tx.put(PATH_CURRENT_SIGNED_PREKEY_ID, nextId)
+                tx.put(PATH_CURRENT_SIGNED_PREKEY, signedPreKey)
+                tx.put(signedPreKeyPath(nextId), signedPreKey.serialize())
+                signedPreKey
+            }
+        }
+
+    override fun storeSignedPreKey(signedPreKeyId: Int, record: SignedPreKeyRecord?) {
+        throw AssertionError("storeSignedPreKey should never be called directly, please use nextSignedPreKey to generate new keys")
     }
 
     override fun loadSignedPreKey(signedPreKeyId: Int): SignedPreKeyRecord {
@@ -66,10 +116,6 @@ class MessagingModel(private val db: ObservableModel) : SignalProtocolStore {
                 .map { SignedPreKeyRecord(it.value) })
     }
 
-    override fun storeSignedPreKey(signedPreKeyId: Int, record: SignedPreKeyRecord?) {
-        throw AssertionError("storeSignedPreKey should never be called directly, please use nextSignedPreKey to generate new keys")
-    }
-
     override fun containsSignedPreKey(signedPreKeyId: Int): Boolean {
         return db.contains(signedPreKeyPath(signedPreKeyId))
     }
@@ -79,19 +125,6 @@ class MessagingModel(private val db: ObservableModel) : SignalProtocolStore {
             tx.delete(signedPreKeyPath(signedPreKeyId))
         }
     }
-
-    val nextSignedPreKey: SignedPreKeyRecord
-        get() {
-            return db.mutate { tx ->
-                val currentPreKeyId = tx.get(PATH_CURRENT_SIGNED_PREKEY_ID) ?: 0
-                val nextPreKeyId = currentPreKeyId + 1
-                val signedPreKey = KeyHelper.generateSignedPreKey(identityKeyPair, nextPreKeyId)
-                tx.put(PATH_CURRENT_SIGNED_PREKEY_ID, nextPreKeyId)
-                tx.put(PATH_CURRENT_SIGNED_PREKEY, signedPreKey)
-                tx.put(signedPreKeyPath(nextPreKeyId), signedPreKey.serialize())
-                signedPreKey
-            }
-        }
 
     override fun loadSession(address: SignalProtocolAddress): SessionRecord {
         var path = sessionPath(address)
@@ -131,6 +164,10 @@ class MessagingModel(private val db: ObservableModel) : SignalProtocolStore {
         }
     }
 
+    override fun close() {
+        db.close()
+    }
+
     companion object {
         private const val PATH_SIGNAL_PROTOCOL_STORE = "/signalProtocolStore"
 
@@ -145,9 +182,10 @@ class MessagingModel(private val db: ObservableModel) : SignalProtocolStore {
         private const val PATH_ALL_SIGNED_PREKEYS_BY_ID = "${PATH_SIGNED_PREKEYS}/all"
         private fun signedPreKeyPath(id: Int) = "${PATH_ALL_SIGNED_PREKEYS_BY_ID}/${id}"
 
-        private const val PATH_ONETIME_PREKEYS = "${PATH_PREKEYS}/onetime"
-        private const val PATH_ALL_ONETIME_PREKEYS_BY_ID = "${PATH_ONETIME_PREKEYS}/all"
-        private fun oneTimePreKeyPath(id: Int) = "${PATH_ALL_ONETIME_PREKEYS_BY_ID}/${id}"
+        private const val PATH_ONE_TIME_PREKEYS = "${PATH_PREKEYS}/onetime"
+        private const val PATH_NEXT_ONE_TIME_PREKEY_ID = "${PATH_ONE_TIME_PREKEYS}/nextId"
+        private const val PATH_ALL_ONE_TIME_PREKEYS_BY_ID = "${PATH_ONE_TIME_PREKEYS}/all"
+        private fun oneTimePreKeyPath(id: Int) = "${PATH_ALL_ONE_TIME_PREKEYS_BY_ID}/${id}"
 
         private const val PATH_ALL_SESSIONS_BY_ADDRESS = "${PATH_SIGNAL_PROTOCOL_STORE}/sessions"
         private fun sessionPath(address: SignalProtocolAddress) =
@@ -155,6 +193,4 @@ class MessagingModel(private val db: ObservableModel) : SignalProtocolStore {
 
         private fun devicesForNamePath(name: String) = "${PATH_ALL_SESSIONS_BY_ADDRESS}/${name}:"
     }
-
-
 }

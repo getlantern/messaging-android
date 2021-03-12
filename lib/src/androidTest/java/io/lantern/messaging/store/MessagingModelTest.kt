@@ -2,7 +2,6 @@ package io.lantern.messaging.store
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import io.lantern.observablemodel.ObservableModel
 import junit.framework.Assert.assertEquals
 import junit.framework.Assert.assertFalse
 import org.junit.After
@@ -27,8 +26,7 @@ class MessagingModelTest {
 
     @Test
     fun testIdentityKeyPair() {
-        db.use {
-            val model = MessagingModel(it)
+        newModel.use { model ->
             val kp1 = model.identityKeyPair
             val kp2 = model.identityKeyPair
             assertEquals(kp1.publicKey, kp2.publicKey)
@@ -38,12 +36,23 @@ class MessagingModelTest {
 
     @Test
     fun testPreKeys() {
-        db.use {
-            val model = MessagingModel(it)
-            val pk1 = KeyHelper.generatePreKeys(1, 1)[0]
-            model.storePreKey(1, pk1)
-            assertTrue(model.containsPreKey(1))
-            assertTrue(Arrays.equals(pk1.serialize(), model.loadPreKey(1)?.serialize()))
+        newModel.use { model ->
+            try {
+                model.storePreKey(1, KeyHelper.generatePreKeys(0, 1)[0])
+                fail("should not be allowed to directly store one time pre keys")
+            } catch (e: AssertionError) {
+                // expected
+            }
+            val somePks = model.generatePreKeys(2)
+            assertEquals(2, somePks.size)
+            val allPks = somePks + model.generatePreKeys(2)
+            assertEquals(4, allPks.size)
+            for (i in 1..4) {
+                assertTrue(model.containsPreKey(i))
+                val pk = allPks[i - 1].serialize()
+                val loadedPk = model.loadPreKey(i)?.serialize()
+                assertTrue(Arrays.equals(pk, loadedPk))
+            }
             model.removePreKey(1)
             assertFalse(model.containsPreKey(1))
             try {
@@ -57,8 +66,7 @@ class MessagingModelTest {
 
     @Test
     fun testSignedPreKeys() {
-        db.use {
-            val model = MessagingModel(it)
+        newModel.use { model ->
             try {
                 model.storeSignedPreKey(1, KeyHelper.generateSignedPreKey(model.identityKeyPair, 1))
                 fail("should not be allowed to directly store signed pre keys")
@@ -86,8 +94,7 @@ class MessagingModelTest {
 
     @Test
     fun testSessions() {
-        db.use {
-            val model = MessagingModel(it)
+        newModel.use { model ->
             val address1 =
                 SignalProtocolAddress(Curve.generateKeyPair().publicKey, DeviceId.random())
             val address2 = SignalProtocolAddress(address1.identityKey, DeviceId.random())
@@ -118,16 +125,14 @@ class MessagingModelTest {
         }
     }
 
-    private val db: ObservableModel
-        get() =
-            ObservableModel.build(
-                InstrumentationRegistry.getInstrumentation().targetContext,
-                filePath = Paths.get(
-                    tempDir.toString(),
-                    "testdb"
-                ).toString(),
-                password = "testpassword",
-            )
+    private val newModel: MessagingModel
+        get() = MessagingModel(
+            InstrumentationRegistry.getInstrumentation().targetContext,
+            dbPath = Paths.get(
+                tempDir.toString(),
+                "testdb"
+            ).toString()
+        )
 
     @Before
     fun setupTempDir() {
