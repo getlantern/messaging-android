@@ -49,7 +49,11 @@ class Client(
 ) {
     private val anonymousHandler = AnonymousConnectionHandler(this, anonymousOutboundBufferDepth)
     private val authenticatedHandler =
-        AuthenticatedConnectionHandler(this, authenticatedOutboundBufferDepth, authenticatedInboundBufferDept)
+        AuthenticatedConnectionHandler(
+            this,
+            authenticatedOutboundBufferDepth,
+            authenticatedInboundBufferDept
+        )
     private val msgSequence = AtomicInteger()
 
     init {
@@ -220,14 +224,17 @@ internal class AuthenticatedConnectionHandler(
             ).build()
         val loginBytes = login.toByteArray()
         val signature = Curve.calculateSignature(identityKeyPair.privateKey, loginBytes)
-        val authResponse = Messages.AuthResponse.newBuilder()
-            .setLogin(loginBytes.byteString())
-            .setSignature(signature.byteString()).build()
+        val authResponse = Messages.Message.newBuilder().setAuthResponse(
+            Messages.AuthResponse.newBuilder()
+                .setLogin(loginBytes.byteString())
+                .setSignature(signature.byteString())
+        ).build()
         conn.outbound.send(authResponse.toByteArray())
         val result = conn.inbound.receive().message()
         if (result.hasAck()) {
             // we're logged in!
         } else {
+            // TODO: the below causes a crash. Would be good to handle that more cleanly
             throw Exception("Unable to log in: ${result.error.description}")
         }
     }
@@ -239,7 +246,12 @@ internal class AuthenticatedConnectionHandler(
                 // TODO: actually send in the pre-keys
 
             }
-            Messages.Message.PayloadCase.INBOUNDMESSAGE -> inbound.send(InboundMessage(msg, this@AuthenticatedConnectionHandler))
+            Messages.Message.PayloadCase.INBOUNDMESSAGE -> inbound.send(
+                InboundMessage(
+                    msg,
+                    this@AuthenticatedConnectionHandler
+                )
+            )
             else -> super.onMessage(msg)
         }
     }
@@ -250,17 +262,21 @@ internal class AuthenticatedConnectionHandler(
  * recorded so that it can be deleted server-side.
  */
 @ExperimentalTime
-class InboundMessage internal constructor(private val msg: Messages.Message, private val handler: AuthenticatedConnectionHandler) {
+class InboundMessage internal constructor(
+    private val msg: Messages.Message,
+    private val handler: AuthenticatedConnectionHandler
+) {
     val data: ByteString
         get() = msg.inboundMessage
 
     suspend fun ack() {
         handler.send(
             Messages.Message.newBuilder().setSequence(msg.sequence).setAck(
-                Messages.Ack.newBuilder().build()).build())
+                Messages.Ack.newBuilder().build()
+            ).build()
+        )
     }
 }
-
 
 
 fun ByteArray.message(): Messages.Message {

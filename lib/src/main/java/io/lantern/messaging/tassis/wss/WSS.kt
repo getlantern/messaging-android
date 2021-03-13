@@ -36,7 +36,7 @@ class WssConnection(private val client: HttpClient, private val url: String) : C
                 while (isActive) {
                     select<Unit> {
                         outbound.onReceive {
-                            send(Binary(false, it))
+                            send(Binary(true, it))
                         }
                         incoming.onReceive {
                             inbound.send(it.readBytes())
