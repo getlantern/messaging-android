@@ -21,7 +21,7 @@ import java.io.File
 
 private val logger = KotlinLogging.logger {}
 
-class MessagingModel(
+class MessagingStore(
     ctx: Context,
     dbPath: String = File(ctx.filesDir, "messaging.db").absolutePath,
     secretPrefsName: String = "secrets",
@@ -51,6 +51,20 @@ class MessagingModel(
                 tx.put(PATH_IDENTITY_KEY_PUBLIC, keyPair.publicKey.bytes)
                 tx.put(PATH_IDENTITY_KEY_PRIVATE, keyPair.privateKey.bytes)
                 keyPair
+            }
+        }
+    }
+
+    val deviceId: DeviceId
+    get() {
+        return db.mutate { tx ->
+            val bytes = tx.get<ByteArray>(PATH_DEVICE_ID)
+            if (bytes != null) {
+                DeviceId(bytes)
+            } else {
+                val deviceId = DeviceId.random()
+                tx.put(PATH_DEVICE_ID, deviceId.bytes)
+                deviceId
             }
         }
     }
@@ -174,6 +188,8 @@ class MessagingModel(
         private const val PATH_IDENTITY_KEY = "${PATH_SIGNAL_PROTOCOL_STORE}/identityKeyPair"
         private const val PATH_IDENTITY_KEY_PUBLIC = "${PATH_IDENTITY_KEY}/public"
         private const val PATH_IDENTITY_KEY_PRIVATE = "${PATH_IDENTITY_KEY}/private"
+
+        private const val PATH_DEVICE_ID = "${PATH_SIGNAL_PROTOCOL_STORE}/deviceId"
 
         private const val PATH_PREKEYS = "${PATH_SIGNAL_PROTOCOL_STORE}/preKeys"
         private const val PATH_SIGNED_PREKEYS = "${PATH_PREKEYS}/signed"
