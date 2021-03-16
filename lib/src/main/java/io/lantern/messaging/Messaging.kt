@@ -4,15 +4,13 @@ import com.google.protobuf.ByteString
 import io.lantern.messaging.store.MessagingStore
 import io.lantern.messaging.tassis.*
 import io.lantern.observablemodel.Subscriber
-import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.selects.select
 import mu.KotlinLogging
 import org.signal.libsignal.metadata.SealedSessionCipher
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.SessionBuilder
 import org.whispersystems.libsignal.SignalProtocolAddress
 import org.whispersystems.libsignal.ecc.Curve
+import org.whispersystems.libsignal.ecc.ECKeyPair
 import org.whispersystems.libsignal.ecc.ECPublicKey
 import org.whispersystems.libsignal.state.PreKeyBundle
 import org.whispersystems.libsignal.state.PreKeyRecord
@@ -33,24 +31,26 @@ private val logger = KotlinLogging.logger {}
 @ExperimentalTime
 class Messaging(
     internal val store: MessagingStore,
-    private val scope: CoroutineScope,
+    private val transportFactory: TransportFactory,
     private val redialBackoff: Duration = 50.milliseconds,
     private val maxRedialDelay: Duration = 15.seconds,
     failedSendRetryDelay: Duration = 5.seconds,
     numInitialPreKeysToRegister: Int = 5,
     private val name: String = "messaging",
-    private val dialTassis: suspend (CoroutineScope) -> ClientConnection
 ) : Closeable {
-    // All processing that involves crypto operations happens on this executor to keep
+    // All processing that involves crypto and client operations happens on this executor to keep
     // SignalProtocolStore in a consistent state
-    private val executor = Executors.newScheduledThreadPool(8) {
+    private val executor = Executors.newSingleThreadScheduledExecutor() {
         Thread(it, "${name}-executor")
     }
-    private val clientChannel = Channel<Client>(1)
+    private var anonymousClient: AnonymousClient? = null
+    private var authenticatedClient: AuthenticatedClient? = null
+
+    private val identityKeyPair: ECKeyPair
+    private val deviceId: DeviceId
     private val cipher = SealedSessionCipher(store, store.deviceId)
 
     private val subscriberId = UUID.randomUUID().toString()
-    private val job: Job
 
     init {
         store.db.registerType(21, Model.Contact::class.java)
@@ -58,7 +58,8 @@ class Messaging(
         store.db.registerType(23, Model.Attachment::class.java)
         store.db.registerType(24, Model.OutboundUserMessage::class.java)
 
-        val identityKeyPair = store.identityKeyPair
+        identityKeyPair = store.identityKeyPair
+        deviceId = store.deviceId
 
         // on startup, register some pre keys
         registerPreKeys(numInitialPreKeysToRegister)
@@ -80,37 +81,6 @@ class Messaging(
                 // not interested
             }
         })
-
-        // maintain client connections
-        job = scope.launch {
-            while (isActive) {
-                try {
-                    coroutineScope {
-                        val anonymousConn = dialServer()
-                        val authenticatedConn = dialServer()
-                        val client = Client(
-                            identityKeyPair.publicKey,
-                            store.deviceId,
-                            anonymousConn,
-                            authenticatedConn,
-                            scope
-                        ) { loginBytes ->
-                            Curve.calculateSignature(
-                                identityKeyPair.privateKey,
-                                loginBytes
-                            )
-                        }
-                        clientChannel.send(client)
-
-                        while (isActive) {
-                            processInboundFromClient(client)
-                        }
-                    }
-                } catch (t: Throwable) {
-                    logger.error("Error maintaining client connections: ${t.message}", t)
-                }
-            }
-        }
     }
 
     fun addContact(contact: Model.Contact) {
@@ -147,84 +117,71 @@ class Messaging(
         }
     }
 
-    private suspend fun processInboundFromClient(client: Client) {
-        select<Unit> {
-            client.preKeysLow.onReceive {
-                registerPreKeys(it)
-            }
-            client.inbound.onReceive {
-                decryptAndStore(it)
-            }
-        }
-    }
-
     private fun registerPreKeys(numPreKeys: Int, delayMillis: Long = 0) {
         executor.schedule({
-            getClient().use { ch ->
-                try {
-                    logger.debug("registering ${numPreKeys} pre keys")
-                    store.db.mutate {
-                        val spk = store.nextSignedPreKey
-                        val otpks = store.generatePreKeys(numPreKeys)
-                        logger.debug("about to call client.registerPeKeys")
-                        ch.client.registerPreKeys(Model.SignedPreKey.newBuilder().setId(spk.id)
-                            .setPublicKey(spk.keyPair.publicKey.bytes.byteString())
-                            .setSignature(spk.signature.byteString()).build().toByteArray(),
-                            otpks.map { otpk ->
-                                Model.OneTimePreKey.newBuilder().setId(otpk.id)
-                                    .setPublicKey(otpk.keyPair.publicKey.bytes.byteString()).build()
-                                    .toByteArray()
-                            }
-                        )
-                        logger.debug("done mutating")
-                    }
-                    logger.debug("registered ${numPreKeys} pre keys")
-                } catch (t: Throwable) {
-                    logger.error(
-                        "unable to register pre keys, will try again later: ${t.message}",
-                        t
+            val client = getAuthenticatedClient()
+            try {
+                logger.debug("registering ${numPreKeys} pre keys")
+                store.db.mutate {
+                    val spk = store.nextSignedPreKey
+                    val otpks = store.generatePreKeys(numPreKeys)
+                    logger.debug("about to call client.registerPeKeys")
+                    client.register(Model.SignedPreKey.newBuilder().setId(spk.id)
+                        .setPublicKey(spk.keyPair.publicKey.bytes.byteString())
+                        .setSignature(spk.signature.byteString()).build().toByteArray(),
+                        otpks.map { otpk ->
+                            Model.OneTimePreKey.newBuilder().setId(otpk.id)
+                                .setPublicKey(otpk.keyPair.publicKey.bytes.byteString()).build()
+                                .toByteArray()
+                        }
                     )
-                    registerPreKeys(numPreKeys, 5000)
+                    logger.debug("done mutating")
                 }
+                logger.debug("registered ${numPreKeys} pre keys")
+            } catch (t: Throwable) {
+                logger.error(
+                    "unable to register pre keys, will try again later: ${t.message}",
+                    t
+                )
+                registerPreKeys(numPreKeys, 5000)
             }
         }, delayMillis, TimeUnit.MILLISECONDS)
     }
 
     private fun encryptAndSend(msg: Model.OutboundUserMessage, delayMillis: Long) {
         executor.schedule({
-            getClient().use { ch ->
-                val unsentRecipients = HashSet<ByteString>(msg.recipientsList)
-                msg.recipientsList.forEach { recipient ->
-                    try {
-                        encryptAndSendTo(ch.client, msg, recipient.toByteArray())
-                        unsentRecipients.remove(recipient)
-                    } catch (t: Throwable) {
-                        logger.error("error sending, will retry: ${t.message}", t)
-                    }
+            val client = getAnonymousClient()
+            val unsentRecipients = HashSet<ByteString>(msg.recipientsList)
+            msg.recipientsList.forEach { recipient ->
+                try {
+                    encryptAndSendTo(client, msg, recipient.toByteArray())
+                    unsentRecipients.remove(recipient)
+                } catch (t: Throwable) {
+                    logger.error("error sending, will retry: ${t.message}", t)
                 }
-                val successful = unsentRecipients.size == 0
-                val userMessage =
-                    msg.content.outbound(if (successful) Model.DeliveryStatus.SENT else Model.DeliveryStatus.FAILING)
-                logger.debug("encryptAndSend result")
-                store.db.mutate { tx ->
-                    tx.put(userMessage.dbPath, userMessage)
-                    if (successful) {
-                        tx.delete(userMessage.outboundPath)
-                    } else {
-                        val outbound =
-                            msg.toBuilder().clearRecipients()
-                                .addAllRecipients(unsentRecipients.toList())
-                                .setLastFailed(System.currentTimeMillis() * 1000000)
-                                .build()
-                        tx.put(userMessage.outboundPath, outbound)
-                    }
+            }
+            val successful = unsentRecipients.size == 0
+            val userMessage =
+                msg.content.outbound(if (successful) Model.DeliveryStatus.SENT else Model.DeliveryStatus.FAILING)
+            logger.debug("encryptAndSend result")
+            store.db.mutate { tx ->
+                tx.put(userMessage.dbPath, userMessage)
+                if (successful) {
+                    tx.delete(userMessage.outboundPath)
+                } else {
+                    val outbound =
+                        msg.toBuilder().clearRecipients()
+                            .addAllRecipients(unsentRecipients.toList())
+                            .setLastFailed(System.currentTimeMillis() * 1000000)
+                            .build()
+                    tx.put(userMessage.outboundPath, outbound)
                 }
             }
         }, delayMillis, TimeUnit.MILLISECONDS)
     }
 
     private fun encryptAndSendTo(
-        client: Client,
+        client: AnonymousClient,
         msg: Model.OutboundUserMessage,
         recipient: ByteArray
     ) {
@@ -299,11 +256,25 @@ class Messaging(
         msg.ack()
     }
 
-    private suspend fun dialServer(): ClientConnection {
+    @Synchronized
+    private fun getAnonymousClient(): AnonymousClient {
+        val existing = anonymousClient
+        if (existing != null) {
+            return existing
+        }
+
         var failures = 0
         while (true) {
             try {
-                return dialTassis(scope)
+                val newClient = AnonymousClient.connect(transportFactory, object : ClientDelegate {
+                    override fun onClose(err: Throwable?) {
+                        synchronized(this) {
+                            anonymousClient = null
+                        }
+                    }
+                })
+                anonymousClient = newClient
+                return newClient
             } catch (t: Throwable) {
                 val redialDelay = redialBackoff * 2.0.pow(failures)
                 val actualRedialDelay =
@@ -312,33 +283,74 @@ class Messaging(
                     "error dialing tassis, will retry in ${actualRedialDelay}: ${t.message}",
                     t
                 )
-                delay(actualRedialDelay.toLongMilliseconds())
+                Thread.sleep(actualRedialDelay.toLongMilliseconds())
                 failures++
             }
         }
     }
 
-    internal fun getClient(): ClientHolder {
-        return runBlocking {
-            ClientHolder(clientChannel.receive(), clientChannel)
+    @Synchronized
+    private fun getAuthenticatedClient(): AuthenticatedClient {
+        val existing = authenticatedClient
+        if (existing != null) {
+            return existing
+        }
+
+        var failures = 0
+        while (true) {
+            try {
+                val newClient = AuthenticatedClient.connect(
+                    transportFactory,
+                    identityKeyPair.publicKey,
+                    deviceId,
+                    object : AuthenticatedClientDelegate {
+                        override fun signLogin(loginBytes: ByteArray) = Curve.calculateSignature(
+                            identityKeyPair.privateKey,
+                            loginBytes
+                        )
+
+                        override fun onPreKeysLow(numPreKeysRequested: Int) {
+                            registerPreKeys(numPreKeysRequested)
+                        }
+
+                        override fun onInboundMessage(msg: InboundMessage) {
+                            decryptAndStore(msg)
+                        }
+
+                        override fun onClose(err: Throwable?) {
+                            synchronized(this) {
+                                authenticatedClient = null
+                            }
+                        }
+                    })
+                authenticatedClient = newClient
+                return newClient
+            } catch (t: Throwable) {
+                val redialDelay = redialBackoff * 2.0.pow(failures)
+                val actualRedialDelay =
+                    if (maxRedialDelay < redialDelay) maxRedialDelay else redialDelay
+                logger.error(
+                    "error dialing tassis, will retry in ${actualRedialDelay}: ${t.message}",
+                    t
+                )
+                Thread.sleep(actualRedialDelay.toLongMilliseconds())
+                failures++
+            }
         }
     }
 
     override fun close() {
-        job.cancel()
-        store.close()
-        store.db.unsubscribe(subscriberId)
         executor.shutdownNow()
-        clientChannel.poll()?.close()
-    }
-}
-
-internal class ClientHolder(val client: Client, private val clientChannel: Channel<Client>) :
-    Closeable {
-    override fun close() {
-        runBlocking {
-            clientChannel.send(client)
+        synchronized(this) {
+            anonymousClient?.close()
+            anonymousClient = null
+            authenticatedClient?.close()
+            authenticatedClient = null
         }
+        executor.awaitTermination(10, TimeUnit.SECONDS)
+        store.db.unsubscribe(subscriberId)
+        store.close()
+
     }
 }
 

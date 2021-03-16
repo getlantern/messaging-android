@@ -2,14 +2,14 @@ package io.lantern.tassis
 
 import io.lantern.messaging.BaseMessagingTest
 import io.lantern.messaging.client.wss.WssDialer
-import io.lantern.messaging.tassis.Client
+import io.lantern.messaging.tassis.CClient
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.util.KeyHelper
 
-class ClientTest : BaseMessagingTest() {
+class CClientTest : BaseMessagingTest() {
     @Test
     fun testClose() {
         runBlocking {
@@ -18,7 +18,7 @@ class ClientTest : BaseMessagingTest() {
                 dialer.dial(scope).use { anonymousConn ->
                     dialer.dial(scope).use { authenticatedConn ->
                         val kp = KeyHelper.generateIdentityKeyPair()
-                        val client = Client(
+                        val client = CClient(
                             kp.publicKey,
                             DeviceId.random(),
                             anonymousConn,
