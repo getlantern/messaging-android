@@ -24,7 +24,7 @@ interface Callback<T> {
 }
 
 internal class BlockingCallback<T> : Callback<T> {
-    val blockingResult = java9.util.concurrent.CompletableFuture<T>()
+    private val blockingResult = java9.util.concurrent.CompletableFuture<T>()
 
     override fun onSuccess(result: T) {
         blockingResult.complete(result)
@@ -100,7 +100,7 @@ class InboundMessage internal constructor(
                     .setAck(Messages.Ack.newBuilder().build()).build()
             )
         } catch (t: Throwable) {
-            logger.debug("ack failed with error '${t.message}', this can happen if the client connection was closed before we could process the inbound message, in which case we might get the same message again later, which is okay")
+            logger.trace("ack failed with error '${t.message}', this can happen if the client connection was closed before we could process the inbound message, in which case we might get the same message again later, which is okay")
         }
     }
 }
@@ -143,7 +143,7 @@ abstract class Client<D : ClientDelegate>(
     protected val delegate: D
 ) : MessageHandler {
     internal val transport = BlockingCallback<Transport>()
-    private val msgSequence = AtomicInteger()
+    private val msgSequence = AtomicInteger(1)
     protected val pending = ConcurrentHashMap<Int, Callback<Any?>>()
 
     internal fun send(msg: Messages.Message, callback: Callback<*>? = null) {
@@ -159,9 +159,15 @@ abstract class Client<D : ClientDelegate>(
 
     override fun onMessage(data: ByteBuffer?) {
         val msg = Messages.Message.parseFrom(data)
+        onMessage(msg)
+    }
+
+    protected fun onMessage(msg: Messages.Message) {
         when (msg.payloadCase) {
-            Messages.Message.PayloadCase.ACK -> { pending[msg.sequence]?.onSuccess(null) }
-            Messages.Message.PayloadCase.ERROR -> pending[msg.sequence]?.onError(
+            Messages.Message.PayloadCase.ACK -> {
+                pending.remove(msg.sequence)?.onSuccess(msg.ack)
+            }
+            Messages.Message.PayloadCase.ERROR -> pending.remove(msg.sequence)?.onError(
                 TassisError(
                     msg.error!!.name,
                     msg.error!!.description
@@ -212,7 +218,7 @@ class AuthenticatedClient private constructor(
         val msg = Messages.Message.parseFrom(data)
         when (msg.payloadCase) {
             Messages.Message.PayloadCase.AUTHCHALLENGE -> processAuth(msg.authChallenge)
-            Messages.Message.PayloadCase.PREKEYS -> pending[msg.sequence]?.onSuccess(msg.preKeys)
+            Messages.Message.PayloadCase.PREKEYS -> pending.remove(msg.sequence)?.onSuccess(msg.preKeys)
             Messages.Message.PayloadCase.PREKEYSLOW -> delegate.onPreKeysLow(msg.preKeysLow.keysRequested)
             Messages.Message.PayloadCase.INBOUNDMESSAGE -> delegate.onInboundMessage(
                 InboundMessage(
@@ -220,12 +226,11 @@ class AuthenticatedClient private constructor(
                     this
                 )
             )
-            else -> super.onMessage(data)
+            else -> super.onMessage(msg)
         }
     }
 
     private fun processAuth(challenge: Messages.AuthChallenge) {
-        logger.debug("Processing auth")
         val login = Messages.Login.newBuilder()
             .setNonce(challenge.nonce)
             .setAddress(
@@ -234,26 +239,21 @@ class AuthenticatedClient private constructor(
                     .setDeviceId(deviceId.bytes.byteString())
             ).build()
         val loginBytes = login.toByteArray()
-        logger.debug("signing auth")
         val signature = delegate.signLogin(loginBytes)
         val authResponse = Messages.Message.newBuilder().setAuthResponse(
             Messages.AuthResponse.newBuilder()
                 .setLogin(loginBytes.byteString())
                 .setSignature(signature.byteString())
         ).build()
-        logger.debug("sending auth response")
-        val cb = BlockingCallback<Messages.Ack>()
-        send(authResponse, cb)
-        logger.debug("sent auth response")
-//        try {
-//            cb.await()
-//            logger.debug("auth successful")
-//            connectCallback.onSuccess(this)
-//        } catch (t: Throwable) {
-//            logger.debug("auth failed")
-//            connectCallback.onError(t)
-//        }
-        connectCallback.onSuccess(this)
+        send(authResponse, object : Callback<Messages.Ack> {
+            override fun onSuccess(result: Messages.Ack) {
+                connectCallback.onSuccess(this@AuthenticatedClient)
+            }
+
+            override fun onError(err: Throwable) {
+                connectCallback.onError(err)
+            }
+        })
     }
 
     companion object {
@@ -315,8 +315,8 @@ class AnonymousClient private constructor(
         val msg = Messages.Message.parseFrom(data)
         when (msg.payloadCase) {
             Messages.Message.PayloadCase.AUTHCHALLENGE -> connectCallback.onSuccess(this)
-            Messages.Message.PayloadCase.PREKEYS -> pending[msg.sequence]?.onSuccess(msg.preKeys)
-            else -> super.onMessage(data)
+            Messages.Message.PayloadCase.PREKEYS -> pending.remove(msg.sequence)?.onSuccess(msg.preKeys)
+            else -> super.onMessage(msg)
         }
     }
 

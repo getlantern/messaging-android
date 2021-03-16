@@ -21,10 +21,7 @@ import java.util.*
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.math.pow
-import kotlin.time.Duration
-import kotlin.time.ExperimentalTime
-import kotlin.time.milliseconds
-import kotlin.time.seconds
+import kotlin.time.*
 
 
 @ExperimentalTime
@@ -34,6 +31,7 @@ class Messaging(
     private val redialBackoff: Duration = 50.milliseconds,
     private val maxRedialDelay: Duration = 15.seconds,
     failedSendRetryDelay: Duration = 5.seconds,
+    private val stopSendRetryAfter: Duration = 10.minutes,
     numInitialPreKeysToRegister: Int = 5,
     private val name: String = "messaging",
 ) : Closeable {
@@ -96,7 +94,6 @@ class Messaging(
     fun send(msg: Model.OutboundUserMessage) {
         executor.submit {
             val userMessage = msg.content.outbound(Model.DeliveryStatus.UNSENT)
-            logger.debug("sending")
             store.db.mutate { tx ->
                 // save the message in a list of all messages
                 tx.put(userMessage.dbPath, userMessage)
@@ -122,28 +119,13 @@ class Messaging(
         executor.schedule({
             val client = getAuthenticatedClient()
             try {
-                logger.debug("registering ${numPreKeys} pre keys")
                 store.db.mutate {
                     val spk = store.nextSignedPreKey
                     val otpks = store.generatePreKeys(numPreKeys)
-                    logger.debug(
-                        "registering SignedPreKey ${
-                            spk.serialize().byteString().toByteArray().base32
-                        }"
-                    )
-                    otpks.forEach { otpk ->
-                        logger.debug(
-                            "registering OneTimePreKey ${
-                                otpk.serialize().byteString().toByteArray().base32
-                            }"
-                        )
-                    }
                     client.register(spk.serialize(), otpks.map { it.serialize() })
-                    logger.debug("done mutating")
                 }
-                logger.debug("registered ${numPreKeys} pre keys")
             } catch (t: Throwable) {
-                logger.error(
+                logger.debug(
                     "unable to register pre keys, will try again later: ${t.message}",
                     t
                 )
@@ -161,16 +143,17 @@ class Messaging(
                     encryptAndSendTo(client, msg, recipient.toByteArray())
                     unsentRecipients.remove(recipient)
                 } catch (t: Throwable) {
-                    logger.error("error sending, will retry: ${t.message}", t)
+                    logger.debug("error sending, will retry: ${t.message}")
                 }
             }
             val successful = unsentRecipients.size == 0
+            val permanentlyFailed =
+                !successful && msg.lastFailed > 0 && System.currentTimeMillis() * 1000000 - msg.lastFailed > stopSendRetryAfter.toLongNanoseconds()
             val userMessage =
-                msg.content.outbound(if (successful) Model.DeliveryStatus.SENT else Model.DeliveryStatus.FAILING)
-            logger.debug("encryptAndSend result ${successful}")
+                msg.content.outbound(if (successful) Model.DeliveryStatus.SENT else if (permanentlyFailed) Model.DeliveryStatus.FAILED else Model.DeliveryStatus.FAILING)
             store.db.mutate { tx ->
                 tx.put(userMessage.dbPath, userMessage)
-                if (successful) {
+                if (successful || permanentlyFailed) {
                     tx.delete(userMessage.outboundPath)
                 } else {
                     val outbound =
@@ -190,7 +173,6 @@ class Messaging(
         recipient: ByteArray
     ) {
         // run encryption and sending in a single transaction so that if any part fails, our session states roll back
-        logger.debug("encryptAndSendTo")
         store.db.mutate { tx ->
             val recipientIdentityKey = ECPublicKey(recipient)
             val knownDeviceIds =
@@ -201,8 +183,6 @@ class Messaging(
                 preKeys.forEach { preKey ->
                     val signedPreKey = SignedPreKeyRecord(preKey.signedPreKey.toByteArray())
                     val oneTimePreKey = PreKeyRecord(preKey.oneTimePreKey.toByteArray())
-                    logger.debug("Using SignedPreKey ${preKey.signedPreKey.toByteArray().base32}")
-                    logger.debug("Using PreKey ${preKey.oneTimePreKey.toByteArray().base32}")
                     // TODO: implement max_recv checking for signed pre key age
                     val builder = SessionBuilder(
                         store,
