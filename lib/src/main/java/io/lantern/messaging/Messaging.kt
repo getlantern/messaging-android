@@ -126,16 +126,19 @@ class Messaging(
                 store.db.mutate {
                     val spk = store.nextSignedPreKey
                     val otpks = store.generatePreKeys(numPreKeys)
-                    logger.debug("about to call client.registerPeKeys")
-                    client.register(Model.SignedPreKey.newBuilder().setId(spk.id)
-                        .setPublicKey(spk.keyPair.publicKey.bytes.byteString())
-                        .setSignature(spk.signature.byteString()).build().toByteArray(),
-                        otpks.map { otpk ->
-                            Model.OneTimePreKey.newBuilder().setId(otpk.id)
-                                .setPublicKey(otpk.keyPair.publicKey.bytes.byteString()).build()
-                                .toByteArray()
-                        }
+                    logger.debug(
+                        "registering SignedPreKey ${
+                            spk.serialize().byteString().toByteArray().base32
+                        }"
                     )
+                    otpks.forEach { otpk ->
+                        logger.debug(
+                            "registering OneTimePreKey ${
+                                otpk.serialize().byteString().toByteArray().base32
+                            }"
+                        )
+                    }
+                    client.register(spk.serialize(), otpks.map { it.serialize() })
                     logger.debug("done mutating")
                 }
                 logger.debug("registered ${numPreKeys} pre keys")
@@ -164,7 +167,7 @@ class Messaging(
             val successful = unsentRecipients.size == 0
             val userMessage =
                 msg.content.outbound(if (successful) Model.DeliveryStatus.SENT else Model.DeliveryStatus.FAILING)
-            logger.debug("encryptAndSend result")
+            logger.debug("encryptAndSend result ${successful}")
             store.db.mutate { tx ->
                 tx.put(userMessage.dbPath, userMessage)
                 if (successful) {
@@ -196,8 +199,10 @@ class Messaging(
                 // no known devices, try fetching pre-keys
                 val preKeys = client.retrievePreKeys(recipientIdentityKey, knownDeviceIds)
                 preKeys.forEach { preKey ->
-                    val oneTimePreKey = PreKeyRecord(preKey.oneTimePreKey.toByteArray())
                     val signedPreKey = SignedPreKeyRecord(preKey.signedPreKey.toByteArray())
+                    val oneTimePreKey = PreKeyRecord(preKey.oneTimePreKey.toByteArray())
+                    logger.debug("Using SignedPreKey ${preKey.signedPreKey.toByteArray().base32}")
+                    logger.debug("Using PreKey ${preKey.oneTimePreKey.toByteArray().base32}")
                     // TODO: implement max_recv checking for signed pre key age
                     val builder = SessionBuilder(
                         store,

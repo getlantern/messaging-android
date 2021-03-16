@@ -46,7 +46,7 @@ class MessagingTest : BaseMessagingTest() {
                 )
 
                 val cat = newMessaging("cat", catStore)
-                userMsg = waitFor(5000) {
+                userMsg = waitFor(15000) {
                     val result = dog.store.db.get<Model.UserMessage>(content.dbPath)
                     result?.let { if (it.status == Model.DeliveryStatus.SENT) it else null }
                 }

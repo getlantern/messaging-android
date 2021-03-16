@@ -64,14 +64,3 @@ message TransferMessage {
   }
   repeated Attachment attachments = 2;
 }
-
-message SignedPreKey {
-  int32 id = 1;
-  bytes publicKey = 2;
-  bytes signature = 3;
-}
-
-message OneTimePreKey {
-  int32 id = 1;
-  bytes publicKey = 2;
-}
