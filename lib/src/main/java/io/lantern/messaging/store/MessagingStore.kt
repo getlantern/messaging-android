@@ -29,7 +29,7 @@ class MessagingStore(
     dbPasswordName: String = "messagingDbPassword",
     dbPasswordBytes: Int = 20
 ) : SignalProtocolStore, Closeable {
-    private val db: ObservableModel
+    internal val db: ObservableModel
     private val secrets: Secrets
 
     init {
@@ -205,7 +205,7 @@ class MessagingStore(
 
         private const val PATH_ALL_SESSIONS_BY_ADDRESS = "${PATH_SIGNAL_PROTOCOL_STORE}/sessions"
         private fun sessionPath(address: SignalProtocolAddress) =
-            "${PATH_ALL_SESSIONS_BY_ADDRESS}/${address.toString()}"
+            "${PATH_ALL_SESSIONS_BY_ADDRESS}/${address}"
 
         private fun devicesForNamePath(name: String) = "${PATH_ALL_SESSIONS_BY_ADDRESS}/${name}:"
     }

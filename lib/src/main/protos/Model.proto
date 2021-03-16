@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package model;
+
+option java_package = "io.lantern.messaging";
+
+// An Address for a specific client
+message Address {
+  bytes identityKey = 1;  // The 32 byte ed25519 public key that uniquely identifies an identity (e.g. a user)
+  bytes deviceId = 2;  // Identifier for a specific device, only unique for a given identityKey
+}
+
+// A contact in the address book
+message Contact {
+  Address address = 1; // the address identifying this Contact
+  string displayName = 2; // the display name shown for this Contact (specific to our current device, the contact may have different display names in other people's address books)
+}
+
+message Attachment {
+  bytes id = 1; // identifier for this attachment that's unique under a specific message
+  string mimeType = 2;
+  bytes data = 3;
+}
+
+enum DeliveryStatus {
+  UNSENT = 0;
+  FAILING = 1; // message is currently failing to send but we'll try again
+  FAILED = 2; // message has completely failed
+  SENT = 3; // message has been successfully sent
+  DELIVERED = 4; // currently unused
+  READ = 5; // currently unused
+}
+
+message UserMessageContent {
+  bytes id = 1; // the id of the message, globally unique across all message types
+  int64 sent = 2; // The unix timestamp in nanoseconds for when the message was sent
+  string body = 3;
+  repeated bytes attachmentIds = 4;
+}
+
+message UserMessage {
+  enum Direction {
+    INBOUND = 0;
+    OUTBOUND = 1;
+  }
+
+  string id = 1;
+  int64 sent = 2;
+  Direction direction = 3; // direction in which the message is going/came
+  DeliveryStatus status = 4;
+  bytes content = 5;
+}
+
+message OutboundUserMessage {
+  repeated bytes recipients = 1; // the IdentityKeys of direct recipients
+  UserMessageContent content = 2;
+  repeated Attachment attachments = 3;
+}
+
+message TransferMessage {
+  oneof content {
+    UserMessageContent userMessage = 1;
+  }
+  repeated Attachment attachments = 2;
+}
+
+message SignedPreKey {
+  int32 id = 1;
+  bytes publicKey = 2;
+  bytes signature = 3;
+}
+
+message OneTimePreKey {
+  int32 id = 1;
+  bytes publicKey = 2;
+}

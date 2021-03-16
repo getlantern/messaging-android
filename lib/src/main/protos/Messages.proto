@@ -106,9 +106,9 @@ message RequestPreKeys {
 
 // Information about a PreKey for a specific Address.
 message PreKey {
-  Address address        = 1;  // The Address that this key material belongs to
-  bytes   signedPreKey   = 2;  // The most recent signedPreKey for the device at this Address. See https://crypto.stackexchange.com/questions/72148/signal-protocol-how-is-signed-preKey-created
-  bytes   oneTimePreKey  = 3;  // One disposable preKey for the device at this Address. May be empty if none were available (that's okay, Signal can still do an X3DH key agreement without it).
+  bytes deviceId       = 1;  // The deviceId that this key material belongs to
+  bytes signedPreKey   = 2;  // The most recent signedPreKey for the device at this Address. See https://crypto.stackexchange.com/questions/72148/signal-protocol-how-is-signed-preKey-created
+  bytes oneTimePreKey  = 3;  // One disposable preKey for the device at this Address. May be empty if none were available (that's okay, Signal can still do an X3DH key agreement without it).
 }
 
 // A list of PreKeys for all of an identityKey's devices, sent in response to RequestPreKeys

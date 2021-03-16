@@ -2,8 +2,6 @@ package io.lantern.messaging.store
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.lantern.messaging.BaseMessagingTest
-import junit.framework.Assert.assertEquals
-import junit.framework.Assert.assertFalse
 import org.junit.runner.RunWith
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.InvalidKeyIdException
@@ -11,9 +9,7 @@ import org.whispersystems.libsignal.SignalProtocolAddress
 import org.whispersystems.libsignal.ecc.Curve
 import org.whispersystems.libsignal.util.KeyHelper
 import java.util.*
-import kotlin.test.Test
-import kotlin.test.assertTrue
-import kotlin.test.fail
+import kotlin.test.*
 
 @RunWith(AndroidJUnit4::class)
 class MessagingStoreTest : BaseMessagingTest() {

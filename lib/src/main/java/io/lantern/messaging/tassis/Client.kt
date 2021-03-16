@@ -1,59 +1,48 @@
 package io.lantern.messaging.tassis
 
 import com.google.protobuf.ByteString
-import io.lantern.messaging.store.MessagingStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.SendChannel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import mu.KotlinLogging
+import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.SignalProtocolAddress
-import org.whispersystems.libsignal.ecc.Curve
-import org.whispersystems.libsignal.state.PreKeyRecord
-import org.whispersystems.libsignal.state.SignedPreKeyRecord
+import org.whispersystems.libsignal.ecc.ECPublicKey
+import java.io.Closeable
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.math.pow
-import kotlin.time.Duration
-import kotlin.time.ExperimentalTime
-import kotlin.time.milliseconds
-import kotlin.time.seconds
 
-private val logger = KotlinLogging.logger {}
+internal val logger = KotlinLogging.logger {}
 
 interface Dialer {
     suspend fun dial(scope: CoroutineScope): ClientConnection
 }
 
-interface ClientConnection {
-    val outbound: SendChannel<ByteArray>
-    val inbound: ReceiveChannel<ByteArray>
-    val errors: ReceiveChannel<Throwable>
-
-    fun close()
+interface ClientConnection : Closeable {
+    abstract val outbound: SendChannel<ByteArray>
+    abstract val inbound: ReceiveChannel<ByteArray>
 }
 
-@ExperimentalTime
 class Client(
-    internal val store: MessagingStore,
-    private val dialer: Dialer,
+    internal val identityKey: ECPublicKey,
+    internal val deviceId: DeviceId,
+    anonymousConn: ClientConnection,
+    authenticatedConn: ClientConnection,
     internal val scope: CoroutineScope,
-    private val redialBackoff: Duration = 50.milliseconds,
-    private val maxRedialDelay: Duration = 15.seconds,
-    anonymousOutboundBufferDepth: Int = 100,
-    authenticatedOutboundBufferDepth: Int = 10,
-    authenticatedInboundBufferDept: Int = 100,
+    internal val anonymousOutboundBufferDepth: Int = 100,
+    internal val authenticatedOutboundBufferDepth: Int = 10,
+    authenticatedInboundBufferDepth: Int = 100,
+    internal val signLogin: (ByteArray) -> ByteArray
 ) {
-    private val anonymousHandler = AnonymousConnectionHandler(this, anonymousOutboundBufferDepth)
+    internal val inbound = Channel<InboundMessage>(authenticatedInboundBufferDepth)
+    internal val preKeysLow = Channel<Int>(1)
+
+    private val anonymousHandler = AnonymousConnectionHandler(this, anonymousConn)
     private val authenticatedHandler =
-        AuthenticatedConnectionHandler(
-            this,
-            authenticatedOutboundBufferDepth,
-            authenticatedInboundBufferDept
-        )
+        AuthenticatedConnectionHandler(this, authenticatedConn)
     private val msgSequence = AtomicInteger()
 
     init {
@@ -65,25 +54,47 @@ class Client(
         }
     }
 
-    suspend fun registerPreKeys(signedPreKey: SignedPreKeyRecord, preKeys: List<PreKeyRecord>) {
+    suspend fun retrievePreKeys(
+        identityKey: ECPublicKey,
+        knownDeviceIds: List<DeviceId>
+    ): List<Messages.PreKey> {
+        val requestPreKeys = Messages.RequestPreKeys.newBuilder()
+            .setIdentityKey(identityKey.bytes.byteString())
+        knownDeviceIds.forEach { requestPreKeys.addKnownDeviceIds(it.bytes.byteString()) }
+        val msg = nextMessage().setRequestPreKeys(requestPreKeys.build()).build()
+        val cb = Callback<Messages.PreKeys>()
+        anonymousHandler.send(msg, cb)
+        return select {
+            cb.result.onReceive { it.preKeysList }
+            cb.error.onReceive { throw it }
+        }
+    }
+
+    suspend fun registerPreKeys(signedPreKey: ByteArray, preKeys: List<ByteArray>) {
         val msg = nextMessage().setRegister(
-            Messages.Register.newBuilder().setSignedPreKey(signedPreKey.serialize().byteString())
-                .addAllOneTimePreKeys(preKeys.map { it.serialize().byteString() }).build()
+            Messages.Register.newBuilder().setSignedPreKey(signedPreKey.byteString())
+                .addAllOneTimePreKeys(preKeys.map { it.byteString() }).build()
         )
 
         val cb = Callback<Messages.Ack>()
         authenticatedHandler.send(msg.build(), cb)
-        select<Unit> {
-            cb.result.onReceive {
-                // okay
-            }
-            cb.error.onReceive {
-                throw it
+        // return immediately and handle error later
+        scope.launch {
+            select<Unit> {
+                cb.result.onReceive {
+                    // okay
+                }
+                cb.error.onReceive {
+                    throw it
+                }
             }
         }
     }
 
-    suspend fun sendUserMessage(to: SignalProtocolAddress, unidentifiedSenderMessage: ByteArray) {
+    suspend fun sendUnidentifiedSenderMessage(
+        to: SignalProtocolAddress,
+        unidentifiedSenderMessage: ByteArray
+    ) {
         val msg = nextMessage().setOutboundMessage(
             Messages.OutboundMessage.newBuilder().setTo(
                 Messages.Address.newBuilder()
@@ -105,21 +116,6 @@ class Client(
 
     protected fun nextMessage(): Messages.Message.Builder {
         return Messages.Message.newBuilder().setSequence(msgSequence.incrementAndGet())
-    }
-
-    internal suspend fun dial(): ClientConnection {
-        var failures = 0
-        while (true) {
-            try {
-                return dialer.dial(scope)
-            } catch (e: Exception) {
-                val redialDelay = redialBackoff * 2.0.pow(failures)
-                val actualRedialDelay =
-                    if (maxRedialDelay < redialDelay) maxRedialDelay else redialDelay
-                delay(actualRedialDelay.toLongMilliseconds())
-                failures++
-            }
-        }
     }
 }
 
@@ -147,8 +143,11 @@ internal class Callback<T>(
     }
 }
 
-@ExperimentalTime
-internal abstract class ConnectionHandler(protected val client: Client, outboundBufferDepth: Int) {
+internal abstract class ConnectionHandler(
+    protected val client: Client,
+    protected val conn: ClientConnection,
+    outboundBufferDepth: Int
+) {
     protected val pending = ConcurrentHashMap<Int, Callback<Any?>>()
     internal val outbound = Channel<Messages.Message>(outboundBufferDepth)
 
@@ -171,28 +170,26 @@ internal abstract class ConnectionHandler(protected val client: Client, outbound
     }
 
     suspend fun processInbound() {
-        val conn = client.dial()
         val msg = conn.inbound.receive().message()
-        processAuth(conn, msg.authChallenge)
-        client.scope.launch { processOutbound(conn) }
+        processAuth(msg.authChallenge)
+        client.scope.launch { processOutbound() }
         for (msgBytes in conn.inbound) {
             onMessage(msgBytes.message())
         }
     }
 
-    suspend fun processOutbound(conn: ClientConnection) {
+    suspend fun processOutbound() {
         for (msg in outbound) {
             conn.outbound.send(msg.toByteArray())
         }
     }
 
-    abstract suspend fun processAuth(conn: ClientConnection, challenge: Messages.AuthChallenge)
+    abstract suspend fun processAuth(challenge: Messages.AuthChallenge)
 }
 
-@ExperimentalTime
-internal class AnonymousConnectionHandler constructor(client: Client, outboundBufferDepth: Int) :
-    ConnectionHandler(client, outboundBufferDepth) {
-    override suspend fun processAuth(conn: ClientConnection, challenge: Messages.AuthChallenge) {
+internal class AnonymousConnectionHandler constructor(client: Client, conn: ClientConnection) :
+    ConnectionHandler(client, conn, client.anonymousOutboundBufferDepth) {
+    override suspend fun processAuth(challenge: Messages.AuthChallenge) {
         // ignore auth challenges on anonymous connections
     }
 
@@ -205,48 +202,42 @@ internal class AnonymousConnectionHandler constructor(client: Client, outboundBu
     }
 }
 
-@ExperimentalTime
 internal class AuthenticatedConnectionHandler(
-    client: Client,
-    outboundBufferDepth: Int,
-    inboundBufferDepth: Int
-) : ConnectionHandler(client, outboundBufferDepth) {
-    val inbound = Channel<InboundMessage>(inboundBufferDepth)
-
-    override suspend fun processAuth(conn: ClientConnection, challenge: Messages.AuthChallenge) {
-        val identityKeyPair = client.store.identityKeyPair
+    client: Client, conn: ClientConnection
+) : ConnectionHandler(client, conn, client.authenticatedOutboundBufferDepth) {
+    override suspend fun processAuth(challenge: Messages.AuthChallenge) {
         val login = Messages.Login.newBuilder()
             .setNonce(challenge.nonce)
             .setAddress(
                 Messages.Address.newBuilder()
-                    .setIdentityKey(identityKeyPair.publicKey.bytes.byteString())
-                    .setDeviceId(client.store.deviceId.bytes.byteString())
+                    .setIdentityKey(client.identityKey.bytes.byteString())
+                    .setDeviceId(client.deviceId.bytes.byteString())
             ).build()
         val loginBytes = login.toByteArray()
-        val signature = Curve.calculateSignature(identityKeyPair.privateKey, loginBytes)
+        val signature = client.signLogin(loginBytes)
         val authResponse = Messages.Message.newBuilder().setAuthResponse(
             Messages.AuthResponse.newBuilder()
                 .setLogin(loginBytes.byteString())
                 .setSignature(signature.byteString())
         ).build()
         conn.outbound.send(authResponse.toByteArray())
-        val result = conn.inbound.receive().message()
+        logger.debug("sent auth response")
+        val inbound = conn.inbound
+        val received = inbound.receive()
+        val result = received.message()
         if (result.hasAck()) {
             // we're logged in!
         } else {
-            // TODO: the below causes a crash. Would be good to handle that more cleanly
-            throw Exception("Unable to log in: ${result.error.description}")
+            throw Exception("Unable to log in: ${result.error.name}")
         }
     }
 
     override suspend fun onMessage(msg: Messages.Message) {
         when (msg.payloadCase) {
             Messages.Message.PayloadCase.PREKEYSLOW -> {
-                val newPreKeys = client.store.generatePreKeys(msg.preKeysLow.keysRequested)
-                // TODO: actually send in the pre-keys
-
+                client.preKeysLow.send(msg.preKeysLow.keysRequested)
             }
-            Messages.Message.PayloadCase.INBOUNDMESSAGE -> inbound.send(
+            Messages.Message.PayloadCase.INBOUNDMESSAGE -> client.inbound.send(
                 InboundMessage(
                     msg,
                     this@AuthenticatedConnectionHandler
@@ -261,7 +252,6 @@ internal class AuthenticatedConnectionHandler(
  * Represents an inbound message from another user. Call ack() once the message has been durably
  * recorded so that it can be deleted server-side.
  */
-@ExperimentalTime
 class InboundMessage internal constructor(
     private val msg: Messages.Message,
     private val handler: AuthenticatedConnectionHandler
@@ -277,7 +267,6 @@ class InboundMessage internal constructor(
         )
     }
 }
-
 
 fun ByteArray.message(): Messages.Message {
     return Messages.Message.parseFrom(this)
