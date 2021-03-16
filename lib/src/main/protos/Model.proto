@@ -55,6 +55,7 @@ message OutboundUserMessage {
   repeated bytes recipients = 1; // the IdentityKeys of direct recipients
   UserMessageContent content = 2;
   repeated Attachment attachments = 3;
+  int64 lastFailed = 4;  // Time of last failure (nanoseconds since epoch)
 }
 
 message TransferMessage {

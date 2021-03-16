@@ -2,10 +2,12 @@ package io.lantern.messaging.tassis
 
 import com.google.protobuf.ByteString
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.selects.select
 import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
@@ -29,14 +31,14 @@ interface ClientConnection : Closeable {
 class Client(
     internal val identityKey: ECPublicKey,
     internal val deviceId: DeviceId,
-    anonymousConn: ClientConnection,
-    authenticatedConn: ClientConnection,
+    private val anonymousConn: ClientConnection,
+    private val authenticatedConn: ClientConnection,
     internal val scope: CoroutineScope,
     internal val anonymousOutboundBufferDepth: Int = 100,
     internal val authenticatedOutboundBufferDepth: Int = 10,
     authenticatedInboundBufferDepth: Int = 100,
     internal val signLogin: (ByteArray) -> ByteArray
-) {
+) : Closeable {
     internal val inbound = Channel<InboundMessage>(authenticatedInboundBufferDepth)
     internal val preKeysLow = Channel<Int>(1)
 
@@ -54,32 +56,63 @@ class Client(
         }
     }
 
-    suspend fun retrievePreKeys(
+    fun retrievePreKeys(
         identityKey: ECPublicKey,
         knownDeviceIds: List<DeviceId>
     ): List<Messages.PreKey> {
-        val requestPreKeys = Messages.RequestPreKeys.newBuilder()
-            .setIdentityKey(identityKey.bytes.byteString())
-        knownDeviceIds.forEach { requestPreKeys.addKnownDeviceIds(it.bytes.byteString()) }
-        val msg = nextMessage().setRequestPreKeys(requestPreKeys.build()).build()
-        val cb = Callback<Messages.PreKeys>()
-        anonymousHandler.send(msg, cb)
-        return select {
-            cb.result.onReceive { it.preKeysList }
-            cb.error.onReceive { throw it }
+        return runBlocking {
+            val requestPreKeys = Messages.RequestPreKeys.newBuilder()
+                .setIdentityKey(identityKey.bytes.byteString())
+            knownDeviceIds.forEach { requestPreKeys.addKnownDeviceIds(it.bytes.byteString()) }
+            val msg = nextMessage().setRequestPreKeys(requestPreKeys.build()).build()
+            val cb = Callback<Messages.PreKeys>()
+            anonymousHandler.send(msg, cb)
+            select {
+                cb.result.onReceive { it.preKeysList }
+                cb.error.onReceive { throw it }
+            }
         }
     }
 
-    suspend fun registerPreKeys(signedPreKey: ByteArray, preKeys: List<ByteArray>) {
-        val msg = nextMessage().setRegister(
-            Messages.Register.newBuilder().setSignedPreKey(signedPreKey.byteString())
-                .addAllOneTimePreKeys(preKeys.map { it.byteString() }).build()
-        )
+    fun registerPreKeys(signedPreKey: ByteArray, preKeys: List<ByteArray>) {
+        runBlocking {
+            val msg = nextMessage().setRegister(
+                Messages.Register.newBuilder().setSignedPreKey(signedPreKey.byteString())
+                    .addAllOneTimePreKeys(preKeys.map { it.byteString() }).build()
+            )
 
-        val cb = Callback<Messages.Ack>()
-        authenticatedHandler.send(msg.build(), cb)
-        // return immediately and handle error later
-        scope.launch {
+            val cb = Callback<Messages.Ack>()
+            authenticatedHandler.send(msg.build(), cb)
+            logger.debug("sent registration")
+            // return immediately and handle error later
+            scope.async {
+                select<Unit> {
+                    cb.result.onReceive {
+                        logger.debug("got registration ack")
+                    }
+                    cb.error.onReceive {
+                        logger.error("got registration error ${it.message}")
+                        throw it
+                    }
+                }
+            }.await()
+        }
+    }
+
+    fun sendUnidentifiedSenderMessage(
+        to: SignalProtocolAddress,
+        unidentifiedSenderMessage: ByteArray
+    ) {
+        runBlocking {
+            val msg = nextMessage().setOutboundMessage(
+                Messages.OutboundMessage.newBuilder().setTo(
+                    Messages.Address.newBuilder()
+                        .setIdentityKey(to.identityKey.bytes.byteString())
+                        .setDeviceId(to.deviceId.bytes.byteString())
+                ).setUnidentifiedSenderMessage(unidentifiedSenderMessage.byteString())
+            )
+            val cb = Callback<Messages.Ack>()
+            anonymousHandler.send(msg.build(), cb)
             select<Unit> {
                 cb.result.onReceive {
                     // okay
@@ -91,31 +124,13 @@ class Client(
         }
     }
 
-    suspend fun sendUnidentifiedSenderMessage(
-        to: SignalProtocolAddress,
-        unidentifiedSenderMessage: ByteArray
-    ) {
-        val msg = nextMessage().setOutboundMessage(
-            Messages.OutboundMessage.newBuilder().setTo(
-                Messages.Address.newBuilder()
-                    .setIdentityKey(to.identityKey.bytes.byteString())
-                    .setDeviceId(to.deviceId.bytes.byteString())
-            ).setUnidentifiedSenderMessage(unidentifiedSenderMessage.byteString())
-        )
-        val cb = Callback<Messages.Ack>()
-        anonymousHandler.send(msg.build(), cb)
-        select<Unit> {
-            cb.result.onReceive {
-                // okay
-            }
-            cb.error.onReceive {
-                throw it
-            }
-        }
-    }
-
     protected fun nextMessage(): Messages.Message.Builder {
         return Messages.Message.newBuilder().setSequence(msgSequence.incrementAndGet())
+    }
+
+    override fun close() {
+        anonymousConn.close()
+        authenticatedConn.close()
     }
 }
 
@@ -206,6 +221,7 @@ internal class AuthenticatedConnectionHandler(
     client: Client, conn: ClientConnection
 ) : ConnectionHandler(client, conn, client.authenticatedOutboundBufferDepth) {
     override suspend fun processAuth(challenge: Messages.AuthChallenge) {
+        logger.debug("Processing auth")
         val login = Messages.Login.newBuilder()
             .setNonce(challenge.nonce)
             .setAddress(
@@ -214,12 +230,14 @@ internal class AuthenticatedConnectionHandler(
                     .setDeviceId(client.deviceId.bytes.byteString())
             ).build()
         val loginBytes = login.toByteArray()
+        logger.debug("signing auth")
         val signature = client.signLogin(loginBytes)
         val authResponse = Messages.Message.newBuilder().setAuthResponse(
             Messages.AuthResponse.newBuilder()
                 .setLogin(loginBytes.byteString())
                 .setSignature(signature.byteString())
         ).build()
+        logger.debug("sending auth response")
         conn.outbound.send(authResponse.toByteArray())
         logger.debug("sent auth response")
         val inbound = conn.inbound
@@ -259,12 +277,14 @@ class InboundMessage internal constructor(
     val data: ByteString
         get() = msg.inboundMessage
 
-    suspend fun ack() {
-        handler.send(
-            Messages.Message.newBuilder().setSequence(msg.sequence).setAck(
-                Messages.Ack.newBuilder().build()
-            ).build()
-        )
+    fun ack() {
+        runBlocking {
+            handler.send(
+                Messages.Message.newBuilder().setSequence(msg.sequence).setAck(
+                    Messages.Ack.newBuilder().build()
+                ).build()
+            )
+        }
     }
 }
 

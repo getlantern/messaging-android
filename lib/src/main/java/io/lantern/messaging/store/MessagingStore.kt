@@ -103,7 +103,7 @@ class MessagingStore(
 
     val nextSignedPreKey: SignedPreKeyRecord
         get() {
-            // TODO: handle the case of signred prekey ids rolling past MAX_INT
+            // TODO: handle the case of signed prekey ids rolling past MAX_INT
             return db.mutate { tx ->
                 val currentId = tx.get(PATH_CURRENT_SIGNED_PREKEY_ID) ?: 0
                 val nextId = currentId + 1

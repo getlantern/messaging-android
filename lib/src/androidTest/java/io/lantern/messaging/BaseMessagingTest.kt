@@ -7,6 +7,7 @@ import org.junit.Before
 import java.io.IOException
 import java.nio.file.*
 import java.nio.file.attribute.BasicFileAttributes
+import java.util.*
 
 abstract class BaseMessagingTest {
     private var tempDir: Path? = null
@@ -16,7 +17,7 @@ abstract class BaseMessagingTest {
             InstrumentationRegistry.getInstrumentation().targetContext,
             dbPath = Paths.get(
                 tempDir.toString(),
-                "testdb"
+                UUID.randomUUID().toString(),
             ).toString()
         )
 
