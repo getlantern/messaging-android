@@ -26,7 +26,6 @@ import kotlin.time.ExperimentalTime
 import kotlin.time.milliseconds
 import kotlin.time.seconds
 
-private val logger = KotlinLogging.logger {}
 
 @ExperimentalTime
 class Messaging(
@@ -38,6 +37,8 @@ class Messaging(
     numInitialPreKeysToRegister: Int = 5,
     private val name: String = "messaging",
 ) : Closeable {
+    private val logger = KotlinLogging.logger(name)
+
     // All processing that involves crypto and client operations happens on this executor to keep
     // SignalProtocolStore in a consistent state
     private val executor = Executors.newSingleThreadScheduledExecutor() {
