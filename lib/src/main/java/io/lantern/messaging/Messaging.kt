@@ -110,7 +110,7 @@ class Messaging(
             .addRemainingRecipients(contactId).setMessage(msg).build()
         val msgRecord =
             Model.ShortMessageRecord.newBuilder()
-                .setSenderId(store.identityKeyPair.publicKey.bytes.base32).setId(msg.id.base32)
+                .setSenderId(store.identityKeyPair.publicKey.toString()).setId(msg.id.base32)
                 .setSent(msg.sent)
                 .setMessage(msg.toByteString()).setDirection(Model.ShortMessageRecord.Direction.OUT)
                 .setStatus(Model.ShortMessageRecord.DeliveryStatus.UNSENT).build()
@@ -187,7 +187,7 @@ class Messaging(
             }
             val userMessage =
                 outgoingMessage.message.outbound(
-                    store.identityKeyPair.publicKey.bytes.base32,
+                    store.identityKeyPair.publicKey.toString(),
                     deliveryStatus
                 )
             store.db.mutate { tx ->
@@ -269,7 +269,7 @@ class Messaging(
                 val plainText = Padding.stripMessagePadding(decryptionResult.paddedMessage)
                 val transferMsg = Model.TransferMessage.parseFrom(plainText)
                 val senderAddress = decryptionResult.senderAddress
-                val senderId = senderAddress.identityKey.bytes.base32
+                val senderId = senderAddress.identityKey.toString()
                 val msgRecord = transferMsg.shortMessage.inbound(senderId)
                 val msg = Model.ShortMessage.parseFrom(msgRecord.message)
 

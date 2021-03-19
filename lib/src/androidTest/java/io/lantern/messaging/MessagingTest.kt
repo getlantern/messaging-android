@@ -25,136 +25,41 @@ class MessagingTest : BaseMessagingTest() {
 
         runBlocking {
             dog.use { dog ->
-                val dogId = dog.store.identityKeyPair.publicKey.bytes.base32
-                val catId = catStore.identityKeyPair.publicKey.bytes.base32
-                val text = "hello cat"
-                val responseText = "hi dog"
+                // first send a message from dog->cat before cat has come online
+                val cat = send(dog, catStore, "hello cat") { msgRecord ->
+                    // wait for the message to attempt to send and fail, make sure the status is correct
+                    // and that the message is still populated correctly
+                    var storedMsgRecord = dog.waitFor<Model.ShortMessageRecord>(msgRecord.dbPath) {
+                        it?.status == Model.ShortMessageRecord.DeliveryStatus.FAILING
+                    }
+                    assertTrue(storedMsgRecord != null)
+                    assertEquals(
+                        Model.ShortMessageRecord.DeliveryStatus.FAILING,
+                        storedMsgRecord?.status,
+                        "attempt to send to cat before cat has started registering preKeys should have resulted in a UserMessage with failing status"
+                    )
+                    assertEquals(Model.ShortMessageRecord.Direction.OUT, storedMsgRecord?.direction)
+                    assertEquals(msgRecord.sent, storedMsgRecord?.sent)
+                    assertEquals("hello cat", Model.ShortMessage.parseFrom(storedMsgRecord?.message).text)
 
-                // send a message and make sure it's populated correctly
-                val msgRecord = dog.send(text, contactId = catId)
-                assertEquals(Model.ShortMessageRecord.DeliveryStatus.UNSENT, msgRecord.status)
-                assertEquals(Model.ShortMessageRecord.Direction.OUT, msgRecord.direction)
-                assertEquals(dogId, msgRecord.senderId)
-                assertTrue(msgRecord.sent < nowUnixNano)
-                assertEquals(text, Model.ShortMessage.parseFrom(msgRecord.message).text)
-
-                // make sure the conversation has been created
-                var storedConversation =
-                    dog.store.db.get<Model.Conversation>(msgRecord.conversationPath(catId))
-                assertTrue(storedConversation != null)
-                assertEquals(catId, storedConversation.contactId)
-                assertTrue(storedConversation.groupId == "")
-                assertEquals(msgRecord.sent, storedConversation.mostRecentMessageTime)
-                assertEquals(text, storedConversation.mostRecentMessageText)
-
-                // make sure that there's a link to the message in conversation messages
-                assertEquals(
-                    msgRecord.dbPath,
-                    dog.store.db.get(msgRecord.conversationMessagePath(storedConversation))
-                )
-
-                // wait for the message to attempt to send and fail, make sure the status is correct
-                // and that the message is still populated correctly
-                var storedMsgRecord = dog.waitFor<Model.ShortMessageRecord>(msgRecord.dbPath) {
-                    it?.status == Model.ShortMessageRecord.DeliveryStatus.FAILING
+                    // start the Messaging system for cat, which will result in the registration of pre
+                    // keys, allowing the message to send successfully
+                    val cat = newMessaging("cat", store = catStore)
+                    storedMsgRecord =
+                        dog.waitFor(msgRecord.dbPath) { it?.status == Model.ShortMessageRecord.DeliveryStatus.SENT }
+                    assertTrue(storedMsgRecord != null)
+                    assertEquals(
+                        Model.ShortMessageRecord.DeliveryStatus.SENT,
+                        storedMsgRecord?.status,
+                        "once cat has started registering preKeys, pending message should successfully send"
+                    )
+                    cat
                 }
-                assertTrue(storedMsgRecord != null)
-                assertEquals(
-                    Model.ShortMessageRecord.DeliveryStatus.FAILING,
-                    storedMsgRecord.status,
-                    "attempt to send to cat before cat has started registering preKeys should have resulted in a UserMessage with failing status"
-                )
-                assertEquals(Model.ShortMessageRecord.Direction.OUT, storedMsgRecord.direction)
-                assertEquals(
-                    dogId, storedMsgRecord.senderId
-                )
-                assertEquals(msgRecord.sent, storedMsgRecord.sent)
-                assertEquals(text, Model.ShortMessage.parseFrom(storedMsgRecord.message).text)
 
-                // start the Messaging system for cat, which will result in the registration of pre
-                // keys, allowing the message to send successfully
-                val cat = newMessaging("cat", store = catStore)
-                storedMsgRecord =
-                    dog.waitFor(msgRecord.dbPath) { it?.status == Model.ShortMessageRecord.DeliveryStatus.SENT }
-                assertTrue(storedMsgRecord != null)
-                assertEquals(
-                    Model.ShortMessageRecord.DeliveryStatus.SENT,
-                    storedMsgRecord.status,
-                    "once cat has started registering preKeys, pending UserMessage should successfully send"
-                )
-                assertEquals(Model.ShortMessageRecord.Direction.OUT, storedMsgRecord.direction)
-                assertEquals(dogId, storedMsgRecord.senderId)
-                assertEquals(msgRecord.sent, storedMsgRecord.sent)
-                assertEquals(text, Model.ShortMessage.parseFrom(storedMsgRecord.message).text)
-
-                // ensure that cat has received the message
-                storedMsgRecord =
-                    cat.waitFor(msgRecord.dbPath) { it != null }
-                assertTrue(storedMsgRecord != null)
-                assertEquals(Model.ShortMessageRecord.Direction.IN, storedMsgRecord.direction)
-                assertEquals(dogId, storedMsgRecord.senderId)
-                assertEquals(msgRecord.sent, storedMsgRecord.sent)
-                assertEquals(text, Model.ShortMessage.parseFrom(storedMsgRecord.message).text)
-
-                // ensure that cat has the conversation too
-                storedConversation = cat.store.db.get(msgRecord.conversationPath(dogId))
-                assertTrue(storedConversation != null)
-                assertEquals(dogId, storedConversation.contactId)
-                assertTrue(storedConversation.groupId == "")
-                assertEquals(msgRecord.sent, storedConversation.mostRecentMessageTime)
-                assertEquals(text, storedConversation.mostRecentMessageText)
-
-                // make sure that there's a link to the message in conversation messages
-                assertEquals(
-                    storedMsgRecord.dbPath,
-                    cat.store.db.get(msgRecord.conversationMessagePath(storedConversation))
-                )
+                assertTrue(cat != null)
 
                 // now respond from cat
-                val responseMsgRecord = cat.send(responseText, contactId = dogId)
-                assertEquals(Model.ShortMessageRecord.DeliveryStatus.UNSENT, responseMsgRecord.status)
-                assertEquals(Model.ShortMessageRecord.Direction.OUT, responseMsgRecord.direction)
-                assertEquals(catId, responseMsgRecord.senderId)
-                assertTrue(responseMsgRecord.sent < nowUnixNano)
-                assertEquals(responseText, Model.ShortMessage.parseFrom(responseMsgRecord.message).text)
-
-                // make sure the conversation has been created
-                storedConversation =
-                    cat.store.db.get(responseMsgRecord.conversationPath(dogId))
-                assertTrue(storedConversation != null)
-                assertEquals(dogId, storedConversation.contactId)
-                assertTrue(storedConversation.groupId == "")
-                assertEquals(responseMsgRecord.sent, storedConversation.mostRecentMessageTime)
-                assertEquals(responseText, storedConversation.mostRecentMessageText)
-
-                // make sure that there's a link to the message in conversation messages
-                assertEquals(
-                    responseMsgRecord.dbPath,
-                    cat.store.db.get(responseMsgRecord.conversationMessagePath(storedConversation))
-                )
-
-                // ensure that dog has received the message
-                storedMsgRecord =
-                    dog.waitFor(responseMsgRecord.dbPath) { it != null }
-                assertTrue(storedMsgRecord != null)
-                assertEquals(Model.ShortMessageRecord.Direction.IN, storedMsgRecord.direction)
-                assertEquals(catId, storedMsgRecord.senderId)
-                assertEquals(responseMsgRecord.sent, storedMsgRecord.sent)
-                assertEquals(responseText, Model.ShortMessage.parseFrom(storedMsgRecord.message).text)
-
-                // ensure that dog has the conversation too
-                storedConversation = dog.store.db.get(responseMsgRecord.conversationPath(catId))
-                assertTrue(storedConversation != null)
-                assertEquals(catId, storedConversation.contactId)
-                assertTrue(storedConversation.groupId == "")
-                assertEquals(responseMsgRecord.sent, storedConversation.mostRecentMessageTime)
-                assertEquals(responseText, storedConversation.mostRecentMessageText)
-
-                // make sure that there's a link to the message in conversation messages
-                assertEquals(
-                    storedMsgRecord.dbPath,
-                    dog.store.db.get(responseMsgRecord.conversationMessagePath(storedConversation))
-                )
+                send<Any>(cat, dog, "hi dog")
 
                 dog.unregister()
                 cat.unregister()
@@ -163,6 +68,65 @@ class MessagingTest : BaseMessagingTest() {
 
         }
         logger.debug("finished runBlocking")
+    }
+
+    private suspend fun <T> send(from: Messaging, to: Messaging, text: String, afterSend: (suspend (msgRecord: Model.ShortMessageRecord)->T)? = null): T? {
+        return send(from, to.store, text)
+    }
+
+    private suspend fun <T> send(from: Messaging, to: MessagingStore, text: String, afterSend: (suspend (msgRecord: Model.ShortMessageRecord)->T)? = null): T? {
+        val fromId = from.store.identityKeyPair.publicKey.toString()
+        val toId = to.identityKeyPair.publicKey.toString()
+
+        // send a message
+        val msgRecord = from.send(text, contactId = toId)
+        assertEquals(Model.ShortMessageRecord.DeliveryStatus.UNSENT, msgRecord.status)
+        assertEquals(Model.ShortMessageRecord.Direction.OUT, msgRecord.direction)
+        assertEquals(fromId, msgRecord.senderId)
+        assertTrue(msgRecord.sent < nowUnixNano)
+        assertEquals(text, Model.ShortMessage.parseFrom(msgRecord.message).text)
+
+        // make sure the conversation has been created
+        var storedConversation =
+            from.store.db.get<Model.Conversation>(msgRecord.conversationPath(toId))
+        assertTrue(storedConversation != null)
+        assertEquals(toId, storedConversation.contactId)
+        assertTrue(storedConversation.groupId == "")
+        assertEquals(msgRecord.sent, storedConversation.mostRecentMessageTime)
+        assertEquals(text, storedConversation.mostRecentMessageText)
+
+        // make sure that there's a link to the message in sender's conversation messages
+        assertEquals(
+            msgRecord.dbPath,
+            from.store.db.get(msgRecord.conversationMessagePath(storedConversation))
+        )
+
+        val result = afterSend?.let { it(msgRecord) }
+
+        // ensure that recipient has received the message
+        val storedMsgRecord =
+            to.waitFor<Model.ShortMessageRecord>(msgRecord.dbPath) { it != null }
+        assertTrue(storedMsgRecord != null)
+        assertEquals(Model.ShortMessageRecord.Direction.IN, storedMsgRecord.direction)
+        assertEquals(fromId, storedMsgRecord.senderId)
+        assertEquals(msgRecord.sent, storedMsgRecord.sent)
+        assertEquals(text, Model.ShortMessage.parseFrom(storedMsgRecord.message).text)
+
+        // ensure that recipient has the conversation too
+        storedConversation = to.db.get(msgRecord.conversationPath(fromId))
+        assertTrue(storedConversation != null)
+        assertEquals(fromId, storedConversation.contactId)
+        assertTrue(storedConversation.groupId == "")
+        assertEquals(msgRecord.sent, storedConversation.mostRecentMessageTime)
+        assertEquals(text, storedConversation.mostRecentMessageText)
+
+        // make sure that there's a link to the message in recipient's conversation messages
+        assertEquals(
+            storedMsgRecord.dbPath,
+            to.db.get(msgRecord.conversationMessagePath(storedConversation))
+        )
+
+        return result
     }
 
     private fun newMessaging(
@@ -185,8 +149,17 @@ internal suspend fun <T : Any> Messaging.waitFor(
     duration: Duration = 5.seconds,
     check: (T?) -> Boolean
 ): T? {
+    return this.store.waitFor(path, duration, check)
+}
+
+@ExperimentalTime
+internal suspend fun <T : Any> MessagingStore.waitFor(
+    path: String,
+    duration: Duration = 5.seconds,
+    check: (T?) -> Boolean
+): T? {
     return waitFor(duration.toLongMilliseconds()) {
-        val result: T? = this.store.db.get(path)
+        val result: T? = this.db.get(path)
         if (check(result)) result else null
     }
 }

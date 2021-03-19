@@ -69,8 +69,8 @@ fun String.path(vararg elements: Any): String {
             when (it) {
                 is ByteArray -> it.base32
                 is ByteString -> it.base32
-                is ECPublicKey -> it.bytes.base32
-                is DeviceId -> it.bytes.base32
+                is ECPublicKey -> it.toString()
+                is DeviceId -> it.toString()
                 else -> it
             }
         )
