@@ -1,19 +1,16 @@
 package io.lantern.messaging
 
-import com.google.protobuf.ByteString
 import io.lantern.messaging.store.MessagingStore
-import io.lantern.messaging.tassis.byteString
 import io.lantern.messaging.tassis.websocket.WebSocketTransportFactory
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import mu.KotlinLogging
 import org.junit.Test
-import java.nio.ByteBuffer
-import java.util.*
 import kotlin.test.assertEquals
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 import kotlin.time.milliseconds
+import kotlin.time.seconds
 
 private val logger = KotlinLogging.logger {}
 
@@ -28,30 +25,23 @@ class MessagingTest : BaseMessagingTest() {
         runBlocking {
             dog.use { dog ->
                 val catIdentity = catStore.identityKeyPair.publicKey
-                val content = newContent("hello cat")
-                dog.send(
-                    Model.OutboundUserMessage.newBuilder()
-                        .addRecipients(catIdentity.bytes.byteString())
-                        .setContent(content).build()
-                )
-                var userMsg = waitFor(5000) {
-                    val result = dog.store.db.get<Model.UserMessage>(content.dbPath)
-                    result?.let { if (it.status == Model.DeliveryStatus.FAILING) it else null }
+                val text = "hello cat"
+                val msg = dog.send(text, null, catIdentity)
+                var storedMsg = dog.waitFor<Model.ShortMessageRecord>(msg.dbPath) {
+                    it?.status == Model.ShortMessageRecord.DeliveryStatus.FAILING
                 }
                 assertEquals(
-                    Model.DeliveryStatus.FAILING,
-                    userMsg?.status,
+                    Model.ShortMessageRecord.DeliveryStatus.FAILING,
+                    storedMsg?.status,
                     "attempt to send to cat before cat has started registering preKeys should have resulted in a UserMessage with failing status"
                 )
 
-                val cat = newMessaging("cat", store=catStore)
-                userMsg = waitFor(5000) {
-                    val result = dog.store.db.get<Model.UserMessage>(content.dbPath)
-                    result?.let { if (it.status == Model.DeliveryStatus.SENT) it else null }
-                }
+                val cat = newMessaging("cat", store = catStore)
+                storedMsg =
+                    dog.waitFor(msg.dbPath) { it?.status == Model.ShortMessageRecord.DeliveryStatus.SENT }
                 assertEquals(
-                    Model.DeliveryStatus.SENT,
-                    userMsg?.status,
+                    Model.ShortMessageRecord.DeliveryStatus.SENT,
+                    storedMsg?.status,
                     "once cat has started registering preKeys, pending UserMessage should successfully send"
                 )
             }
@@ -61,39 +51,41 @@ class MessagingTest : BaseMessagingTest() {
         logger.debug("finished runBlocking")
     }
 
-    private suspend fun <T> waitFor(maxWait: Int, get: suspend () -> T?): T? {
-        var elapsed = 0
-        while (elapsed < maxWait) {
-            val result = get()
-            if (result != null) {
-                return result
-            }
-            delay(250)
-            elapsed += 250
-        }
-        return null
-    }
-
-    private fun newContent(body: String): Model.UserMessageContent {
-        return Model.UserMessageContent.newBuilder().setId(randomMessageId)
-            .setSent(System.currentTimeMillis() * 1000000).setBody(body).build()
-    }
-
-    private val randomMessageId: ByteString
-        get() {
-            val uuid = UUID.randomUUID()
-            val bb = ByteBuffer.wrap(ByteArray(16))
-            bb.putLong(uuid.mostSignificantBits)
-            bb.putLong(uuid.leastSignificantBits)
-            return ByteString.copyFrom(bb.array())
-        }
-
-    private fun newMessaging(name: String, failedSendRetryDelay: Duration = 100.milliseconds, store: MessagingStore? = null): Messaging {
+    private fun newMessaging(
+        name: String,
+        failedSendRetryDelay: Duration = 100.milliseconds,
+        store: MessagingStore? = null
+    ): Messaging {
         return Messaging(
             store ?: newStore,
             WebSocketTransportFactory("wss://tassis.lantern.io/api"),
-            failedSendRetryDelay=failedSendRetryDelay,
+            failedSendRetryDelay = failedSendRetryDelay,
             name = name
         )
     }
+}
+
+@ExperimentalTime
+internal suspend fun <T : Any> Messaging.waitFor(
+    path: String,
+    duration: Duration = 5.seconds,
+    check: (T?) -> Boolean
+): T? {
+    return waitFor(duration.toLongMilliseconds()) {
+        val result: T? = this.store.db.get(path)
+        if (check(result)) result else null
+    }
+}
+
+private suspend fun <T> waitFor(maxWait: Long, get: suspend () -> T?): T? {
+    var elapsed = 0
+    while (elapsed < maxWait) {
+        val result = get()
+        if (result != null) {
+            return result
+        }
+        delay(250)
+        elapsed += 250
+    }
+    return null
 }

@@ -12,55 +12,59 @@ message Address {
 
 // A contact in the address book
 message Contact {
-  Address address = 1; // the address identifying this Contact
+  bytes identityKey = 1; // the public key identifying this Contact
   string displayName = 2; // the display name shown for this Contact (specific to our current device, the contact may have different display names in other people's address books)
 }
 
-message Attachment {
-  bytes id = 1; // identifier for this attachment that's unique under a specific message
-  string mimeType = 2;
-  bytes data = 3;
+// A conversation (
+message Conversation {
+  repeated bytes identityKeys = 1; // the identity keys of the other participants in this conversation
+  string displayName = 2; // an optional name of this conversation
+  int64 mostRecentMessageTime = 3; // the sent unix timestamp of the most recent message in this conversation
+  string mostRecentMessageText = 4; // the text of the most recent message in this conversation
 }
 
-enum DeliveryStatus {
-  UNSENT = 0;
-  FAILING = 1; // message is currently failing to send but we'll try again
-  FAILED = 2; // message has completely failed
-  SENT = 3; // message has been successfully sent
-  DELIVERED = 4; // currently unused
-  READ = 5; // currently unused
-}
-
-message UserMessageContent {
-  bytes id = 1; // the id of the message, globally unique across all message types
+// A short message, the primary type of message exchanged by users. It's either text or ogg encoded
+// voice data.
+message ShortMessage {
+  bytes id = 1; // the id of the message
   int64 sent = 2; // The unix timestamp in nanoseconds for when the message was sent
-  string body = 3;
-  repeated bytes attachmentIds = 4;
+  oneof body {
+    string text = 3;
+    bytes oggVoice = 4;
+  }
 }
 
-message UserMessage {
+// A record of a ShortMessage either sent or received
+message ShortMessageRecord {
   enum Direction {
-    INBOUND = 0;
-    OUTBOUND = 1;
+    OUT = 0;
+    IN = 1;
   }
 
-  string id = 1;
-  int64 sent = 2;
+  enum DeliveryStatus {
+    UNSENT = 0;
+    FAILING = 1; // message is currently failing to send but we'll try again
+    PARTIALLY_FAILED = 2; // message failed to send to a subset of recipients, will not retry
+    COMPLETELY_FAILED = 3; // message failed to send to any recipients, will not retry
+    SENT = 4; // message has been successfully sent
+  }
+
+  string id = 1; // the id of the message (same as on ShortMessage)
+  int64 sent = 2; // The unix timestamp in nanoseconds for when the message was sent
   Direction direction = 3; // direction in which the message is going/came
-  DeliveryStatus status = 4;
-  bytes content = 5;
+  DeliveryStatus status = 4; // for outgoing messages, the status of its sending and delivery
+  bytes message = 5; // the serialized ShortMessage
 }
 
-message OutboundUserMessage {
+message OutgoingShortMessage {
   repeated bytes recipients = 1; // the IdentityKeys of direct recipients
-  UserMessageContent content = 2;
-  repeated Attachment attachments = 3;
-  int64 lastFailed = 4;  // Time of last failure (nanoseconds since epoch)
+  ShortMessage message = 2;
+  int64 lastFailed = 3; // Time of last failure (nanoseconds since epoch)
 }
 
 message TransferMessage {
   oneof content {
-    UserMessageContent userMessage = 1;
+    ShortMessage shortMessage = 1;
   }
-  repeated Attachment attachments = 2;
 }

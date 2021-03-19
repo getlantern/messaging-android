@@ -1,9 +1,9 @@
 package io.lantern.messaging
 
 import com.google.protobuf.ByteString
+import io.lantern.db.Subscriber
 import io.lantern.messaging.store.MessagingStore
 import io.lantern.messaging.tassis.*
-import io.lantern.observablemodel.Subscriber
 import mu.KotlinLogging
 import org.signal.libsignal.metadata.SealedSessionCipher
 import org.whispersystems.libsignal.DeviceId
@@ -15,8 +15,8 @@ import org.whispersystems.libsignal.ecc.ECPublicKey
 import org.whispersystems.libsignal.state.PreKeyBundle
 import org.whispersystems.libsignal.state.PreKeyRecord
 import org.whispersystems.libsignal.state.SignedPreKeyRecord
-import org.whispersystems.libsignal.util.Base32
 import java.io.Closeable
+import java.nio.ByteBuffer
 import java.util.*
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -53,9 +53,9 @@ class Messaging(
 
     init {
         store.db.registerType(21, Model.Contact::class.java)
-        store.db.registerType(22, Model.UserMessage::class.java)
-        store.db.registerType(23, Model.Attachment::class.java)
-        store.db.registerType(24, Model.OutboundUserMessage::class.java)
+        store.db.registerType(22, Model.Conversation::class.java)
+        store.db.registerType(23, Model.ShortMessageRecord::class.java)
+        store.db.registerType(24, Model.OutgoingShortMessage::class.java)
 
         identityKeyPair = store.identityKeyPair
         deviceId = store.deviceId
@@ -66,11 +66,11 @@ class Messaging(
         // listen for outbound messages (including pulling any previously unprocessed outbound
         // messages)
         store.db.subscribe(object :
-            Subscriber<Model.OutboundUserMessage>(
+            Subscriber<Model.OutgoingShortMessage>(
                 subscriberId,
                 "${Schema.PATH_OUTBOUND}/"
             ) {
-            override fun onUpdate(path: String, value: Model.OutboundUserMessage) {
+            override fun onUpdate(path: String, value: Model.OutgoingShortMessage) {
                 val timeSinceFailure = System.currentTimeMillis() * 1000000 - value.lastFailed
                 val delayNanos = (failedSendRetryDelay.toLongNanoseconds() - timeSinceFailure)
                 encryptAndSend(value, delayMillis = delayNanos / 1000000)
@@ -82,41 +82,67 @@ class Messaging(
         })
     }
 
-    fun addContact(contact: Model.Contact) {
-        store.db.mutate { tx ->
-            tx.put(contact.address.contactPath, contact)
-        }
-    }
-
     /**
      * Send an outbound message from the user
      */
-    fun send(msg: Model.OutboundUserMessage) {
-        executor.submit {
-            val userMessage = msg.content.outbound(Model.DeliveryStatus.UNSENT)
-            store.db.mutate { tx ->
-                // save the message in a list of all messages
-                tx.put(userMessage.dbPath, userMessage)
-                // save each attachment
-                msg.attachmentsList.forEach {
-                    tx.put(userMessage.attachmentPath(it), it)
-                }
-                // save a pointer to the message under each recipient
-                msg.recipientsList.forEach { recipient ->
-                    tx.put(
-                        userMessage.contactMessagePath(recipient),
-                        userMessage.dbPath
-                    )
-                }
-                // enqueue the message in the db for sending (actual send happens in the message
-                // processing loop)
-                tx.put(userMessage.outboundPath, msg)
-            }
+    fun send(
+        text: String?,
+        oggVoice: ByteArray?,
+        vararg recipients: ECPublicKey
+    ): Model.ShortMessageRecord {
+        if (text == null && oggVoice == null) {
+            throw IllegalArgumentException("Please specify either text or oggVoice")
+        } else if (text != null && oggVoice != null) {
+            throw IllegalArgumentException("Please specify either text or oggVoice but not both")
         }
+        if (recipients.isEmpty()) {
+            throw IllegalArgumentException("Please specify at least one recipient")
+        }
+        val shortMessageBuilder = Model.ShortMessage.newBuilder().setId(randomMessageId).setSent(
+            nowUnixNano
+        )
+        if (text != null) {
+            shortMessageBuilder.setText(text)
+        } else {
+            shortMessageBuilder.setOggVoice(oggVoice?.byteString())
+        }
+        val msg = shortMessageBuilder.build()
+        val outgoingMessage = Model.OutgoingShortMessage.newBuilder()
+            .addAllRecipients(recipients.map { it.bytes.byteString() }).setMessage(msg).build()
+        val messageRecord =
+            Model.ShortMessageRecord.newBuilder().setId(msg.id.base32).setSent(msg.sent)
+                .setMessage(msg.toByteString()).setDirection(Model.ShortMessageRecord.Direction.OUT)
+                .setStatus(Model.ShortMessageRecord.DeliveryStatus.UNSENT).build()
+        store.db.mutate { tx ->
+            // save the message in a list of all messages
+            tx.put(messageRecord.dbPath, messageRecord)
+            // save a pointer to the message under each recipient conversation
+            outgoingMessage.recipientsList.forEach { recipient ->
+                tx.put(
+                    messageRecord.conversationMessagePath(recipient),
+                    messageRecord.dbPath
+                )
+                val existingConversation =
+                    tx.findOne<Model.Conversation>(outgoingMessage.conversationsQuery)
+                if (existingConversation != null) {
+                    tx.delete(existingConversation.dbPath)
+                }
+                val conversation = Model.Conversation.newBuilder()
+                    .addIdentityKeys(recipient)
+                    .setDisplayName(existingConversation?.displayName ?: "")
+                    .setMostRecentMessageTime(msg.sent)
+                    .setMostRecentMessageText(msg.text).build()
+                tx.put(conversation.dbPath, conversation)
+            }
+            // enqueue the outgoing message in the db for sending (actual send happens in the
+            // message processing loop)
+            tx.put(messageRecord.outboundPath, outgoingMessage)
+        }
+        return messageRecord
     }
 
     private fun registerPreKeys(numPreKeys: Int, delayMillis: Long = 0) {
-        executor.schedule({
+        schedule(delayMillis, TimeUnit.MILLISECONDS) {
             val client = getAuthenticatedClient()
             try {
                 store.db.mutate {
@@ -131,16 +157,16 @@ class Messaging(
                 )
                 registerPreKeys(numPreKeys, 5000)
             }
-        }, delayMillis, TimeUnit.MILLISECONDS)
+        }
     }
 
-    private fun encryptAndSend(msg: Model.OutboundUserMessage, delayMillis: Long) {
-        executor.schedule({
+    private fun encryptAndSend(outgoingMessage: Model.OutgoingShortMessage, delayMillis: Long) {
+        schedule(delayMillis, TimeUnit.MILLISECONDS) {
             val client = getAnonymousClient()
-            val unsentRecipients = HashSet<ByteString>(msg.recipientsList)
-            msg.recipientsList.forEach { recipient ->
+            val unsentRecipients = HashSet<ByteString>(outgoingMessage.recipientsList)
+            outgoingMessage.recipientsList.forEach { recipient ->
                 try {
-                    encryptAndSendTo(client, msg, recipient.toByteArray())
+                    encryptAndSendTo(client, outgoingMessage, recipient.toByteArray())
                     unsentRecipients.remove(recipient)
                 } catch (t: Throwable) {
                     logger.debug("error sending, will retry: ${t.message}")
@@ -148,28 +174,39 @@ class Messaging(
             }
             val successful = unsentRecipients.size == 0
             val permanentlyFailed =
-                !successful && msg.lastFailed > 0 && System.currentTimeMillis() * 1000000 - msg.lastFailed > stopSendRetryAfter.toLongNanoseconds()
+                !successful && outgoingMessage.lastFailed > 0 && System.currentTimeMillis() * 1000000 - outgoingMessage.lastFailed > stopSendRetryAfter.toLongNanoseconds()
+            val deliveryStatus = if (successful) {
+                Model.ShortMessageRecord.DeliveryStatus.SENT
+            } else if (permanentlyFailed) {
+                if (unsentRecipients.size < outgoingMessage.recipientsList.size) {
+                    Model.ShortMessageRecord.DeliveryStatus.COMPLETELY_FAILED
+                } else {
+                    Model.ShortMessageRecord.DeliveryStatus.PARTIALLY_FAILED
+                }
+            } else {
+                Model.ShortMessageRecord.DeliveryStatus.FAILING
+            }
             val userMessage =
-                msg.content.outbound(if (successful) Model.DeliveryStatus.SENT else if (permanentlyFailed) Model.DeliveryStatus.FAILED else Model.DeliveryStatus.FAILING)
+                outgoingMessage.message.outbound(deliveryStatus)
             store.db.mutate { tx ->
                 tx.put(userMessage.dbPath, userMessage)
                 if (successful || permanentlyFailed) {
                     tx.delete(userMessage.outboundPath)
                 } else {
                     val outbound =
-                        msg.toBuilder().clearRecipients()
+                        outgoingMessage.toBuilder().clearRecipients()
                             .addAllRecipients(unsentRecipients.toList())
                             .setLastFailed(System.currentTimeMillis() * 1000000)
                             .build()
                     tx.put(userMessage.outboundPath, outbound)
                 }
             }
-        }, delayMillis, TimeUnit.MILLISECONDS)
+        }
     }
 
     private fun encryptAndSendTo(
         client: AnonymousClient,
-        msg: Model.OutboundUserMessage,
+        msg: Model.OutgoingShortMessage,
         recipient: ByteArray
     ) {
         // run encryption and sending in a single transaction so that if any part fails, our session states roll back
@@ -208,8 +245,8 @@ class Messaging(
             }
 
             deviceIds.forEach { deviceId ->
-                val transferMsg = Model.TransferMessage.newBuilder().setUserMessage(msg.content)
-                    .addAllAttachments(msg.attachmentsList).build()
+                val transferMsg =
+                    Model.TransferMessage.newBuilder().setShortMessage(msg.message).build()
                 // TODO: we (mostly Signal) use ByteArray everywhere, but Protocol Buffers wants byte strings
                 // which have to be copied from the ByteArray. That results in a lot of extra copies,
                 // it would  sure be nice to avoid that.
@@ -224,22 +261,44 @@ class Messaging(
     }
 
     private fun decryptAndStore(msg: InboundMessage) {
-        store.db.mutate { tx ->
-            val decryptionResult = cipher.decrypt(msg.data.toByteArray())
-            val plainText = Padding.stripMessagePadding(decryptionResult.paddedMessage)
-            val transferMsg = Model.TransferMessage.parseFrom(plainText)
-            val sender = decryptionResult.senderAddress
-            val userMessage = transferMsg.userMessage.inbound()
-            // save the message in a list of all messages
-            tx.put(userMessage.dbPath, userMessage)
-            // save each attachment
-            transferMsg.attachmentsList.forEach {
-                tx.put(userMessage.attachmentPath(it), it)
+        submit {
+            store.db.mutate { tx ->
+                val decryptionResult = cipher.decrypt(msg.data.toByteArray())
+                val plainText = Padding.stripMessagePadding(decryptionResult.paddedMessage)
+                val transferMsg = Model.TransferMessage.parseFrom(plainText)
+                val sender = decryptionResult.senderAddress
+                val msg = transferMsg.shortMessage.inbound()
+                // save the message in a list of all messages
+                // note - we use putIfAbsent to avoid overwriting previously received messages with
+                // the same ID. As long as the sender isn't malfunctioning or being malicious, this
+                // should never happen.
+                if (tx.putIfAbsent(msg.dbPath, msg)) {
+                    // save a pointer to the message under the conversation message path
+                    tx.put(msg.conversationMessagePath(sender.identityKey), msg)
+                }
             }
-            // save a pointer to the message under the sender
-            tx.put(userMessage.contactMessagePath(sender.identityKey), userMessage)
+            msg.ack()
         }
-        msg.ack()
+    }
+
+    private fun schedule(delay: Long, unit: TimeUnit, cmd: () -> Unit) {
+        executor.schedule({
+            try {
+                cmd()
+            } catch (t: Throwable) {
+                logger.error(t.message, t)
+            }
+        }, delay, unit)
+    }
+
+    private fun submit(cmd: () -> Unit) {
+        executor.submit {
+            try {
+                cmd()
+            } catch (t: Throwable) {
+                logger.error(t.message, t)
+            }
+        }
     }
 
     @Synchronized
@@ -340,63 +399,15 @@ class Messaging(
     }
 }
 
-object Schema {
-    const val PATH_USER_MESSAGES = "/usermessages"
-    const val PATH_ATTACHMENTS =
-        "/attachments" // TODO: maybe store attachments in a different table from the main one
-    const val PATH_OUTBOUND = "/outbound"
-    const val PATH_CONTACTS = "/contacts"
-    const val PATH_CONTACT_MESSAGES = "/contactmessages"
-}
-
-fun Model.UserMessageContent.outbound(status: Model.DeliveryStatus): Model.UserMessage {
-    return Model.UserMessage.newBuilder().setId(this.id.base32).setSent(this.sent)
-        .setDirection(Model.UserMessage.Direction.OUTBOUND).setStatus(status)
-        .setContent(this.toByteString()).build()
-}
-
-fun Model.UserMessageContent.inbound(): Model.UserMessage {
-    return Model.UserMessage.newBuilder().setId(this.id.base32).setSent(this.sent)
-        .setDirection(Model.UserMessage.Direction.INBOUND)
-        .setContent(this.toByteString()).build()
-}
-
-val ByteArray.base32: String get() = Base32.humanFriendly.encodeToString(this)
-
-val ByteString.base32: String get() = Base32.humanFriendly.encodeToString(this.toByteArray())
-
-fun String.path(vararg elements: Any): String {
-    val builder = StringBuilder(this)
-    elements.forEach {
-        builder.append("/")
-        builder.append(
-            when (it) {
-                is ByteArray -> it.base32
-                is ByteString -> it.base32
-                is ECPublicKey -> it.bytes.base32
-                is DeviceId -> it.bytes.base32
-                else -> it
-            }
-        )
+val randomMessageId: ByteString
+    get() {
+        val uuid = UUID.randomUUID()
+        val bb = ByteBuffer.wrap(ByteArray(16))
+        bb.putLong(uuid.mostSignificantBits)
+        bb.putLong(uuid.leastSignificantBits)
+        return ByteString.copyFrom(bb)
     }
-    return builder.toString()
-}
 
-val Model.UserMessage.dbPath: String
-    get() = Schema.PATH_USER_MESSAGES.path(this.sent, this.id)
-
-val Model.UserMessageContent.dbPath: String
-    get() = Schema.PATH_USER_MESSAGES.path(this.sent, this.id)
-
-val Model.UserMessage.outboundPath: String
-    get() = Schema.PATH_OUTBOUND.path(this.sent, this.id)
-
-fun Model.UserMessage.contactMessagePath(identityKey: Any): String =
-    Schema.PATH_CONTACT_MESSAGES.path(identityKey, this.sent, this.id)
-
-fun Model.UserMessage.attachmentPath(attachment: Model.Attachment): String =
-    Schema.PATH_ATTACHMENTS.path(this.id, attachment.id)
-
-val Model.Address.contactPath: String
-    get() = Schema.PATH_CONTACTS.path(this.identityKey, this.deviceId)
+val nowUnixNano: Long
+    get() = System.currentTimeMillis() * 1000000
 

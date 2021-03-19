@@ -1,7 +1,7 @@
 package io.lantern.messaging.store
 
 import android.content.Context
-import io.lantern.observablemodel.ObservableModel
+import io.lantern.db.DB
 import io.lantern.secrets.Secrets
 import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
@@ -29,14 +29,14 @@ class MessagingStore(
     dbPasswordName: String = "messagingDbPassword",
     dbPasswordBytes: Int = 20
 ) : SignalProtocolStore, Closeable {
-    internal val db: ObservableModel
+    internal val db: DB
     private val secrets: Secrets
 
     init {
         val secretsPreferences = ctx.getSharedPreferences(secretPrefsName, Context.MODE_PRIVATE)
         secrets = Secrets(masterKeyName, secretsPreferences)
         val dbPassword = secrets.get(dbPasswordName, dbPasswordBytes)!!
-        db = ObservableModel.build(ctx, dbPath, dbPassword)
+        db = DB.createOrOpen(ctx, dbPath, dbPassword)
     }
 
     override fun getIdentityKeyPair(): ECKeyPair {
@@ -109,7 +109,7 @@ class MessagingStore(
                 val nextId = currentId + 1
                 val signedPreKey = KeyHelper.generateSignedPreKey(identityKeyPair, nextId)
                 tx.put(PATH_CURRENT_SIGNED_PREKEY_ID, nextId)
-                tx.put(PATH_CURRENT_SIGNED_PREKEY, signedPreKey)
+                tx.put(PATH_CURRENT_SIGNED_PREKEY, signedPreKey.serialize())
                 tx.put(signedPreKeyPath(nextId), signedPreKey.serialize())
                 signedPreKey
             }
