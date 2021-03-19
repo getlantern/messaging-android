@@ -23,6 +23,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.pow
 import kotlin.time.*
 
+class UnknownSenderException : Exception("Unknown sender")
 
 @ExperimentalTime
 class Messaging(
@@ -80,6 +81,18 @@ class Messaging(
                 // not interested
             }
         })
+    }
+
+    // Adds or updates the given Contact
+    fun addOrUpdateContact(contactId: String, displayName: String) {
+        val path = contactId.contactPath
+        store.db.mutate { tx ->
+            val contactBuilder =
+                tx.get<Model.Contact>(path)?.toBuilder() ?: Model.Contact.newBuilder()
+                    .setId(contactId)
+            val contact = contactBuilder.setDisplayName(displayName).build()
+            tx.put(path, contact)
+        }
     }
 
     /**
@@ -264,30 +277,42 @@ class Messaging(
 
     private fun decryptAndStore(inbound: InboundMessage) {
         submit {
-            store.db.mutate { tx ->
-                val decryptionResult = cipher.decrypt(inbound.data.toByteArray())
-                val plainText = Padding.stripMessagePadding(decryptionResult.paddedMessage)
-                val transferMsg = Model.TransferMessage.parseFrom(plainText)
-                val senderAddress = decryptionResult.senderAddress
-                val senderId = senderAddress.identityKey.toString()
-                val msgRecord = transferMsg.shortMessage.inbound(senderId)
-                val msg = Model.ShortMessage.parseFrom(msgRecord.message)
-
-                // save the message record itself
-                tx.put(msgRecord.dbPath, msgRecord)
-
-                // update the Conversation
-                val conversationPath = msgRecord.conversationPath(senderId)
-                val conversationBuilder = tx.get<Model.Conversation>(conversationPath)?.toBuilder()
-                    ?: Model.Conversation.newBuilder().setContactId(senderId)
-                val conversation = conversationBuilder.setMostRecentMessageTime(msg.sent)
-                    .setMostRecentMessageText(msg.text).build()
-                tx.put(conversationPath, conversation)
-
-                // save a pointer to the message under the conversation message path
-                tx.put(msgRecord.conversationMessagePath(conversation), msgRecord.dbPath)
+            try {
+                doDecryptAndStore(inbound)
+            } catch (e: Exception) {
+                logger.error("problem decrypting and storing message, dropping: ${e.message}")
+                // TODO: maybe add this to a failed folder and/or a spam folder
             }
             inbound.ack()
+        }
+    }
+
+    private fun doDecryptAndStore(inbound: InboundMessage) {
+        store.db.mutate { tx ->
+            val decryptionResult = cipher.decrypt(inbound.data.toByteArray())
+            val plainText = Padding.stripMessagePadding(decryptionResult.paddedMessage)
+            val transferMsg = Model.TransferMessage.parseFrom(plainText)
+            val senderAddress = decryptionResult.senderAddress
+            val senderId = senderAddress.identityKey.toString()
+            if (!tx.contains(senderId.contactPath)) {
+                throw UnknownSenderException()
+            }
+            val msgRecord = transferMsg.shortMessage.inbound(senderId)
+            val msg = Model.ShortMessage.parseFrom(msgRecord.message)
+
+            // save the message record itself
+            tx.put(msgRecord.dbPath, msgRecord)
+
+            // update the Conversation
+            val conversationPath = msgRecord.conversationPath(senderId)
+            val conversationBuilder = tx.get<Model.Conversation>(conversationPath)?.toBuilder()
+                ?: Model.Conversation.newBuilder().setContactId(senderId)
+            val conversation = conversationBuilder.setMostRecentMessageTime(msg.sent)
+                .setMostRecentMessageText(msg.text).build()
+            tx.put(conversationPath, conversation)
+
+            // save a pointer to the message under the conversation message path
+            tx.put(msgRecord.conversationMessagePath(conversation), msgRecord.dbPath)
         }
     }
 

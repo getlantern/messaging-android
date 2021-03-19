@@ -14,6 +14,9 @@ object Schema {
     const val PATH_CONVERSATION_MESSAGES = "/cm"
 }
 
+val String.contactPath: String
+    get() = Schema.PATH_CONTACTS.path(this)
+
 fun Model.ShortMessage.outbound(
     senderId: String,
     status: Model.ShortMessageRecord.DeliveryStatus

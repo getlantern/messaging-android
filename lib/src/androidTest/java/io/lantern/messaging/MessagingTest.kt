@@ -7,6 +7,7 @@ import kotlinx.coroutines.runBlocking
 import mu.KotlinLogging
 import org.junit.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
@@ -25,8 +26,20 @@ class MessagingTest : BaseMessagingTest() {
 
         runBlocking {
             dog.use { dog ->
-                // first send a message from dog->cat before cat has come online
-                val cat = send(dog, catStore, "hello cat") { msgRecord ->
+                val catId = catStore.identityKeyPair.publicKey.toString()
+                val dogId = dog.store.identityKeyPair.publicKey.toString()
+
+                // first add Cat as a contact
+                dog.addOrUpdateContact(catId, "Cat")
+                val storedContact = dog.store.db.get<Model.Contact>(catId.contactPath)
+                assertTrue(storedContact != null)
+                assertEquals(catId, storedContact.id)
+                assertEquals("Cat", storedContact.displayName)
+
+                // now send a message from dog->cat before cat has come online
+                // we do not expect this message to be delivered to cat because cat hasn't added dog
+                // as a contact
+                val cat = sendAndVerifyDropped(dog, catStore, "hello cat") { msgRecord ->
                     // wait for the message to attempt to send and fail, make sure the status is correct
                     // and that the message is still populated correctly
                     var storedMsgRecord = dog.waitFor<Model.ShortMessageRecord>(msgRecord.dbPath) {
@@ -40,7 +53,10 @@ class MessagingTest : BaseMessagingTest() {
                     )
                     assertEquals(Model.ShortMessageRecord.Direction.OUT, storedMsgRecord?.direction)
                     assertEquals(msgRecord.sent, storedMsgRecord?.sent)
-                    assertEquals("hello cat", Model.ShortMessage.parseFrom(storedMsgRecord?.message).text)
+                    assertEquals(
+                        "hello cat",
+                        Model.ShortMessage.parseFrom(storedMsgRecord?.message).text
+                    )
 
                     // start the Messaging system for cat, which will result in the registration of pre
                     // keys, allowing the message to send successfully
@@ -55,11 +71,16 @@ class MessagingTest : BaseMessagingTest() {
                     )
                     cat
                 }
-
                 assertTrue(cat != null)
 
+                // now have cat add dog as a contact
+                cat.addOrUpdateContact(dogId, "Dog")
+
+                // now try sending again from dog
+                sendAndVerifyReceived<Any>(dog, cat, "hello again cat")
+
                 // now respond from cat
-                send<Any>(cat, dog, "hi dog")
+                sendAndVerifyReceived<Any>(cat, dog, "hi dog")
 
                 dog.unregister()
                 cat.unregister()
@@ -70,11 +91,49 @@ class MessagingTest : BaseMessagingTest() {
         logger.debug("finished runBlocking")
     }
 
-    private suspend fun <T> send(from: Messaging, to: Messaging, text: String, afterSend: (suspend (msgRecord: Model.ShortMessageRecord)->T)? = null): T? {
-        return send(from, to.store, text)
+    private suspend fun <T> sendAndVerifyReceived(
+        from: Messaging,
+        to: Messaging,
+        text: String,
+        afterSend: (suspend (msgRecord: Model.ShortMessageRecord) -> T)? = null
+    ): T? {
+        return sendAndVerifyReceived(from, to.store, text)
     }
 
-    private suspend fun <T> send(from: Messaging, to: MessagingStore, text: String, afterSend: (suspend (msgRecord: Model.ShortMessageRecord)->T)? = null): T? {
+    private suspend fun <T> sendAndVerifyDropped(
+        from: Messaging,
+        to: Messaging,
+        text: String,
+        afterSend: (suspend (msgRecord: Model.ShortMessageRecord) -> T)? = null
+    ): T? {
+        return sendAndVerifyDropped(from, to.store, text)
+    }
+
+    private suspend fun <T> sendAndVerifyReceived(
+        from: Messaging,
+        to: MessagingStore,
+        text: String,
+        afterSend: (suspend (msgRecord: Model.ShortMessageRecord) -> T)? = null
+    ): T? {
+        return doSendAndVerify(from, to, text, true, afterSend)
+    }
+
+    private suspend fun <T> sendAndVerifyDropped(
+        from: Messaging,
+        to: MessagingStore,
+        text: String,
+        afterSend: (suspend (msgRecord: Model.ShortMessageRecord) -> T)? = null
+    ): T? {
+        return doSendAndVerify(from, to, text, false, afterSend)
+    }
+
+    private suspend fun <T> doSendAndVerify(
+        from: Messaging,
+        to: MessagingStore,
+        text: String,
+        expectDelivery: Boolean,
+        afterSend: (suspend (msgRecord: Model.ShortMessageRecord) -> T)? = null
+    ): T? {
         val fromId = from.store.identityKeyPair.publicKey.toString()
         val toId = to.identityKeyPair.publicKey.toString()
 
@@ -106,26 +165,29 @@ class MessagingTest : BaseMessagingTest() {
         // ensure that recipient has received the message
         val storedMsgRecord =
             to.waitFor<Model.ShortMessageRecord>(msgRecord.dbPath) { it != null }
-        assertTrue(storedMsgRecord != null)
-        assertEquals(Model.ShortMessageRecord.Direction.IN, storedMsgRecord.direction)
-        assertEquals(fromId, storedMsgRecord.senderId)
-        assertEquals(msgRecord.sent, storedMsgRecord.sent)
-        assertEquals(text, Model.ShortMessage.parseFrom(storedMsgRecord.message).text)
+        if (!expectDelivery) {
+            assertNull(storedMsgRecord)
+        } else {
+            assertTrue(storedMsgRecord != null)
+            assertEquals(Model.ShortMessageRecord.Direction.IN, storedMsgRecord.direction)
+            assertEquals(fromId, storedMsgRecord.senderId)
+            assertEquals(msgRecord.sent, storedMsgRecord.sent)
+            assertEquals(text, Model.ShortMessage.parseFrom(storedMsgRecord.message).text)
 
-        // ensure that recipient has the conversation too
-        storedConversation = to.db.get(msgRecord.conversationPath(fromId))
-        assertTrue(storedConversation != null)
-        assertEquals(fromId, storedConversation.contactId)
-        assertTrue(storedConversation.groupId == "")
-        assertEquals(msgRecord.sent, storedConversation.mostRecentMessageTime)
-        assertEquals(text, storedConversation.mostRecentMessageText)
+            // ensure that recipient has the conversation too
+            storedConversation = to.db.get(msgRecord.conversationPath(fromId))
+            assertTrue(storedConversation != null)
+            assertEquals(fromId, storedConversation.contactId)
+            assertTrue(storedConversation.groupId == "")
+            assertEquals(msgRecord.sent, storedConversation.mostRecentMessageTime)
+            assertEquals(text, storedConversation.mostRecentMessageText)
 
-        // make sure that there's a link to the message in recipient's conversation messages
-        assertEquals(
-            storedMsgRecord.dbPath,
-            to.db.get(msgRecord.conversationMessagePath(storedConversation))
-        )
-
+            // make sure that there's a link to the message in recipient's conversation messages
+            assertEquals(
+                storedMsgRecord.dbPath,
+                to.db.get(msgRecord.conversationMessagePath(storedConversation))
+            )
+        }
         return result
     }
 
