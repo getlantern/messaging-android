@@ -41,7 +41,7 @@ class WebSocketTransport(url: String, private val handler: MessageHandler) :
 
     override fun onClose(code: Int, reason: String?, remote: Boolean) {
         if (code != CloseFrame.NORMAL) {
-            handler.onClose(AbnormalCloseException("websocket closed abnormally: ${reason}"));
+            handler.onClose(AbnormalCloseException("websocket closed abnormally: $reason"))
         } else {
             handler.onClose(null)
         }

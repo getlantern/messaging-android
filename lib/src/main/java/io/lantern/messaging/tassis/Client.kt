@@ -36,7 +36,7 @@ internal class BlockingCallback<T> : Callback<T> {
 
     fun await(): T = blockingResult.get()
 
-    fun fail(err: Throwable) {
+    private fun fail(err: Throwable) {
         blockingResult.completeExceptionally(err)
     }
 }
@@ -77,9 +77,7 @@ interface TransportFactory {
  * Represents an error from tassis
  */
 data class TassisError(val name: String, val description: String) :
-    RuntimeException("${name}: ${description}") {
-    internal constructor(msg: Messages.Error) : this(msg.name, msg.description)
-}
+    RuntimeException("${name}: $description")
 
 
 /**

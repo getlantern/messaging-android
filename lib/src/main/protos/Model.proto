@@ -4,22 +4,27 @@ package model;
 
 option java_package = "io.lantern.messaging";
 
-// An Address for a specific client
-message Address {
-  bytes identityKey = 1;  // The 32 byte ed25519 public key that uniquely identifies an identity (e.g. a user)
-  bytes deviceId = 2;  // Identifier for a specific device, only unique for a given identityKey
-}
-
 // A contact in the address book
 message Contact {
-  bytes identityKey = 1; // the public key identifying this Contact
+  string id = 1; // the public IdentityKey identifying this Contact, base32 encoded
   string displayName = 2; // the display name shown for this Contact (specific to our current device, the contact may have different display names in other people's address books)
+}
+
+// A group
+message Group {
+  string id = 1; // a globally unique identifier for the group (type 4 UUID), base32 encoded
+  repeated string memberIds = 2; // the ids of group member Contacts, base32 encoded
+  string displayName = 3; // the display name shown for this Group
+
 }
 
 // A conversation (
 message Conversation {
-  repeated bytes identityKeys = 1; // the identity keys of the other participants in this conversation
-  string displayName = 2; // an optional name of this conversation
+  // Who this Conversation pertains to, either a single Contact or a Group
+  oneof party {
+    string contactId = 1;
+    string groupId = 2;
+  }
   int64 mostRecentMessageTime = 3; // the sent unix timestamp of the most recent message in this conversation
   string mostRecentMessageText = 4; // the text of the most recent message in this conversation
 }
@@ -27,7 +32,7 @@ message Conversation {
 // A short message, the primary type of message exchanged by users. It's either text or ogg encoded
 // voice data.
 message ShortMessage {
-  bytes id = 1; // the id of the message
+  bytes id = 1; // the id of the message, unique under the given sender
   int64 sent = 2; // The unix timestamp in nanoseconds for when the message was sent
   oneof body {
     string text = 3;
@@ -50,17 +55,23 @@ message ShortMessageRecord {
     SENT = 4; // message has been successfully sent
   }
 
-  string id = 1; // the id of the message (same as on ShortMessage)
-  int64 sent = 2; // The unix timestamp in nanoseconds for when the message was sent
-  Direction direction = 3; // direction in which the message is going/came
-  DeliveryStatus status = 4; // for outgoing messages, the status of its sending and delivery
-  bytes message = 5; // the serialized ShortMessage
+  string senderId = 1; // the id of who sent this message
+  string id = 2; // the id of the message (same as on ShortMessage), encoded in base32
+  int64 sent = 3; // The unix timestamp in nanoseconds for when the message was sent
+  Direction direction = 4; // direction in which the message is going/came
+  DeliveryStatus status = 5; // for outgoing messages, the status of its sending and delivery
+  bytes message = 6; // the serialized ShortMessage
 }
 
 message OutgoingShortMessage {
-  repeated bytes recipients = 1; // the IdentityKeys of direct recipients
-  ShortMessage message = 2;
-  int64 lastFailed = 3; // Time of last failure (nanoseconds since epoch)
+  // Whom this Conversation pertains to, either a single Contact or a Group
+  oneof recipient {
+    string contactId = 1;
+    string groupId = 2;
+  }
+  repeated string remainingRecipients = 3; // identityKeys of recipients who still need to be sent the message, base32 encoded
+  ShortMessage message = 4;
+  int64 lastFailed = 5; // Time of last failure (nanoseconds since epoch)
 }
 
 message TransferMessage {

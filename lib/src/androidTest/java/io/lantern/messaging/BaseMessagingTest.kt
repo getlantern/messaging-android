@@ -34,20 +34,20 @@ abstract class BaseMessagingTest {
                     dir: Path?,
                     attrs: BasicFileAttributes?
                 ): FileVisitResult {
-                    return FileVisitResult.CONTINUE;
+                    return FileVisitResult.CONTINUE
                 }
 
                 override fun visitFile(file: Path?, attrs: BasicFileAttributes?): FileVisitResult {
-                    Files.delete(file);
-                    return FileVisitResult.CONTINUE;
+                    Files.delete(file)
+                    return FileVisitResult.CONTINUE
                 }
 
                 override fun visitFileFailed(file: Path?, exc: IOException?): FileVisitResult {
-                    return FileVisitResult.CONTINUE;
+                    return FileVisitResult.CONTINUE
                 }
 
                 override fun postVisitDirectory(dir: Path?, exc: IOException?): FileVisitResult {
-                    return FileVisitResult.CONTINUE;
+                    return FileVisitResult.CONTINUE
                 }
             })
         }

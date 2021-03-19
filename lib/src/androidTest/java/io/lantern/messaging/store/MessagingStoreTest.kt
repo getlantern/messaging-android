@@ -39,7 +39,7 @@ class MessagingStoreTest : BaseMessagingTest() {
             for (i in 1..4) {
                 assertTrue(ms.containsPreKey(i))
                 val pk = allPks[i - 1].serialize()
-                val loadedPk = ms.loadPreKey(i)?.serialize()
+                val loadedPk = ms.loadPreKey(i).serialize()
                 assertTrue(Arrays.equals(pk, loadedPk))
             }
             ms.removePreKey(1)
@@ -65,7 +65,7 @@ class MessagingStoreTest : BaseMessagingTest() {
             val pk1 = ms.nextSignedPreKey
             val pk2 = ms.nextSignedPreKey
             assertTrue(ms.containsSignedPreKey(1))
-            assertTrue(Arrays.equals(pk1.serialize(), ms.loadSignedPreKey(1)?.serialize()))
+            assertTrue(Arrays.equals(pk1.serialize(), ms.loadSignedPreKey(1).serialize()))
             assertEquals(2, ms.loadSignedPreKeys().size)
             assertTrue(Arrays.equals(pk1.serialize(), ms.loadSignedPreKeys()[0].serialize()))
             assertTrue(Arrays.equals(pk2.serialize(), ms.loadSignedPreKeys()[1].serialize()))

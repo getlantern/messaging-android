@@ -3,7 +3,6 @@ package io.lantern.messaging.store
 import android.content.Context
 import io.lantern.db.DB
 import io.lantern.secrets.Secrets
-import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.InvalidKeyIdException
 import org.whispersystems.libsignal.SignalProtocolAddress
@@ -19,8 +18,6 @@ import org.whispersystems.libsignal.util.KeyHelper
 import java.io.Closeable
 import java.io.File
 
-private val logger = KotlinLogging.logger {}
-
 class MessagingStore(
     ctx: Context,
     dbPath: String = File(ctx.filesDir, "messaging.db").absolutePath,
@@ -35,7 +32,7 @@ class MessagingStore(
     init {
         val secretsPreferences = ctx.getSharedPreferences(secretPrefsName, Context.MODE_PRIVATE)
         secrets = Secrets(masterKeyName, secretsPreferences)
-        val dbPassword = secrets.get(dbPasswordName, dbPasswordBytes)!!
+        val dbPassword = secrets.get(dbPasswordName, dbPasswordBytes)
         db = DB.createOrOpen(ctx, dbPath, dbPassword)
     }
 
@@ -86,9 +83,9 @@ class MessagingStore(
         throw AssertionError("storePreKey should never be called directly, please use generatePreKeys() to generate new keys")
     }
 
-    override fun loadPreKey(preKeyId: Int): PreKeyRecord? {
+    override fun loadPreKey(preKeyId: Int): PreKeyRecord {
         return db.get<ByteArray>(oneTimePreKeyPath(preKeyId))?.let { PreKeyRecord(it) }
-            ?: throw InvalidKeyIdException("No one time preKey for id ${preKeyId}")
+            ?: throw InvalidKeyIdException("No one time preKey for id $preKeyId")
     }
 
     override fun containsPreKey(preKeyId: Int): Boolean {
@@ -121,7 +118,7 @@ class MessagingStore(
 
     override fun loadSignedPreKey(signedPreKeyId: Int): SignedPreKeyRecord {
         return db.get<ByteArray>(signedPreKeyPath(signedPreKeyId))?.let { SignedPreKeyRecord(it) }
-            ?: throw InvalidKeyIdException("No signed preKey for id ${signedPreKeyId}")
+            ?: throw InvalidKeyIdException("No signed preKey for id $signedPreKeyId")
     }
 
     override fun loadSignedPreKeys(): MutableList<SignedPreKeyRecord> {
@@ -141,9 +138,9 @@ class MessagingStore(
     }
 
     override fun loadSession(address: SignalProtocolAddress): SessionRecord {
-        var path = sessionPath(address)
+        val path = sessionPath(address)
         return db.mutate { tx ->
-            var bytes = tx.get<ByteArray>(path)
+            val bytes = tx.get<ByteArray>(path)
             if (bytes != null) {
                 SessionRecord(bytes)
             } else {
