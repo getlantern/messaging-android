@@ -69,8 +69,8 @@ dependencies {
 
     implementation 'com.google.protobuf:protobuf-javalite:3.10.0'
 
-    implementation 'com.github.getlantern:secrets-android:1d3de88'
-    implementation 'com.github.getlantern:db-android:d875ada'
+    implementation 'com.github.getlantern:secrets-android:44e0cfb'
+    implementation 'com.github.getlantern:db-android:5fdeff0'
     implementation 'com.github.getlantern:libsignal-protocol-java:98ac8be'
     implementation 'com.github.getlantern:libsignal-metadata-java:1098cf2'
 
