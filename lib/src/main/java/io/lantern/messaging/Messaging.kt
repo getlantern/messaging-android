@@ -1,6 +1,7 @@
 package io.lantern.messaging
 
 import com.google.protobuf.ByteString
+import io.lantern.db.DB
 import io.lantern.db.Subscriber
 import io.lantern.messaging.store.MessagingStore
 import io.lantern.messaging.tassis.*
@@ -53,10 +54,10 @@ class Messaging(
     private val subscriberId = UUID.randomUUID().toString()
 
     init {
-        store.db.registerType(21, Model.Contact::class.java)
-        store.db.registerType(22, Model.Conversation::class.java)
-        store.db.registerType(23, Model.ShortMessageRecord::class.java)
-        store.db.registerType(24, Model.OutgoingShortMessage::class.java)
+        db.registerType(21, Model.Contact::class.java)
+        db.registerType(22, Model.Conversation::class.java)
+        db.registerType(23, Model.ShortMessageRecord::class.java)
+        db.registerType(24, Model.OutgoingShortMessage::class.java)
 
         identityKeyPair = store.identityKeyPair
         deviceId = store.deviceId
@@ -66,7 +67,7 @@ class Messaging(
 
         // listen for outbound messages (including pulling any previously unprocessed outbound
         // messages)
-        store.db.subscribe(object :
+        db.subscribe(object :
             Subscriber<Model.OutgoingShortMessage>(
                 subscriberId,
                 "${Schema.PATH_OUTBOUND}/"
@@ -83,10 +84,12 @@ class Messaging(
         })
     }
 
+    val db: DB get() = store.db
+
     // Adds or updates the given Contact
     fun addOrUpdateContact(contactId: String, displayName: String) {
         val path = contactId.contactPath
-        store.db.mutate { tx ->
+        db.mutate { tx ->
             val contactBuilder =
                 tx.get<Model.Contact>(path)?.toBuilder() ?: Model.Contact.newBuilder()
                     .setId(contactId)
@@ -128,7 +131,7 @@ class Messaging(
                 .setSent(msg.sent)
                 .setMessage(msg.toByteString()).setDirection(Model.ShortMessageRecord.Direction.OUT)
                 .setStatus(Model.ShortMessageRecord.DeliveryStatus.UNSENT).build()
-        store.db.mutate { tx ->
+        db.mutate { tx ->
             // save the message in a list of all messages
             tx.put(msgRecord.dbPath, msgRecord)
             // update or create the relevant conversation
@@ -154,7 +157,7 @@ class Messaging(
         mostRecentMessageTime: Long = 0,
         mostRecentMessageText: String = ""
     ): Model.Conversation {
-        return store.db.mutate { tx ->
+        return db.mutate { tx ->
             val conversationPath = contactId.contactConversationPath(mostRecentMessageTime)
             // TODO: to speed up the below query, keep a record of the conversation path on the
             // relevant Contact or Group
@@ -180,7 +183,7 @@ class Messaging(
         schedule(delayMillis, TimeUnit.MILLISECONDS) {
             val client = getAuthenticatedClient()
             try {
-                store.db.mutate {
+                db.mutate {
                     val spk = store.nextSignedPreKey
                     val otpks = store.generatePreKeys(numPreKeys)
                     client.register(spk.serialize(), otpks.map { it.serialize() })
@@ -226,7 +229,7 @@ class Messaging(
                     store.identityKeyPair.publicKey.toString(),
                     deliveryStatus
                 )
-            store.db.mutate { tx ->
+            db.mutate { tx ->
                 tx.put(userMessage.dbPath, userMessage)
                 if (successful || permanentlyFailed) {
                     tx.delete(userMessage.outboundPath)
@@ -248,7 +251,7 @@ class Messaging(
         recipient: String
     ) {
         // run encryption and sending in a single transaction so that if any part fails, our session states roll back
-        store.db.mutate { _ ->
+        db.mutate { _ ->
             val recipientIdentityKey = ECPublicKey(recipient)
             val knownDeviceIds =
                 store.getSubDeviceSessions(recipientIdentityKey.toString())
@@ -311,7 +314,7 @@ class Messaging(
     }
 
     private fun doDecryptAndStore(inbound: InboundMessage) {
-        store.db.mutate { tx ->
+        db.mutate { tx ->
             val decryptionResult = cipher.decrypt(inbound.data.toByteArray())
             val plainText = Padding.stripMessagePadding(decryptionResult.paddedMessage)
             val transferMsg = Model.TransferMessage.parseFrom(plainText)
@@ -446,7 +449,7 @@ class Messaging(
             authenticatedClient = null
         }
         executor.awaitTermination(10, TimeUnit.SECONDS)
-        store.db.unsubscribe(subscriberId)
+        db.unsubscribe(subscriberId)
         store.close()
 
     }

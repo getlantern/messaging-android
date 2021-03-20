@@ -46,7 +46,9 @@ class MessagingStore(
             } else {
                 val keyPair = Curve.generateKeyPair()
                 tx.put(PATH_IDENTITY_KEY_PUBLIC, keyPair.publicKey.bytes)
+                tx.put(PATH_IDENTITY_KEY_PUBLIC_BASE32, keyPair.publicKey.toString())
                 tx.put(PATH_IDENTITY_KEY_PRIVATE, keyPair.privateKey.bytes)
+                tx.put(PATH_IDENTITY_KEY_PRIVATE_BASE32, keyPair.privateKey.toString())
                 keyPair
             }
         }
@@ -180,27 +182,29 @@ class MessagingStore(
     }
 
     companion object {
-        private const val PATH_SIGNAL_PROTOCOL_STORE = "/signalProtocolStore"
+        internal const val PATH_SIGNAL_PROTOCOL_STORE = "/signalProtocolStore"
 
-        private const val PATH_IDENTITY_KEY = "${PATH_SIGNAL_PROTOCOL_STORE}/identityKeyPair"
-        private const val PATH_IDENTITY_KEY_PUBLIC = "${PATH_IDENTITY_KEY}/public"
-        private const val PATH_IDENTITY_KEY_PRIVATE = "${PATH_IDENTITY_KEY}/private"
+        internal const val PATH_IDENTITY_KEY = "${PATH_SIGNAL_PROTOCOL_STORE}/identityKeyPair"
+        internal const val PATH_IDENTITY_KEY_PUBLIC = "${PATH_IDENTITY_KEY}/public"
+        internal const val PATH_IDENTITY_KEY_PUBLIC_BASE32 = "${PATH_IDENTITY_KEY}/publicBase32"
+        internal const val PATH_IDENTITY_KEY_PRIVATE = "${PATH_IDENTITY_KEY}/private"
+        internal const val PATH_IDENTITY_KEY_PRIVATE_BASE32 = "${PATH_IDENTITY_KEY}/privateBase32"
 
-        private const val PATH_DEVICE_ID = "${PATH_SIGNAL_PROTOCOL_STORE}/deviceId"
+        internal const val PATH_DEVICE_ID = "${PATH_SIGNAL_PROTOCOL_STORE}/deviceId"
 
-        private const val PATH_PREKEYS = "${PATH_SIGNAL_PROTOCOL_STORE}/preKeys"
-        private const val PATH_SIGNED_PREKEYS = "${PATH_PREKEYS}/signed"
-        private const val PATH_CURRENT_SIGNED_PREKEY_ID = "${PATH_SIGNED_PREKEYS}/currentId"
-        private const val PATH_CURRENT_SIGNED_PREKEY = "${PATH_SIGNED_PREKEYS}/current"
-        private const val PATH_ALL_SIGNED_PREKEYS_BY_ID = "${PATH_SIGNED_PREKEYS}/all"
+        internal const val PATH_PREKEYS = "${PATH_SIGNAL_PROTOCOL_STORE}/preKeys"
+        internal const val PATH_SIGNED_PREKEYS = "${PATH_PREKEYS}/signed"
+        internal const val PATH_CURRENT_SIGNED_PREKEY_ID = "${PATH_SIGNED_PREKEYS}/currentId"
+        internal const val PATH_CURRENT_SIGNED_PREKEY = "${PATH_SIGNED_PREKEYS}/current"
+        internal const val PATH_ALL_SIGNED_PREKEYS_BY_ID = "${PATH_SIGNED_PREKEYS}/all"
         private fun signedPreKeyPath(id: Int) = "${PATH_ALL_SIGNED_PREKEYS_BY_ID}/${id}"
 
-        private const val PATH_ONE_TIME_PREKEYS = "${PATH_PREKEYS}/onetime"
-        private const val PATH_NEXT_ONE_TIME_PREKEY_ID = "${PATH_ONE_TIME_PREKEYS}/nextId"
-        private const val PATH_ALL_ONE_TIME_PREKEYS_BY_ID = "${PATH_ONE_TIME_PREKEYS}/all"
+        internal const val PATH_ONE_TIME_PREKEYS = "${PATH_PREKEYS}/onetime"
+        internal const val PATH_NEXT_ONE_TIME_PREKEY_ID = "${PATH_ONE_TIME_PREKEYS}/nextId"
+        internal const val PATH_ALL_ONE_TIME_PREKEYS_BY_ID = "${PATH_ONE_TIME_PREKEYS}/all"
         private fun oneTimePreKeyPath(id: Int) = "${PATH_ALL_ONE_TIME_PREKEYS_BY_ID}/${id}"
 
-        private const val PATH_ALL_SESSIONS_BY_ADDRESS = "${PATH_SIGNAL_PROTOCOL_STORE}/sessions"
+        internal const val PATH_ALL_SESSIONS_BY_ADDRESS = "${PATH_SIGNAL_PROTOCOL_STORE}/sessions"
         private fun sessionPath(address: SignalProtocolAddress) =
             "${PATH_ALL_SESSIONS_BY_ADDRESS}/${address}"
 

@@ -7,6 +7,8 @@ import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.InvalidKeyIdException
 import org.whispersystems.libsignal.SignalProtocolAddress
 import org.whispersystems.libsignal.ecc.Curve
+import org.whispersystems.libsignal.ecc.ECPrivateKey
+import org.whispersystems.libsignal.ecc.ECPublicKey
 import org.whispersystems.libsignal.util.KeyHelper
 import java.util.*
 import kotlin.test.*
@@ -20,6 +22,16 @@ class MessagingStoreTest : BaseMessagingTest() {
             val kp2 = ms.identityKeyPair
             assertEquals(kp1.publicKey, kp2.publicKey)
             assertTrue(Arrays.equals(kp1.privateKey.bytes, kp2.privateKey.bytes))
+            assertEquals(
+                kp1.publicKey,
+                ECPublicKey(ms.db.get<String>(MessagingStore.PATH_IDENTITY_KEY_PUBLIC_BASE32))
+            )
+            assertTrue(
+                Arrays.equals(
+                    kp1.privateKey.bytes,
+                    ECPrivateKey(ms.db.get<String>(MessagingStore.PATH_IDENTITY_KEY_PRIVATE_BASE32)).bytes
+                )
+            )
         }
     }
 

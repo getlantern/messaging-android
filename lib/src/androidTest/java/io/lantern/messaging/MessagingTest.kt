@@ -32,8 +32,8 @@ class MessagingTest : BaseMessagingTest() {
                 // first add Cat as a contact
                 dog.addOrUpdateContact(catId, "Cat")
                 // ensure that we immediately have a conversation
-                assertTrue(dog.store.db.findOne<Model.Conversation>(catId.contactConversationQuery) != null)
-                val storedContact = dog.store.db.get<Model.Contact>(catId.contactPath)
+                assertTrue(dog.db.findOne<Model.Conversation>(catId.contactConversationQuery) != null)
+                val storedContact = dog.db.get<Model.Contact>(catId.contactPath)
                 assertTrue(storedContact != null)
                 assertEquals(catId, storedContact.id)
                 assertEquals("Cat", storedContact.displayName)
@@ -162,18 +162,18 @@ class MessagingTest : BaseMessagingTest() {
         // make sure the conversation has been created or updated and that there's only one
         // conversation entry for this contact
         var storedConversation =
-            from.store.db.get<Model.Conversation>(toId.contactConversationPath(msgRecord.sent))
+            from.db.get<Model.Conversation>(toId.contactConversationPath(msgRecord.sent))
         assertTrue(storedConversation != null)
         assertEquals(toId, storedConversation.contactId)
         assertTrue(storedConversation.groupId == "")
         assertEquals(msgRecord.sent, storedConversation.mostRecentMessageTime)
         assertEquals(text, storedConversation.mostRecentMessageText)
-        assertTrue(from.store.db.findOne<Model.Conversation>(toId.contactConversationQuery) != null)
+        assertTrue(from.db.findOne<Model.Conversation>(toId.contactConversationQuery) != null)
 
         // make sure that there's a link to the message in sender's conversation messages
         assertEquals(
             msgRecord.dbPath,
-            from.store.db.get(msgRecord.conversationMessagePath(storedConversation))
+            from.db.get(msgRecord.conversationMessagePath(storedConversation))
         )
 
         val result = afterSend?.let { it(msgRecord) }
