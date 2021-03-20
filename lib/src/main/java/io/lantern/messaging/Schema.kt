@@ -21,48 +21,48 @@ fun Model.ShortMessage.outbound(
     senderId: String,
     status: Model.ShortMessageRecord.DeliveryStatus
 ): Model.ShortMessageRecord {
-    return Model.ShortMessageRecord.newBuilder().setSenderId(senderId).setId(this.id.base32)
-        .setSent(this.sent)
+    return Model.ShortMessageRecord.newBuilder().setSenderId(senderId).setId(id.base32)
+        .setSent(sent)
         .setDirection(Model.ShortMessageRecord.Direction.OUT).setStatus(status)
-        .setMessage(this.toByteString()).build()
+        .setMessage(toByteString()).build()
 }
 
 fun Model.ShortMessage.inbound(senderId: String): Model.ShortMessageRecord {
-    return Model.ShortMessageRecord.newBuilder().setSenderId(senderId).setId(this.id.base32)
-        .setSent(this.sent)
+    return Model.ShortMessageRecord.newBuilder().setSenderId(senderId).setId(id.base32)
+        .setSent(sent)
         .setDirection(Model.ShortMessageRecord.Direction.IN)
-        .setMessage(this.toByteString()).build()
+        .setMessage(toByteString()).build()
 }
 
 val Model.ShortMessageRecord.dbPath: String
-    get() = Schema.PATH_MESSAGES.path(this.sent, this.senderId, this.id)
+    get() = Schema.PATH_MESSAGES.path(sent, senderId, id)
 
 val Model.ShortMessageRecord.outboundPath: String
-    get() = Schema.PATH_OUTBOUND.path(this.sent, this.id)
+    get() = Schema.PATH_OUTBOUND.path(sent, id)
 
-val Model.OutgoingShortMessage.conversationPath: String
-    get() = Schema.PATH_CONVERSATIONS.path(
-        this.message.sent,
-        if (this.contactId != "") "c".path(this.contactId) else "g".path(this.groupId)
-    )
+fun String.contactConversationPath(ts: Long): String =
+    Schema.PATH_CONVERSATIONS.path(ts, "c".path(this))
 
-fun Model.ShortMessageRecord.conversationPath(contactId: String): String =
-    Schema.PATH_CONVERSATIONS.path(this.sent, "c".path(contactId))
+val String.contactConversationQuery: String
+    get() = Schema.PATH_CONVERSATIONS.path("%", "c".path(this))
 
 val Model.Conversation.partyPath: String
-    get() = if (this.contactId != "") "c".path(this.contactId) else "g".path(this.groupId)
+    get() = if (contactId != "") "c".path(contactId) else "g".path(groupId)
+
+val Model.Conversation.dbPath: String
+    get() = Schema.PATH_CONVERSATIONS.path(mostRecentMessageTime, partyPath)
 
 fun Model.ShortMessageRecord.conversationMessagePath(conversation: Model.Conversation): String =
     Schema.PATH_CONVERSATION_MESSAGES.path(
         conversation.partyPath,
-        this.sent,
-        this.senderId,
-        this.id
+        sent,
+        senderId,
+        id
     )
 
 val ByteArray.base32: String get() = Base32.humanFriendly.encodeToString(this)
 
-val ByteString.base32: String get() = Base32.humanFriendly.encodeToString(this.toByteArray())
+val ByteString.base32: String get() = Base32.humanFriendly.encodeToString(toByteArray())
 
 fun String.path(vararg elements: Any): String {
     val builder = StringBuilder(this)

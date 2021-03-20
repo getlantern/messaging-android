@@ -92,6 +92,7 @@ class Messaging(
                     .setId(contactId)
             val contact = contactBuilder.setDisplayName(displayName).build()
             tx.put(path, contact)
+            addOrUpdateConversation(contactId)
         }
     }
 
@@ -131,12 +132,7 @@ class Messaging(
             // save the message in a list of all messages
             tx.put(msgRecord.dbPath, msgRecord)
             // update or create the relevant conversation
-            val conversationPath = outgoing.conversationPath
-            val conversationBuilder = tx.get<Model.Conversation>(conversationPath)?.toBuilder()
-                ?: Model.Conversation.newBuilder().setContactId(outgoing.contactId)
-            val conversation = conversationBuilder.setMostRecentMessageTime(outgoing.message.sent)
-                .setMostRecentMessageText(outgoing.message.text).build()
-            tx.put(conversationPath, conversation)
+            val conversation = addOrUpdateConversation(contactId, msg.sent, msg.text)
             // save the message under the relevant conversation
             tx.put(msgRecord.conversationMessagePath(conversation), msgRecord.dbPath)
             // enqueue the outgoing message in the db for sending (actual send happens in the
@@ -152,6 +148,33 @@ class Messaging(
             getAuthenticatedClient().unregister()
         }.get()
     }
+
+    private fun addOrUpdateConversation(
+        contactId: String,
+        mostRecentMessageTime: Long = 0,
+        mostRecentMessageText: String = ""
+    ): Model.Conversation {
+        return store.db.mutate { tx ->
+            val conversationPath = contactId.contactConversationPath(mostRecentMessageTime)
+            // TODO: to speed up the below query, keep a record of the conversation path on the
+            // relevant Contact or Group
+            val existingConversation =
+                tx.findOne<Model.Conversation>(contactId.contactConversationQuery)
+            existingConversation?.let { tx.delete(existingConversation.dbPath) }
+            val conversationBuilder = existingConversation?.toBuilder()
+                ?: Model.Conversation.newBuilder().setContactId(contactId)
+            if (mostRecentMessageTime != 0L) {
+                conversationBuilder.mostRecentMessageTime = mostRecentMessageTime
+            }
+            if (mostRecentMessageText != "") {
+                conversationBuilder.mostRecentMessageText = mostRecentMessageText
+            }
+            val conversation = conversationBuilder.build()
+            tx.put(conversationPath, conversation)
+            conversation
+        }
+    }
+
 
     private fun registerPreKeys(numPreKeys: Int, delayMillis: Long = 0) {
         schedule(delayMillis, TimeUnit.MILLISECONDS) {
@@ -304,12 +327,7 @@ class Messaging(
             tx.put(msgRecord.dbPath, msgRecord)
 
             // update the Conversation
-            val conversationPath = msgRecord.conversationPath(senderId)
-            val conversationBuilder = tx.get<Model.Conversation>(conversationPath)?.toBuilder()
-                ?: Model.Conversation.newBuilder().setContactId(senderId)
-            val conversation = conversationBuilder.setMostRecentMessageTime(msg.sent)
-                .setMostRecentMessageText(msg.text).build()
-            tx.put(conversationPath, conversation)
+            val conversation = addOrUpdateConversation(senderId, msg.sent, msg.text)
 
             // save a pointer to the message under the conversation message path
             tx.put(msgRecord.conversationMessagePath(conversation), msgRecord.dbPath)
