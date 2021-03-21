@@ -159,26 +159,30 @@ class Messaging(
 
     private fun addOrUpdateConversation(
         contactId: String,
-        mostRecentMessageTime: Long = 0,
-        mostRecentMessageText: String = ""
+        messageTime: Long = 0,
+        messageText: String = ""
     ): Model.Conversation {
         return db.mutate { tx ->
-            val conversationPath = contactId.contactConversationPath(mostRecentMessageTime)
-            // TODO: to speed up the below query, keep a record of the conversation path on the
-            // relevant Contact or Group
-            val existingConversation =
-                tx.findOne<Model.Conversation>(contactId.contactConversationQuery)
-            existingConversation?.let { tx.delete(existingConversation.dbPath) }
+            val conversationPath = contactId.contactConversationPath
+            val existingConversation = tx.get<Model.Conversation>(conversationPath)
+            if (existingConversation != null && existingConversation.mostRecentMessageTime > 0) {
+                // delete the index entry under the old timestamp
+                tx.delete(existingConversation.timestampedIdxPath)
+            }
             val conversationBuilder = existingConversation?.toBuilder()
                 ?: Model.Conversation.newBuilder().setContactId(contactId)
-            if (mostRecentMessageTime != 0L) {
-                conversationBuilder.mostRecentMessageTime = mostRecentMessageTime
-            }
-            if (mostRecentMessageText != "") {
-                conversationBuilder.mostRecentMessageText = mostRecentMessageText
+            if (messageTime > existingConversation?.mostRecentMessageTime ?: 0) {
+                conversationBuilder.mostRecentMessageTime = messageTime
+                if (messageText != "") {
+                    conversationBuilder.mostRecentMessageText = messageText
+                }
             }
             val conversation = conversationBuilder.build()
             tx.put(conversationPath, conversation)
+            if (conversation.mostRecentMessageTime > 0) {
+                // store an index entry in the timestamped index pointing to this Conversation
+                tx.put(conversation.timestampedIdxPath, conversationPath)
+            }
             conversation
         }
     }

@@ -11,6 +11,7 @@ object Schema {
     const val PATH_GROUPS = "/g"
     const val PATH_MESSAGES = "/m"
     const val PATH_CONVERSATIONS = "/con"
+    const val PATH_CONVERSATIONS_BY_TIMESTAMP = "/cbt"
     const val PATH_CONVERSATION_MESSAGES = "/cm"
 }
 
@@ -40,17 +41,16 @@ val Model.ShortMessageRecord.dbPath: String
 val Model.ShortMessageRecord.outboundPath: String
     get() = Schema.PATH_OUTBOUND.path(sent, id)
 
-fun String.contactConversationPath(ts: Long): String =
-    Schema.PATH_CONVERSATIONS.path(ts, "c".path(this))
-
-val String.contactConversationQuery: String
-    get() = Schema.PATH_CONVERSATIONS.path("%", "c".path(this))
+val String.contactConversationPath get() = Schema.PATH_CONVERSATIONS.path("c", this)
 
 val Model.Conversation.partyPath: String
     get() = if (contactId != "") "c".path(contactId) else "g".path(groupId)
 
+val Model.Conversation.timestampedIdxPath: String
+    get() = Schema.PATH_CONVERSATIONS_BY_TIMESTAMP.path(mostRecentMessageTime, partyPath)
+
 val Model.Conversation.dbPath: String
-    get() = Schema.PATH_CONVERSATIONS.path(mostRecentMessageTime, partyPath)
+    get() = Schema.PATH_CONVERSATIONS.path(partyPath)
 
 fun Model.ShortMessageRecord.conversationMessagePath(conversation: Model.Conversation): String =
     Schema.PATH_CONVERSATION_MESSAGES.path(

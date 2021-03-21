@@ -1,5 +1,6 @@
 package io.lantern.messaging
 
+import io.lantern.db.DB
 import io.lantern.messaging.store.MessagingStore
 import io.lantern.messaging.tassis.websocket.WebSocketTransportFactory
 import kotlinx.coroutines.delay
@@ -31,7 +32,8 @@ class MessagingTest : BaseMessagingTest() {
                 // first add Cat as a contact
                 dog.addOrUpdateContact(catId, "Cat")
                 // ensure that we immediately have a conversation
-                assertTrue(dog.db.findOne<Model.Conversation>(catId.contactConversationQuery) != null)
+                dog.db.list<Any>("%").forEach { println("${it.path}: ${it.value}") }
+                assertTrue(dog.db.get<Model.Conversation>(catId.contactConversationPath) != null)
                 val storedContact = dog.db.get<Model.Contact>(catId.contactPath)
                 assertTrue(storedContact != null)
                 assertEquals(catId, storedContact.id)
@@ -161,13 +163,17 @@ class MessagingTest : BaseMessagingTest() {
         // make sure the conversation has been created or updated and that there's only one
         // conversation entry for this contact
         var storedConversation =
-            from.db.get<Model.Conversation>(toId.contactConversationPath(msgRecord.sent))
+            from.db.get<Model.Conversation>(toId.contactConversationPath)
         assertTrue(storedConversation != null)
         assertEquals(toId, storedConversation.contactId)
         assertTrue(storedConversation.groupId == "")
         assertEquals(msgRecord.sent, storedConversation.mostRecentMessageTime)
         assertEquals(text, storedConversation.mostRecentMessageText)
-        assertTrue(from.db.findOne<Model.Conversation>(toId.contactConversationQuery) != null)
+        assertTrue(from.db.get<Model.Conversation>(toId.contactConversationPath) != null)
+        assertEquals(
+            storedConversation.dbPath,
+            from.db.get<String>(storedConversation.timestampedIdxPath)
+        )
 
         // make sure that there's a link to the message in sender's conversation messages
         assertEquals(
@@ -190,13 +196,18 @@ class MessagingTest : BaseMessagingTest() {
             assertEquals(text, Model.ShortMessage.parseFrom(storedMsgRecord.message).text)
 
             // ensure that recipient has the conversation too
-            storedConversation = to.db.get(fromId.contactConversationPath(msgRecord.sent))
+            storedConversation =
+                to.db.get(fromId.contactConversationPath)
             assertTrue(storedConversation != null)
             assertEquals(fromId, storedConversation.contactId)
             assertTrue(storedConversation.groupId == "")
             assertEquals(msgRecord.sent, storedConversation.mostRecentMessageTime)
             assertEquals(text, storedConversation.mostRecentMessageText)
-            assertTrue(to.db.findOne<Model.Conversation>(fromId.contactConversationQuery) != null)
+            assertTrue(to.db.get<Model.Conversation>(fromId.contactConversationPath) != null)
+            assertEquals(
+                storedConversation.dbPath,
+                to.db.get<String>(storedConversation.timestampedIdxPath)
+            )
 
             // make sure that there's a link to the message in recipient's conversation messages
             assertEquals(
@@ -254,3 +265,5 @@ private suspend fun <T> waitFor(maxWait: Long, get: suspend () -> T?): T? {
     }
     return null
 }
+
+internal fun DB.dump() = this.list<Any>("%").forEach { println("${it.path}: ${it.value}") }

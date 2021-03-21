@@ -216,7 +216,8 @@ class AuthenticatedClient private constructor(
         val msg = Messages.Message.parseFrom(data)
         when (msg.payloadCase) {
             Messages.Message.PayloadCase.AUTHCHALLENGE -> processAuth(msg.authChallenge)
-            Messages.Message.PayloadCase.PREKEYS -> pending.remove(msg.sequence)?.onSuccess(msg.preKeys)
+            Messages.Message.PayloadCase.PREKEYS -> pending.remove(msg.sequence)
+                ?.onSuccess(msg.preKeys)
             Messages.Message.PayloadCase.PREKEYSLOW -> delegate.onPreKeysLow(msg.preKeysLow.keysRequested)
             Messages.Message.PayloadCase.INBOUNDMESSAGE -> delegate.onInboundMessage(
                 InboundMessage(
@@ -243,15 +244,19 @@ class AuthenticatedClient private constructor(
                 .setLogin(loginBytes.byteString())
                 .setSignature(signature.byteString())
         ).build()
-        send(authResponse, object : Callback<Messages.Ack> {
-            override fun onSuccess(result: Messages.Ack) {
-                connectCallback.onSuccess(this@AuthenticatedClient)
-            }
+        try {
+            send(authResponse, object : Callback<Messages.Ack> {
+                override fun onSuccess(result: Messages.Ack) {
+                    connectCallback.onSuccess(this@AuthenticatedClient)
+                }
 
-            override fun onError(err: Throwable) {
-                connectCallback.onError(err)
-            }
-        })
+                override fun onError(err: Throwable) {
+                    connectCallback.onError(err)
+                }
+            })
+        } catch (t: Throwable) {
+            connectCallback.onError(t)
+        }
     }
 
     companion object {
@@ -313,7 +318,8 @@ class AnonymousClient private constructor(
         val msg = Messages.Message.parseFrom(data)
         when (msg.payloadCase) {
             Messages.Message.PayloadCase.AUTHCHALLENGE -> connectCallback.onSuccess(this)
-            Messages.Message.PayloadCase.PREKEYS -> pending.remove(msg.sequence)?.onSuccess(msg.preKeys)
+            Messages.Message.PayloadCase.PREKEYS -> pending.remove(msg.sequence)
+                ?.onSuccess(msg.preKeys)
             else -> super.onMessage(msg)
         }
     }

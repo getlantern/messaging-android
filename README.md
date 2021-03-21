@@ -8,9 +8,12 @@ A group containing multiple participants, identified by a globally unique groupI
 Group participants may change over time.
 
 ### /con/[c/[contactId]|g/[groupId]]
-A conversation is a stream of messages, tied either to a specific contact for one on one messages
-or to a group for group messages. It is identified by either c[contactId] for a direct conversation
-or g[groupId] for a group conversation.
+A conversation is a stream of messages, tied either to a specific contact for one on one messages or
+to a group for group messages. It is identified by either c[contactId] for a direct conversation or
+g[groupId] for a group conversation.
+
+### /cbt/[timestamp]/[c/[contactId]|g/[groupId]]
+Index of Conversations by most recent message timestamp.
 
 ### /m/[timestamp]/[senderIdentityKey]/[messageId]
 The full content of all ShortMessages are stored here, including both sent and received messages.
