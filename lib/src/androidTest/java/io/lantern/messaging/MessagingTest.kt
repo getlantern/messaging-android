@@ -152,7 +152,7 @@ class MessagingTest : BaseMessagingTest() {
         val toId = to.identityKeyPair.publicKey.toString()
 
         // send a message
-        val msgRecord = from.send(text, contactId = toId)
+        val msgRecord = from.sendToContact(toId, text)
         assertEquals(Model.ShortMessageRecord.DeliveryStatus.UNSENT, msgRecord.status)
         assertEquals(Model.ShortMessageRecord.Direction.OUT, msgRecord.direction)
         assertEquals(fromId, msgRecord.senderId)

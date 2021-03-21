@@ -99,16 +99,21 @@ class Messaging(
         }
     }
 
+    // TODO: implement the below using a GroupCipher
+//    fun sendToGroup(
+//        groupId: String,
+//        text: String?,
+//        oggVoice: ByteArray? = null,
+//    )
+
     /**
-     * Send an outbound message from the user to either a single contact or a group (TODO)
+     * Send an outbound message from the user to a single contact
      */
-    fun send(
+    fun sendToContact(
+        contactId: String,
         text: String?,
-        oggVoice: ByteArray? = null,
-        contactId: String
-//        groupId: String? = null
+        oggVoice: ByteArray? = null
     ): Model.ShortMessageRecord {
-        // TODO: add support for sending to group using GroupCipher
         if (text == null && oggVoice == null) {
             throw IllegalArgumentException("Please specify either text or oggVoice")
         } else if (text != null && oggVoice != null) {
