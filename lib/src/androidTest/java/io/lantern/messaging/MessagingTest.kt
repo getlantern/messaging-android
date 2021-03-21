@@ -11,7 +11,6 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
-import kotlin.time.milliseconds
 import kotlin.time.seconds
 
 private val logger = KotlinLogging.logger {}
@@ -210,13 +209,13 @@ class MessagingTest : BaseMessagingTest() {
 
     private fun newMessaging(
         name: String,
-        failedSendRetryDelay: Duration = 100.milliseconds,
+        failedSendRetryDelayMillis: Long = 100,
         store: MessagingStore? = null
     ): Messaging {
         return Messaging(
             store ?: newStore,
             WebSocketTransportFactory("wss://tassis.lantern.io/api"),
-            failedSendRetryDelay = failedSendRetryDelay,
+            failedSendRetryDelayMillis = failedSendRetryDelayMillis,
             name = name
         )
     }

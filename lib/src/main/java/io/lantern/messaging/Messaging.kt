@@ -5,6 +5,10 @@ import io.lantern.db.DB
 import io.lantern.db.Subscriber
 import io.lantern.messaging.store.MessagingStore
 import io.lantern.messaging.tassis.*
+import io.lantern.messaging.time.millisToNanos
+import io.lantern.messaging.time.minutesToMillis
+import io.lantern.messaging.time.nanosToMillis
+import io.lantern.messaging.time.secondsToMillis
 import mu.KotlinLogging
 import org.signal.libsignal.metadata.SealedSessionCipher
 import org.whispersystems.libsignal.DeviceId
@@ -22,18 +26,16 @@ import java.util.*
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.math.pow
-import kotlin.time.*
 
 class UnknownSenderException : Exception("Unknown sender")
 
-@ExperimentalTime
 class Messaging(
     internal val store: MessagingStore,
     private val transportFactory: TransportFactory,
-    private val redialBackoff: Duration = 50.milliseconds,
-    private val maxRedialDelay: Duration = 15.seconds,
-    failedSendRetryDelay: Duration = 5.seconds,
-    private val stopSendRetryAfter: Duration = 10.minutes,
+    private val redialBackoffMillis: Long = 50L.secondsToMillis,
+    private val maxRedialDelayMillis: Long = 15L.secondsToMillis,
+    private val failedSendRetryDelayMillis: Long = 5L.secondsToMillis,
+    private val stopSendRetryAfterMillis: Long = 10L.minutesToMillis,
     numInitialPreKeysToRegister: Int = 5,
     private val name: String = "messaging",
 ) : Closeable {
@@ -73,9 +75,7 @@ class Messaging(
                 "${Schema.PATH_OUTBOUND}/"
             ) {
             override fun onUpdate(path: String, value: Model.OutgoingShortMessage) {
-                val timeSinceFailure = System.currentTimeMillis() * 1000000 - value.lastFailed
-                val delayNanos = (failedSendRetryDelay.toLongNanoseconds() - timeSinceFailure)
-                encryptAndSend(value, delayMillis = delayNanos / 1000000)
+                encryptAndSend(value)
             }
 
             override fun onDelete(path: String) {
@@ -203,8 +203,10 @@ class Messaging(
         }
     }
 
-    private fun encryptAndSend(outgoingMessage: Model.OutgoingShortMessage, delayMillis: Long) {
-        schedule(delayMillis, TimeUnit.MILLISECONDS) {
+    private fun encryptAndSend(outgoingMessage: Model.OutgoingShortMessage) {
+        val timeSinceFailure = nowUnixNano - outgoingMessage.lastFailed
+        val delayNanos = (failedSendRetryDelayMillis.millisToNanos - timeSinceFailure)
+        schedule(delayNanos.nanosToMillis, TimeUnit.MILLISECONDS) {
             val client = getAnonymousClient()
             val unsentRecipients = HashSet(outgoingMessage.remainingRecipientsList)
             outgoingMessage.remainingRecipientsList.forEach { recipient ->
@@ -217,7 +219,7 @@ class Messaging(
             }
             val successful = unsentRecipients.size == 0
             val permanentlyFailed =
-                !successful && outgoingMessage.lastFailed > 0 && System.currentTimeMillis() * 1000000 - outgoingMessage.lastFailed > stopSendRetryAfter.toLongNanoseconds()
+                !successful && outgoingMessage.lastFailed > 0 && nowUnixNano - outgoingMessage.lastFailed > stopSendRetryAfterMillis.millisToNanos
             val deliveryStatus = if (successful) {
                 Model.ShortMessageRecord.DeliveryStatus.SENT
             } else if (permanentlyFailed) {
@@ -242,7 +244,7 @@ class Messaging(
                     val outbound =
                         outgoingMessage.toBuilder().clearRemainingRecipients()
                             .addAllRemainingRecipients(unsentRecipients.toList())
-                            .setLastFailed(System.currentTimeMillis() * 1000000)
+                            .setLastFailed(nowUnixNano)
                             .build()
                     tx.put(userMessage.outboundPath, outbound)
                 }
@@ -382,14 +384,14 @@ class Messaging(
                 anonymousClient = newClient
                 return newClient
             } catch (t: Throwable) {
-                val redialDelay = redialBackoff * 2.0.pow(failures)
+                val redialDelay = (redialBackoffMillis * 2.0.pow(failures)).toLong()
                 val actualRedialDelay =
-                    if (maxRedialDelay < redialDelay) maxRedialDelay else redialDelay
+                    if (maxRedialDelayMillis < redialDelay) maxRedialDelayMillis else redialDelay
                 logger.error(
                     "error dialing tassis, will retry in ${actualRedialDelay}: ${t.message}",
                     t
                 )
-                Thread.sleep(actualRedialDelay.toLongMilliseconds())
+                Thread.sleep(actualRedialDelay)
                 failures++
             }
         }
@@ -432,14 +434,14 @@ class Messaging(
                 authenticatedClient = newClient
                 return newClient
             } catch (t: Throwable) {
-                val redialDelay = redialBackoff * 2.0.pow(failures)
+                val redialDelay = (redialBackoffMillis * 2.0.pow(failures)).toLong()
                 val actualRedialDelay =
-                    if (maxRedialDelay < redialDelay) maxRedialDelay else redialDelay
+                    if (maxRedialDelayMillis < redialDelay) maxRedialDelayMillis else redialDelay
                 logger.error(
                     "error dialing tassis, will retry in ${actualRedialDelay}: ${t.message}",
                     t
                 )
-                Thread.sleep(actualRedialDelay.toLongMilliseconds())
+                Thread.sleep(actualRedialDelay)
                 failures++
             }
         }
@@ -470,5 +472,5 @@ val randomMessageId: ByteString
     }
 
 val nowUnixNano: Long
-    get() = System.currentTimeMillis() * 1000000
+    get() = System.currentTimeMillis().millisToNanos
 
