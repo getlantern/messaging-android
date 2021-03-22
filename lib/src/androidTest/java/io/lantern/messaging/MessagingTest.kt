@@ -32,7 +32,6 @@ class MessagingTest : BaseMessagingTest() {
                 // first add Cat as a contact
                 dog.addOrUpdateContact(catId, "Cat")
                 // ensure that we immediately have a conversation
-                dog.db.list<Any>("%").forEach { println("${it.path}: ${it.value}") }
                 assertTrue(dog.db.get<Model.Conversation>(catId.contactConversationPath) != null)
                 val storedContact = dog.db.get<Model.Contact>(catId.contactPath)
                 assertTrue(storedContact != null)
