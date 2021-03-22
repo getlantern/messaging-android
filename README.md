@@ -1,7 +1,10 @@
 ## Data Model
 
-### /c/[identityKey]
+### /c/[contactId]
 A direct contact, identified by their public IdentityKey
+
+#### /c/me
+The contact entry for the user themselves.
 
 ### /g/[groupId]
 A group containing multiple participants, identified by a globally unique groupId (type 4 UUID).

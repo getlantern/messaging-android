@@ -8,6 +8,7 @@ import org.whispersystems.libsignal.util.Base32
 object Schema {
     const val PATH_OUTBOUND = "/o"
     const val PATH_CONTACTS = "/c"
+    const val PATH_CONTACTS_ME = "$PATH_CONTACTS/me"
     const val PATH_GROUPS = "/g"
     const val PATH_MESSAGES = "/m"
     const val PATH_CONVERSATIONS = "/con"

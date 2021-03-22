@@ -64,6 +64,14 @@ class Messaging(
         identityKeyPair = store.identityKeyPair
         deviceId = store.deviceId
 
+        // make sure we have a contact entry for ourselves
+        db.mutate { tx ->
+            tx.get<Model.Contact>(Schema.PATH_CONTACTS_ME) ?: tx.put(
+                Schema.PATH_CONTACTS_ME,
+                Model.Contact.newBuilder().setId(identityKeyPair.publicKey.toString()).build()
+            )
+        }
+
         // on startup, register some pre keys
         registerPreKeys(numInitialPreKeysToRegister)
 
@@ -85,6 +93,16 @@ class Messaging(
     }
 
     val db: DB get() = store.db
+
+    fun setMyDisplayName(displayName: String) {
+        db.mutate { tx ->
+            tx.put(
+                Schema.PATH_CONTACTS_ME,
+                tx.get<Model.Contact>(Schema.PATH_CONTACTS_ME)!!.toBuilder()
+                    .setDisplayName(displayName).build()
+            )
+        }
+    }
 
     // Adds or updates the given Contact
     fun addOrUpdateContact(contactId: String, displayName: String) {

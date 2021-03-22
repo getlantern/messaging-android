@@ -8,6 +8,7 @@ import kotlinx.coroutines.runBlocking
 import mu.KotlinLogging
 import org.junit.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration
@@ -28,6 +29,16 @@ class MessagingTest : BaseMessagingTest() {
             dog.use { dog ->
                 val catId = catStore.identityKeyPair.publicKey.toString()
                 val dogId = dog.store.identityKeyPair.publicKey.toString()
+
+                assertNotNull(
+                    dog.store.db.get<Model.Contact>(Schema.PATH_CONTACTS_ME),
+                    "self-contact should exist"
+                )
+                dog.setMyDisplayName("I'm a Dog")
+                assertEquals(
+                    "I'm a Dog",
+                    dog.store.db.get<Model.Contact>(Schema.PATH_CONTACTS_ME)?.displayName
+                )
 
                 // first add Cat as a contact
                 dog.addOrUpdateContact(catId, "Cat")
