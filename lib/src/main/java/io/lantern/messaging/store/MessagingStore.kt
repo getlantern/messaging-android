@@ -24,7 +24,7 @@ class MessagingStore(
     secretPrefsName: String = "secrets",
     masterKeyName: String = "messagingMasterKey",
     dbPasswordName: String = "messagingDbPassword",
-    dbPasswordBytes: Int = 20
+    dbPasswordBytes: Int = 32
 ) : SignalProtocolStore, Closeable {
     internal val db: DB
     private val secrets: Secrets
