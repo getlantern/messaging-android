@@ -88,6 +88,9 @@ class MessagingTest : BaseMessagingTest() {
                 // now have cat add dog as a contact
                 cat.addOrUpdateDirectContact(dogId, "Dog")
 
+                // wait more than a minute to make sure we don't have issues with websocket connection
+                delay(70000);
+
                 // now try sending again from dog
                 sendAndVerifyReceived<Any>(dog, cat, "hello again cat")
 
