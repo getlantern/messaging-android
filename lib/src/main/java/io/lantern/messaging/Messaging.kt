@@ -125,10 +125,10 @@ class Messaging(
 //    )
 
     /**
-     * Send an outbound message from the user to a single contact
+     * Send an outbound message from the user to a direct contact
      */
-    fun sendToContact(
-        contactId: String,
+    fun sendToDirectContact(
+        identityKey: String,
         text: String?,
         oggVoice: ByteArray? = null
     ): Model.ShortMessageRecord {
@@ -146,8 +146,8 @@ class Messaging(
             shortMessageBuilder.oggVoice = oggVoice?.byteString()
         }
         val msg = shortMessageBuilder.build()
-        val outgoing = Model.OutgoingShortMessage.newBuilder().setContactId(contactId)
-            .addRemainingRecipients(contactId).setMessage(msg).build()
+        val outgoing = Model.OutgoingShortMessage.newBuilder().setIdentityKey(identityKey)
+            .addRemainingRecipients(identityKey).setMessage(msg).build()
         val msgRecord =
             Model.ShortMessageRecord.newBuilder()
                 .setSenderId(store.identityKeyPair.publicKey.toString()).setId(msg.id.base32)
@@ -158,7 +158,7 @@ class Messaging(
             // save the message in a list of all messages
             tx.put(msgRecord.dbPath, msgRecord)
             // update the relevant contact
-            val contact = updateDirectContactMetaData(tx, contactId, msg.sent, msg.text)
+            val contact = updateDirectContactMetaData(tx, identityKey, msg.sent, msg.text)
             // save the message under the relevant contact messages
             tx.put(msgRecord.contactMessagePath(contact), msgRecord.dbPath)
             // enqueue the outgoing message in the db for sending (actual send happens in the

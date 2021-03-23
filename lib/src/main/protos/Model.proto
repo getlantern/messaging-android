@@ -55,9 +55,9 @@ message ShortMessageRecord {
 }
 
 message OutgoingShortMessage {
-  // Whom this Conversation pertains to, either a single Contact or a Group
+  // Whom this Conversation pertains to, either a direct Contact or a Group
   oneof recipient {
-    string contactId = 1;
+    string identityKey = 1;
     string groupId = 2;
   }
   repeated string remainingRecipients = 3; // identityKeys of recipients who still need to be sent the message, base32 encoded
