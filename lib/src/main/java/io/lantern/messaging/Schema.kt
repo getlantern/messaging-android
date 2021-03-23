@@ -7,17 +7,14 @@ import org.whispersystems.libsignal.util.Base32
 
 object Schema {
     const val PATH_OUTBOUND = "/o"
-    const val PATH_CONTACTS = "/c"
-    const val PATH_CONTACTS_ME = "$PATH_CONTACTS/me"
-    const val PATH_GROUPS = "/g"
+    const val PATH_ME = "/me"
+    const val PATH_CONTACTS = "/contacts"
+    const val CONTACT_DIRECT_PREFIX = "d"
+    const val CONTACT_GROUP_PREFIX = "g"
     const val PATH_MESSAGES = "/m"
-    const val PATH_CONVERSATIONS = "/con"
-    const val PATH_CONVERSATIONS_BY_TIMESTAMP = "/cbt"
-    const val PATH_CONVERSATION_MESSAGES = "/cm"
+    const val PATH_CONTACTS_BY_ACTIVITY = "/cba"
+    const val PATH_CONTACT_MESSAGES = "/cm"
 }
-
-val String.contactPath: String
-    get() = Schema.PATH_CONTACTS.path(this)
 
 fun Model.ShortMessage.outbound(
     senderId: String,
@@ -36,26 +33,32 @@ fun Model.ShortMessage.inbound(senderId: String): Model.ShortMessageRecord {
         .setMessage(toByteString()).build()
 }
 
+val String.directContactPath: String
+    get() = Schema.PATH_CONTACTS.path(Schema.CONTACT_DIRECT_PREFIX, this)
+
+val String.groupContactPath: String
+    get() = Schema.PATH_CONTACTS.path(Schema.CONTACT_GROUP_PREFIX, this)
+
 val Model.ShortMessageRecord.dbPath: String
     get() = Schema.PATH_MESSAGES.path(sent, senderId, id)
 
 val Model.ShortMessageRecord.outboundPath: String
     get() = Schema.PATH_OUTBOUND.path(sent, id)
 
-val String.contactConversationPath get() = Schema.PATH_CONVERSATIONS.path("c", this)
+val Model.Contact.pathSegment: String
+    get() = if (type == Model.Contact.Type.DIRECT) Schema.CONTACT_DIRECT_PREFIX.path(id) else Schema.CONTACT_GROUP_PREFIX.path(
+        id
+    )
 
-val Model.Conversation.partyPath: String
-    get() = if (contactId != "") "c".path(contactId) else "g".path(groupId)
+val Model.Contact.timestampedIdxPath: String
+    get() = Schema.PATH_CONTACTS_BY_ACTIVITY.path(mostRecentMessageTime, pathSegment)
 
-val Model.Conversation.timestampedIdxPath: String
-    get() = Schema.PATH_CONVERSATIONS_BY_TIMESTAMP.path(mostRecentMessageTime, partyPath)
+val Model.Contact.dbPath: String
+    get() = Schema.PATH_CONTACTS.path(pathSegment)
 
-val Model.Conversation.dbPath: String
-    get() = Schema.PATH_CONVERSATIONS.path(partyPath)
-
-fun Model.ShortMessageRecord.conversationMessagePath(conversation: Model.Conversation): String =
-    Schema.PATH_CONVERSATION_MESSAGES.path(
-        conversation.partyPath,
+fun Model.ShortMessageRecord.contactMessagePath(contact: Model.Contact): String =
+    Schema.PATH_CONTACT_MESSAGES.path(
+        contact.pathSegment,
         sent,
         senderId,
         id

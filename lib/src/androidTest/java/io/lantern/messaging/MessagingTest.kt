@@ -31,20 +31,19 @@ class MessagingTest : BaseMessagingTest() {
                 val dogId = dog.store.identityKeyPair.publicKey.toString()
 
                 assertNotNull(
-                    dog.store.db.get<Model.Contact>(Schema.PATH_CONTACTS_ME),
+                    dog.store.db.get<Model.Contact>(Schema.PATH_ME),
                     "self-contact should exist"
                 )
                 dog.setMyDisplayName("I'm a Dog")
                 assertEquals(
                     "I'm a Dog",
-                    dog.store.db.get<Model.Contact>(Schema.PATH_CONTACTS_ME)?.displayName
+                    dog.store.db.get<Model.Contact>(Schema.PATH_ME)?.displayName
                 )
 
                 // first add Cat as a contact
-                dog.addOrUpdateContact(catId, "Cat")
-                // ensure that we immediately have a conversation
-                assertTrue(dog.db.get<Model.Conversation>(catId.contactConversationPath) != null)
-                val storedContact = dog.db.get<Model.Contact>(catId.contactPath)
+                dog.addOrUpdateDirectContact(catId, "Cat")
+                // ensure that we immediately have a Contact
+                val storedContact = dog.db.get<Model.Contact>(catId.directContactPath)
                 assertTrue(storedContact != null)
                 assertEquals(catId, storedContact.id)
                 assertEquals("Cat", storedContact.displayName)
@@ -61,14 +60,14 @@ class MessagingTest : BaseMessagingTest() {
                     assertTrue(storedMsgRecord != null)
                     assertEquals(
                         Model.ShortMessageRecord.DeliveryStatus.FAILING,
-                        storedMsgRecord?.status,
+                        storedMsgRecord.status,
                         "attempt to send to cat before cat has started registering preKeys should have resulted in a UserMessage with failing status"
                     )
-                    assertEquals(Model.ShortMessageRecord.Direction.OUT, storedMsgRecord?.direction)
-                    assertEquals(msgRecord.sent, storedMsgRecord?.sent)
+                    assertEquals(Model.ShortMessageRecord.Direction.OUT, storedMsgRecord.direction)
+                    assertEquals(msgRecord.sent, storedMsgRecord.sent)
                     assertEquals(
                         "hello cat",
-                        Model.ShortMessage.parseFrom(storedMsgRecord?.message).text
+                        Model.ShortMessage.parseFrom(storedMsgRecord.message).text
                     )
 
                     // start the Messaging system for cat, which will result in the registration of pre
@@ -79,7 +78,7 @@ class MessagingTest : BaseMessagingTest() {
                     assertTrue(storedMsgRecord != null)
                     assertEquals(
                         Model.ShortMessageRecord.DeliveryStatus.SENT,
-                        storedMsgRecord?.status,
+                        storedMsgRecord.status,
                         "once cat has started registering preKeys, pending message should successfully send"
                     )
                     cat
@@ -87,7 +86,7 @@ class MessagingTest : BaseMessagingTest() {
                 assertTrue(cat != null)
 
                 // now have cat add dog as a contact
-                cat.addOrUpdateContact(dogId, "Dog")
+                cat.addOrUpdateDirectContact(dogId, "Dog")
 
                 // now try sending again from dog
                 sendAndVerifyReceived<Any>(dog, cat, "hello again cat")
@@ -170,25 +169,27 @@ class MessagingTest : BaseMessagingTest() {
         assertTrue(msgRecord.sent < nowUnixNano)
         assertEquals(text, Model.ShortMessage.parseFrom(msgRecord.message).text)
 
-        // make sure the conversation has been created or updated and that there's only one
-        // conversation entry for this contact
-        var storedConversation =
-            from.db.get<Model.Conversation>(toId.contactConversationPath)
-        assertTrue(storedConversation != null)
-        assertEquals(toId, storedConversation.contactId)
-        assertTrue(storedConversation.groupId == "")
-        assertEquals(msgRecord.sent, storedConversation.mostRecentMessageTime)
-        assertEquals(text, storedConversation.mostRecentMessageText)
-        assertTrue(from.db.get<Model.Conversation>(toId.contactConversationPath) != null)
+        // make sure the contact has been updated and that there's only one index entry
+        var storedContact =
+            from.db.get<Model.Contact>(toId.directContactPath)
+        assertTrue(storedContact != null)
+        assertEquals(toId, storedContact.id)
+        assertEquals(msgRecord.sent, storedContact.mostRecentMessageTime)
+        assertEquals(text, storedContact.mostRecentMessageText)
         assertEquals(
-            storedConversation.dbPath,
-            from.db.get<String>(storedConversation.timestampedIdxPath)
+            1,
+            from.db.listDetails<Model.Contact>(
+                Schema.PATH_CONTACTS_BY_ACTIVITY.path(
+                    "%",
+                    storedContact.pathSegment
+                )
+            ).size
         )
 
-        // make sure that there's a link to the message in sender's conversation messages
+        // make sure that there's a link to the message in sender's contact messages
         assertEquals(
             msgRecord.dbPath,
-            from.db.get(msgRecord.conversationMessagePath(storedConversation))
+            from.db.get(msgRecord.contactMessagePath(storedContact))
         )
 
         val result = afterSend?.let { it(msgRecord) }
@@ -206,23 +207,27 @@ class MessagingTest : BaseMessagingTest() {
             assertEquals(text, Model.ShortMessage.parseFrom(storedMsgRecord.message).text)
 
             // ensure that recipient has the conversation too
-            storedConversation =
-                to.db.get(fromId.contactConversationPath)
-            assertTrue(storedConversation != null)
-            assertEquals(fromId, storedConversation.contactId)
-            assertTrue(storedConversation.groupId == "")
-            assertEquals(msgRecord.sent, storedConversation.mostRecentMessageTime)
-            assertEquals(text, storedConversation.mostRecentMessageText)
-            assertTrue(to.db.get<Model.Conversation>(fromId.contactConversationPath) != null)
+            storedContact =
+                to.db.get(fromId.directContactPath)
+            assertTrue(storedContact != null)
+            assertEquals(fromId, storedContact.id)
+            assertEquals(msgRecord.sent, storedContact.mostRecentMessageTime)
+            assertEquals(text, storedContact.mostRecentMessageText)
             assertEquals(
-                storedConversation.dbPath,
-                to.db.get<String>(storedConversation.timestampedIdxPath)
+                1,
+                to.db.listDetails<Model.Contact>(
+                    Schema.PATH_CONTACTS_BY_ACTIVITY.path(
+                        "%",
+                        storedContact.pathSegment
+                    )
+                ).size
             )
 
-            // make sure that there's a link to the message in recipient's conversation messages
+
+            // make sure that there's a link to the message in recipient's contact messages
             assertEquals(
                 storedMsgRecord.dbPath,
-                to.db.get(msgRecord.conversationMessagePath(storedConversation))
+                to.db.get(msgRecord.contactMessagePath(storedContact))
             )
         }
         return result

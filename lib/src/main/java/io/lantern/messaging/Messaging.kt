@@ -3,6 +3,7 @@ package io.lantern.messaging
 import com.google.protobuf.ByteString
 import io.lantern.db.DB
 import io.lantern.db.Subscriber
+import io.lantern.db.Transaction
 import io.lantern.messaging.store.MessagingStore
 import io.lantern.messaging.tassis.*
 import io.lantern.messaging.time.millisToNanos
@@ -57,17 +58,16 @@ class Messaging(
 
     init {
         db.registerType(21, Model.Contact::class.java)
-        db.registerType(22, Model.Conversation::class.java)
-        db.registerType(23, Model.ShortMessageRecord::class.java)
-        db.registerType(24, Model.OutgoingShortMessage::class.java)
+        db.registerType(22, Model.ShortMessageRecord::class.java)
+        db.registerType(23, Model.OutgoingShortMessage::class.java)
 
         identityKeyPair = store.identityKeyPair
         deviceId = store.deviceId
 
         // make sure we have a contact entry for ourselves
         db.mutate { tx ->
-            tx.get<Model.Contact>(Schema.PATH_CONTACTS_ME) ?: tx.put(
-                Schema.PATH_CONTACTS_ME,
+            tx.get<Model.Contact>(Schema.PATH_ME) ?: tx.put(
+                Schema.PATH_ME,
                 Model.Contact.newBuilder().setId(identityKeyPair.publicKey.toString()).build()
             )
         }
@@ -97,23 +97,23 @@ class Messaging(
     fun setMyDisplayName(displayName: String) {
         db.mutate { tx ->
             tx.put(
-                Schema.PATH_CONTACTS_ME,
-                tx.get<Model.Contact>(Schema.PATH_CONTACTS_ME)!!.toBuilder()
+                Schema.PATH_ME,
+                tx.get<Model.Contact>(Schema.PATH_ME)!!.toBuilder()
                     .setDisplayName(displayName).build()
             )
         }
     }
 
-    // Adds or updates the given Contact
-    fun addOrUpdateContact(contactId: String, displayName: String) {
-        val path = contactId.contactPath
+    // Adds or updates the given direct Contact
+    fun addOrUpdateDirectContact(identityKey: String, displayName: String) {
+        val path = identityKey.directContactPath
         db.mutate { tx ->
             val contactBuilder =
                 tx.get<Model.Contact>(path)?.toBuilder() ?: Model.Contact.newBuilder()
-                    .setId(contactId)
+                    .setType(Model.Contact.Type.DIRECT)
+                    .setId(identityKey)
             val contact = contactBuilder.setDisplayName(displayName).build()
             tx.put(path, contact)
-            addOrUpdateConversation(contactId)
         }
     }
 
@@ -157,15 +157,38 @@ class Messaging(
         db.mutate { tx ->
             // save the message in a list of all messages
             tx.put(msgRecord.dbPath, msgRecord)
-            // update or create the relevant conversation
-            val conversation = addOrUpdateConversation(contactId, msg.sent, msg.text)
-            // save the message under the relevant conversation
-            tx.put(msgRecord.conversationMessagePath(conversation), msgRecord.dbPath)
+            // update the relevant contact
+            val contact = updateDirectContactMetaData(tx, contactId, msg.sent, msg.text)
+            // save the message under the relevant contact messages
+            tx.put(msgRecord.contactMessagePath(contact), msgRecord.dbPath)
             // enqueue the outgoing message in the db for sending (actual send happens in the
             // message processing loop)
             tx.put(msgRecord.outboundPath, outgoing)
         }
         return msgRecord
+    }
+
+    private fun updateDirectContactMetaData(
+        tx: Transaction,
+        identityKey: String,
+        messageTime: Long = 0,
+        messageText: String = ""
+    ): Model.Contact {
+        val contactPath = identityKey.directContactPath
+        val contact = tx.get<Model.Contact>(contactPath)
+            ?: throw IllegalArgumentException("unknown direct contact")
+        if (messageTime <= contact.mostRecentMessageTime) {
+            return contact
+        }
+        // delete existing index entry
+        tx.delete(contact.timestampedIdxPath)
+        // update the contact
+        val updatedContact = contact.toBuilder().setMostRecentMessageTime(messageTime)
+            .setMostRecentMessageText(messageText).build()
+        tx.put(contactPath, updatedContact)
+        // create a new index entry
+        tx.put(updatedContact.timestampedIdxPath, contactPath)
+        return updatedContact
     }
 
     // unregisters the current identity from tassis
@@ -174,37 +197,6 @@ class Messaging(
             getAuthenticatedClient().unregister()
         }.get()
     }
-
-    private fun addOrUpdateConversation(
-        contactId: String,
-        messageTime: Long = 0,
-        messageText: String = ""
-    ): Model.Conversation {
-        return db.mutate { tx ->
-            val conversationPath = contactId.contactConversationPath
-            val existingConversation = tx.get<Model.Conversation>(conversationPath)
-            if (existingConversation != null && existingConversation.mostRecentMessageTime > 0) {
-                // delete the index entry under the old timestamp
-                tx.delete(existingConversation.timestampedIdxPath)
-            }
-            val conversationBuilder = existingConversation?.toBuilder()
-                ?: Model.Conversation.newBuilder().setContactId(contactId)
-            if (messageTime > existingConversation?.mostRecentMessageTime ?: 0) {
-                conversationBuilder.mostRecentMessageTime = messageTime
-                if (messageText != "") {
-                    conversationBuilder.mostRecentMessageText = messageText
-                }
-            }
-            val conversation = conversationBuilder.build()
-            tx.put(conversationPath, conversation)
-            if (conversation.mostRecentMessageTime > 0) {
-                // store an index entry in the timestamped index pointing to this Conversation
-                tx.put(conversation.timestampedIdxPath, conversationPath)
-            }
-            conversation
-        }
-    }
-
 
     private fun registerPreKeys(numPreKeys: Int, delayMillis: Long = 0) {
         schedule(delayMillis, TimeUnit.MILLISECONDS) {
@@ -349,20 +341,17 @@ class Messaging(
             val transferMsg = Model.TransferMessage.parseFrom(plainText)
             val senderAddress = decryptionResult.senderAddress
             val senderId = senderAddress.identityKey.toString()
-            if (!tx.contains(senderId.contactPath)) {
+            if (!tx.contains(senderId.directContactPath)) {
                 throw UnknownSenderException()
             }
             val msgRecord = transferMsg.shortMessage.inbound(senderId)
             val msg = Model.ShortMessage.parseFrom(msgRecord.message)
-
             // save the message record itself
             tx.put(msgRecord.dbPath, msgRecord)
-
-            // update the Conversation
-            val conversation = addOrUpdateConversation(senderId, msg.sent, msg.text)
-
-            // save a pointer to the message under the conversation message path
-            tx.put(msgRecord.conversationMessagePath(conversation), msgRecord.dbPath)
+            // update the Contact metadata
+            val contact = updateDirectContactMetaData(tx, senderId, msg.sent, msg.text)
+            // save a pointer to the message under the contact message path
+            tx.put(msgRecord.contactMessagePath(contact), msgRecord.dbPath)
         }
     }
 
