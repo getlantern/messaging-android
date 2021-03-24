@@ -11,8 +11,8 @@
         <option name="gradleJvm" value="1.8" />
         <option name="modules">
           <set>
-            <option value="/Volumes/music/git/messaging-android" />
-            <option value="/Volumes/music/git/messaging-android/lib" />
+            <option value="$PROJECT_DIR$" />
+            <option value="$PROJECT_DIR$/lib" />
           </set>
         </option>
         <option name="resolveModulePerSourceSet" value="false" />

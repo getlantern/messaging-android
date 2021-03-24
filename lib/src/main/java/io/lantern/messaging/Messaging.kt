@@ -25,6 +25,7 @@ import java.io.Closeable
 import java.nio.ByteBuffer
 import java.util.*
 import java.util.concurrent.Executors
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import kotlin.math.pow
 
@@ -47,7 +48,11 @@ class Messaging(
     private val executor = Executors.newSingleThreadScheduledExecutor {
         Thread(it, "${name}-executor")
     }
+    private val anonymousClientLock = Semaphore(1)
+    private var anonymousClientConnectFailures = 0
     private var anonymousClient: AnonymousClient? = null
+    private val authenticatedClientLock = Semaphore(1)
+    private var authenticatedClientConnectFailures = 0
     private var authenticatedClient: AuthenticatedClient? = null
 
     private val identityKeyPair: ECKeyPair
@@ -194,18 +199,57 @@ class Messaging(
     // unregisters the current identity from tassis
     fun unregister() {
         executor.submit {
-            getAuthenticatedClient().unregister()
+            withAuthenticatedClient(object : ClientCallback<AuthenticatedClient> {
+                override fun onClient(client: AuthenticatedClient) {
+                    client.unregister(object : Callback<Unit> {
+                        override fun onSuccess(result: Unit) {
+                            logger.debug("successfully unregistered")
+                        }
+
+                        override fun onError(err: Throwable) {
+                            logger.error("failed to unregister: ${err.message}", err)
+                        }
+
+                    })
+                }
+
+                override fun onClientUnavailable(err: Throwable) {
+                    logger.error("failed to unregister: ${err.message}", err)
+                }
+            })
         }.get()
     }
 
     private fun registerPreKeys(numPreKeys: Int, delayMillis: Long = 0) {
         schedule(delayMillis, TimeUnit.MILLISECONDS) {
-            val client = getAuthenticatedClient()
             try {
                 db.mutate {
                     val spk = store.nextSignedPreKey
                     val otpks = store.generatePreKeys(numPreKeys)
-                    client.register(spk.serialize(), otpks.map { it.serialize() })
+                    withAuthenticatedClient(object : ClientCallback<AuthenticatedClient> {
+                        override fun onClient(client: AuthenticatedClient) {
+                            client.register(
+                                spk.serialize(),
+                                otpks.map { it.serialize() },
+                                object : Callback<Unit> {
+                                    override fun onSuccess(result: Unit) {
+                                        logger.debug("successfully registered pre keys")
+                                    }
+
+                                    override fun onError(err: Throwable) {
+                                        logger.error(
+                                            "failed to register pre keys: ${err.message}",
+                                            err
+                                        )
+                                    }
+
+                                })
+                        }
+
+                        override fun onClientUnavailable(err: Throwable) {
+                            logger.error("failed to register pre keys: ${err.message}", err)
+                        }
+                    })
                 }
             } catch (t: Throwable) {
                 logger.debug(
@@ -221,103 +265,215 @@ class Messaging(
         val timeSinceFailure = nowUnixNano - outgoingMessage.lastFailed
         val delayNanos = (failedSendRetryDelayMillis.millisToNanos - timeSinceFailure)
         schedule(delayNanos.nanosToMillis, TimeUnit.MILLISECONDS) {
-            val client = getAnonymousClient()
-            val unsentRecipients = HashSet(outgoingMessage.remainingRecipientsList)
-            outgoingMessage.remainingRecipientsList.forEach { recipient ->
-                try {
-                    encryptAndSendTo(client, outgoingMessage, recipient)
-                    unsentRecipients.remove(recipient)
-                } catch (t: Throwable) {
-                    logger.debug("error sending, will retry: ${t.message}")
+            withAnonymousClient(object : ClientCallback<AnonymousClient> {
+                override fun onClient(client: AnonymousClient) {
+                    val unsentRecipients = HashSet(outgoingMessage.remainingRecipientsList)
+                    outgoingMessage.remainingRecipientsList.forEach { recipient ->
+                        try {
+                            encryptAndSendTo(client, outgoingMessage, recipient)
+                            unsentRecipients.remove(recipient)
+                        } catch (t: Throwable) {
+                            logger.debug("error sending, will retry: ${t.message}")
+                        }
+                    }
+//                    val successful = unsentRecipients.size == 0
+//                    val permanentlyFailed =
+//                        !successful && outgoingMessage.lastFailed > 0 && nowUnixNano - outgoingMessage.lastFailed > stopSendRetryAfterMillis.millisToNanos
+//                    val deliveryStatus = if (successful) {
+//                        Model.ShortMessageRecord.DeliveryStatus.SENT
+//                    } else if (permanentlyFailed) {
+//                        if (unsentRecipients.size < outgoingMessage.remainingRecipientsCount) {
+//                            Model.ShortMessageRecord.DeliveryStatus.COMPLETELY_FAILED
+//                        } else {
+//                            Model.ShortMessageRecord.DeliveryStatus.PARTIALLY_FAILED
+//                        }
+//                    } else {
+//                        Model.ShortMessageRecord.DeliveryStatus.FAILING
+//                    }
+//                    val userMessage =
+//                        outgoingMessage.message.outbound(
+//                            store.identityKeyPair.publicKey.toString(),
+//                            deliveryStatus
+//                        )
+//                    db.mutate { tx ->
+//                        tx.put(userMessage.dbPath, userMessage)
+//                        if (successful || permanentlyFailed) {
+//                            tx.delete(userMessage.outboundPath)
+//                        } else {
+//                            val outbound =
+//                                outgoingMessage.toBuilder().clearRemainingRecipients()
+//                                    .addAllRemainingRecipients(unsentRecipients.toList())
+//                                    .setLastFailed(nowUnixNano)
+//                                    .build()
+//                            tx.put(userMessage.outboundPath, outbound)
+//                        }
+//                    }
                 }
-            }
-            val successful = unsentRecipients.size == 0
-            val permanentlyFailed =
-                !successful && outgoingMessage.lastFailed > 0 && nowUnixNano - outgoingMessage.lastFailed > stopSendRetryAfterMillis.millisToNanos
-            val deliveryStatus = if (successful) {
-                Model.ShortMessageRecord.DeliveryStatus.SENT
-            } else if (permanentlyFailed) {
-                if (unsentRecipients.size < outgoingMessage.remainingRecipientsCount) {
-                    Model.ShortMessageRecord.DeliveryStatus.COMPLETELY_FAILED
-                } else {
-                    Model.ShortMessageRecord.DeliveryStatus.PARTIALLY_FAILED
+
+                override fun onClientUnavailable(err: Throwable) {
+                    // schedule to retry later
+                    schedule(
+                        failedSendRetryDelayMillis,
+                        TimeUnit.MILLISECONDS,
+                        { encryptAndSend(outgoingMessage) })
                 }
-            } else {
-                Model.ShortMessageRecord.DeliveryStatus.FAILING
-            }
-            val userMessage =
-                outgoingMessage.message.outbound(
-                    store.identityKeyPair.publicKey.toString(),
-                    deliveryStatus
-                )
-            db.mutate { tx ->
-                tx.put(userMessage.dbPath, userMessage)
-                if (successful || permanentlyFailed) {
-                    tx.delete(userMessage.outboundPath)
-                } else {
-                    val outbound =
-                        outgoingMessage.toBuilder().clearRemainingRecipients()
-                            .addAllRemainingRecipients(unsentRecipients.toList())
-                            .setLastFailed(nowUnixNano)
-                            .build()
-                    tx.put(userMessage.outboundPath, outbound)
-                }
-            }
+
+            })
+
         }
     }
 
     private fun encryptAndSendTo(
         client: AnonymousClient,
-        msg: Model.OutgoingShortMessage,
+        outgoingMessage: Model.OutgoingShortMessage,
         recipient: String
     ) {
-        // run encryption and sending in a single transaction so that if any part fails, our session states roll back
-        db.mutate { _ ->
+        db.mutate { tx ->
+            // mark message as SENDING
+            val shortMessage =
+                outgoingMessage.message.outbound(
+                    store.identityKeyPair.publicKey.toString(),
+                    Model.ShortMessageRecord.DeliveryStatus.SENDING
+                )
+            tx.put(shortMessage.dbPath, shortMessage)
             val recipientIdentityKey = ECPublicKey(recipient)
             val knownDeviceIds =
                 store.getSubDeviceSessions(recipientIdentityKey.toString())
-            val deviceIds = if (knownDeviceIds.size == 0) {
-                // no known devices, try fetching pre-keys
-                val preKeys = client.retrievePreKeys(recipientIdentityKey, knownDeviceIds)
-                preKeys.forEach { preKey ->
-                    val signedPreKey = SignedPreKeyRecord(preKey.signedPreKey.toByteArray())
-                    val oneTimePreKey = PreKeyRecord(preKey.oneTimePreKey.toByteArray())
-                    // TODO: implement max_recv checking for signed pre key age
-                    val builder = SessionBuilder(
-                        store,
-                        SignalProtocolAddress(
-                            recipientIdentityKey,
-                            DeviceId(preKey.deviceId.toByteArray())
-                        )
-                    )
-                    builder.process(
-                        PreKeyBundle(
-                            oneTimePreKey.id,
-                            oneTimePreKey.keyPair.publicKey,
-                            signedPreKey.id,
-                            signedPreKey.keyPair.publicKey,
-                            signedPreKey.signature,
-                            recipientIdentityKey
-                        )
-                    )
-                }
-                preKeys.map { DeviceId(it.deviceId.toByteArray()) }
+            if (knownDeviceIds.size > 0) {
+                // we know device IDs, send to the ones we know
+                // TODO: figure out how to handle future additions of recipient devices (maybe retrieve preKeys periodically?)
+                doEncryptAndSendTo(client, outgoingMessage, recipientIdentityKey, knownDeviceIds)
             } else {
-                knownDeviceIds
+                // need to fetch pre keys and then we can send
+                retrievePreKeys(client, outgoingMessage, recipientIdentityKey, knownDeviceIds)
             }
+        }
+    }
 
-            deviceIds.forEach { deviceId ->
-                val transferMsg =
-                    Model.TransferMessage.newBuilder().setShortMessage(msg.message).build()
-                // TODO: we (mostly Signal) use ByteArray everywhere, but Protocol Buffers wants byte strings
-                // which have to be copied from the ByteArray. That results in a lot of extra copies,
-                // it would  sure be nice to avoid that.
-                val plainText = transferMsg.toByteArray()
-                val paddedPlainText = Padding.padMessage(plainText)
-                val to = SignalProtocolAddress(recipientIdentityKey, deviceId)
-                val unidentifiedSenderMessage: ByteArray =
-                    cipher.encrypt(to, paddedPlainText)
-                client.sendUnidentifiedSenderMessage(to, unidentifiedSenderMessage)
+    private fun doEncryptAndSendTo(
+        client: AnonymousClient,
+        outgoingMessage: Model.OutgoingShortMessage,
+        recipientIdentityKey: ECPublicKey,
+        deviceIds: List<DeviceId>
+    ) {
+        deviceIds.forEach { deviceId ->
+            val transferMsg =
+                Model.TransferMessage.newBuilder().setShortMessage(outgoingMessage.message).build()
+            // TODO: we (mostly Signal) use ByteArray everywhere, but Protocol Buffers wants byte strings
+            // which have to be copied from the ByteArray. That results in a lot of extra copies,
+            // it would  sure be nice to avoid that.
+            val plainText = transferMsg.toByteArray()
+            val paddedPlainText = Padding.padMessage(plainText)
+            val to = SignalProtocolAddress(recipientIdentityKey, deviceId)
+            val unidentifiedSenderMessage: ByteArray =
+                cipher.encrypt(to, paddedPlainText)
+            client.sendUnidentifiedSenderMessage(
+                to,
+                unidentifiedSenderMessage,
+                object : Callback<Unit> {
+                    override fun onSuccess(result: Unit) {
+                        logger.debug("successfully sent message")
+                        submit {
+                            updateOutgoingStatus(outgoingMessage, recipientIdentityKey.toString())
+                        }
+                    }
+
+                    override fun onError(err: Throwable) {
+                        // TODO: mark permanent failure
+                        logger.error("failed to send message: ${err.message}", err)
+                    }
+                })
+        }
+    }
+
+    private fun retrievePreKeys(
+        client: AnonymousClient,
+        outgoingMessage: Model.OutgoingShortMessage,
+        recipientIdentityKey: ECPublicKey,
+        knownDeviceIds: List<DeviceId>
+    ) {
+        client.retrievePreKeys(
+            recipientIdentityKey,
+            knownDeviceIds,
+            object : Callback<List<Messages.PreKey>> {
+                override fun onSuccess(result: List<Messages.PreKey>) {
+                    db.mutate { tx ->
+                        result.forEach { preKey ->
+                            val signedPreKey =
+                                SignedPreKeyRecord(preKey.signedPreKey.toByteArray())
+                            val oneTimePreKey =
+                                PreKeyRecord(preKey.oneTimePreKey.toByteArray())
+                            // TODO: implement max_recv checking for signed pre key age
+                            val builder = SessionBuilder(
+                                store,
+                                SignalProtocolAddress(
+                                    recipientIdentityKey,
+                                    DeviceId(preKey.deviceId.toByteArray())
+                                )
+                            )
+                            builder.process(
+                                PreKeyBundle(
+                                    oneTimePreKey.id,
+                                    oneTimePreKey.keyPair.publicKey,
+                                    signedPreKey.id,
+                                    signedPreKey.keyPair.publicKey,
+                                    signedPreKey.signature,
+                                    recipientIdentityKey
+                                )
+                            )
+                        }
+                    }
+                    // submit the message for re-processing
+                    submit { encryptAndSend(outgoingMessage) }
+                }
+
+                override fun onError(err: Throwable) {
+                    logger.debug("error retrieving pre keys, try to re-process outoing message later: $err")
+                    schedule(
+                        failedSendRetryDelayMillis,
+                        TimeUnit.MILLISECONDS,
+                        { encryptAndSend(outgoingMessage) })
+                }
+            })
+    }
+
+    private fun updateOutgoingStatus(
+        outgoingMessage: Model.OutgoingShortMessage,
+        recipient: String
+    ) {
+        val remainingRecipients =
+            HashSet(outgoingMessage.remainingRecipientsList)
+        remainingRecipients.remove(recipient)
+        val finished = remainingRecipients.size == 0
+        val permanentlyFailed =
+            !finished && outgoingMessage.lastFailed > 0 && nowUnixNano - outgoingMessage.lastFailed > stopSendRetryAfterMillis.millisToNanos
+        val deliveryStatus = if (finished) {
+            Model.ShortMessageRecord.DeliveryStatus.SENT
+        } else if (permanentlyFailed) {
+            if (remainingRecipients.size < outgoingMessage.remainingRecipientsCount) {
+                Model.ShortMessageRecord.DeliveryStatus.COMPLETELY_FAILED
+            } else {
+                Model.ShortMessageRecord.DeliveryStatus.PARTIALLY_FAILED
+            }
+        } else {
+            Model.ShortMessageRecord.DeliveryStatus.SENDING
+        }
+        val shortMessage =
+            outgoingMessage.message.outbound(
+                store.identityKeyPair.publicKey.toString(),
+                deliveryStatus
+            )
+        db.mutate { tx ->
+            tx.put(shortMessage.dbPath, shortMessage)
+            if (finished || permanentlyFailed) {
+                tx.delete(shortMessage.outboundPath)
+            } else {
+                val outbound =
+                    outgoingMessage.toBuilder().clearRemainingRecipients()
+                        .addAllRemainingRecipients(remainingRecipients.toList())
+                        .setLastFailed(nowUnixNano)
+                        .build()
+                tx.put(shortMessage.outboundPath, outbound)
             }
         }
     }
@@ -375,87 +531,126 @@ class Messaging(
         }
     }
 
-    @Synchronized
-    private fun getAnonymousClient(): AnonymousClient {
-        val existing = anonymousClient
-        if (existing != null) {
-            return existing
-        }
+    /**
+     * Callback interface for receiving clients
+     */
+    interface ClientCallback<T> {
+        fun onClient(client: T)
 
-        var failures = 0
-        while (true) {
-            try {
-                val newClient = AnonymousClient.connect(transportFactory, object : ClientDelegate {
-                    override fun onClose(err: Throwable?) {
-                        synchronized(this) {
-                            anonymousClient = null
-                        }
-                    }
-                })
-                anonymousClient = newClient
-                return newClient
-            } catch (t: Throwable) {
-                val redialDelay = (redialBackoffMillis * 2.0.pow(failures)).toLong()
-                val actualRedialDelay =
-                    if (maxRedialDelayMillis < redialDelay) maxRedialDelayMillis else redialDelay
-                logger.error(
-                    "error dialing tassis, will retry in ${actualRedialDelay}: ${t.message}",
-                    t
-                )
-                Thread.sleep(actualRedialDelay)
-                failures++
-            }
-        }
+        fun onClientUnavailable(err: Throwable)
     }
 
-    @Synchronized
-    private fun getAuthenticatedClient(): AuthenticatedClient {
+    private fun withAnonymousClient(cb: ClientCallback<AnonymousClient>) {
+        anonymousClientLock.acquire()
+        val existing = anonymousClient
+        if (existing != null) {
+            val client = existing
+            anonymousClientLock.release()
+            cb.onClient(client)
+            return
+        }
+
+        val newClient = AnonymousClient(object : AnonymousClientDelegate {
+            override fun onConnected(client: AnonymousClient) {
+                logger.debug("successfully connected anonymous client to tassis")
+                anonymousClient = client
+                anonymousClientConnectFailures = 0
+                anonymousClientLock.release()
+                cb.onClient(client)
+            }
+
+            override fun onConnectError(err: Throwable) {
+                anonymousClientConnectFailures++
+                cb.onClientUnavailable(err)
+            }
+
+            override fun onClose(err: Throwable?) {
+                if (err != null) {
+                    logger.error("tassis client closed with error ${err}")
+                } else {
+                    logger.debug("tassis client closed normally")
+                }
+                anonymousClientLock.acquire()
+                anonymousClient = null
+                anonymousClientLock.release()
+            }
+        })
+
+        if (anonymousClientConnectFailures > 0) {
+            val redialDelay =
+                (redialBackoffMillis * 2.0.pow(anonymousClientConnectFailures)).toLong()
+            val actualRedialDelay =
+                if (maxRedialDelayMillis < redialDelay) maxRedialDelayMillis else redialDelay
+            logger.debug("due to $anonymousClientConnectFailures previous errors connecting anonymous client to tassis, will wait ${actualRedialDelay}ms before dialing again")
+            Thread.sleep(actualRedialDelay)
+        }
+
+        logger.debug("attempting to connect anonymous client to tassis")
+        transportFactory.connect(newClient)
+    }
+
+    private fun withAuthenticatedClient(cb: ClientCallback<AuthenticatedClient>) {
+        authenticatedClientLock.acquire()
         val existing = authenticatedClient
         if (existing != null) {
-            return existing
+            val client = existing
+            authenticatedClientLock.release()
+            cb.onClient(client)
+            return
         }
 
-        var failures = 0
-        while (true) {
-            try {
-                val newClient = AuthenticatedClient.connect(
-                    transportFactory,
-                    identityKeyPair.publicKey,
-                    deviceId,
-                    object : AuthenticatedClientDelegate {
-                        override fun signLogin(loginBytes: ByteArray) = Curve.calculateSignature(
-                            identityKeyPair.privateKey,
-                            loginBytes
-                        )
+        val newClient = AuthenticatedClient(identityKeyPair.publicKey,
+            deviceId,
+            object : AuthenticatedClientDelegate {
+                override fun onConnected(client: AuthenticatedClient) {
+                    logger.debug("successfully connected authenticated client to tassis")
+                    authenticatedClient = client
+                    authenticatedClientConnectFailures = 0
+                    authenticatedClientLock.release()
+                    cb.onClient(client)
+                }
 
-                        override fun onPreKeysLow(numPreKeysRequested: Int) {
-                            registerPreKeys(numPreKeysRequested)
-                        }
+                override fun onConnectError(err: Throwable) {
+                    authenticatedClientConnectFailures++
+                    cb.onClientUnavailable(err)
+                }
 
-                        override fun onInboundMessage(msg: InboundMessage) {
-                            decryptAndStore(msg)
-                        }
-
-                        override fun onClose(err: Throwable?) {
-                            synchronized(this) {
-                                authenticatedClient = null
-                            }
-                        }
-                    })
-                authenticatedClient = newClient
-                return newClient
-            } catch (t: Throwable) {
-                val redialDelay = (redialBackoffMillis * 2.0.pow(failures)).toLong()
-                val actualRedialDelay =
-                    if (maxRedialDelayMillis < redialDelay) maxRedialDelayMillis else redialDelay
-                logger.error(
-                    "error dialing tassis, will retry in ${actualRedialDelay}: ${t.message}",
-                    t
+                override fun signLogin(loginBytes: ByteArray) = Curve.calculateSignature(
+                    identityKeyPair.privateKey,
+                    loginBytes
                 )
-                Thread.sleep(actualRedialDelay)
-                failures++
-            }
+
+                override fun onPreKeysLow(numPreKeysRequested: Int) {
+                    registerPreKeys(numPreKeysRequested)
+                }
+
+                override fun onInboundMessage(msg: InboundMessage) {
+                    decryptAndStore(msg)
+                }
+
+                override fun onClose(err: Throwable?) {
+                    if (err != null) {
+                        logger.error("tassis client closed with error ${err}")
+                    } else {
+                        logger.debug("tassis client closed normally")
+                    }
+                    authenticatedClientLock.acquire()
+                    authenticatedClient = null
+                    authenticatedClientLock.release()
+                }
+            })
+
+        if (authenticatedClientConnectFailures > 0) {
+            val redialDelay =
+                (redialBackoffMillis * 2.0.pow(authenticatedClientConnectFailures)).toLong()
+            val actualRedialDelay =
+                if (maxRedialDelayMillis < redialDelay) maxRedialDelayMillis else redialDelay
+            logger.debug("due to $authenticatedClientConnectFailures previous errors connecting authenticated client to tassis, will wait ${actualRedialDelay}ms before dialing again")
+            Thread.sleep(actualRedialDelay)
         }
+
+        logger.debug("attempting to connect authenticated client to tassis")
+        transportFactory.connect(newClient)
     }
 
     override fun close() {

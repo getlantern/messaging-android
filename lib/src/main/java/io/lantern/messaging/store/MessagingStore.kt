@@ -24,7 +24,8 @@ class MessagingStore(
     secretPrefsName: String = "secrets",
     masterKeyName: String = "messagingMasterKey",
     dbPasswordName: String = "messagingDbPassword",
-    dbPasswordBytes: Int = 32
+    dbPasswordBytes: Int = 32,
+    name: String = "messaging-store"
 ) : SignalProtocolStore, Closeable {
     internal val db: DB
     private val secrets: Secrets
@@ -33,7 +34,7 @@ class MessagingStore(
         val secretsPreferences = ctx.getSharedPreferences(secretPrefsName, Context.MODE_PRIVATE)
         secrets = Secrets(masterKeyName, secretsPreferences)
         val dbPassword = secrets.get(dbPasswordName, dbPasswordBytes)
-        db = DB.createOrOpen(ctx, dbPath, dbPassword)
+        db = DB.createOrOpen(ctx, dbPath, dbPassword, name = "$name-db")
     }
 
     override fun getIdentityKeyPair(): ECKeyPair {
@@ -55,18 +56,18 @@ class MessagingStore(
     }
 
     val deviceId: DeviceId
-    get() {
-        return db.mutate { tx ->
-            val bytes = tx.get<ByteArray>(PATH_DEVICE_ID)
-            if (bytes != null) {
-                DeviceId(bytes)
-            } else {
-                val deviceId = DeviceId.random()
-                tx.put(PATH_DEVICE_ID, deviceId.bytes)
-                deviceId
+        get() {
+            return db.mutate { tx ->
+                val bytes = tx.get<ByteArray>(PATH_DEVICE_ID)
+                if (bytes != null) {
+                    DeviceId(bytes)
+                } else {
+                    val deviceId = DeviceId.random()
+                    tx.put(PATH_DEVICE_ID, deviceId.bytes)
+                    deviceId
+                }
             }
         }
-    }
 
     fun generatePreKeys(count: Int): List<PreKeyRecord> {
         // TODO: handle the case of prekey ids rolling past MAX_INT

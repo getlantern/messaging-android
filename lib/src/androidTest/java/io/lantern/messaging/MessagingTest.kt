@@ -55,11 +55,11 @@ class MessagingTest : BaseMessagingTest() {
                     // wait for the message to attempt to send and fail, make sure the status is correct
                     // and that the message is still populated correctly
                     var storedMsgRecord = dog.waitFor<Model.ShortMessageRecord>(msgRecord.dbPath) {
-                        it?.status == Model.ShortMessageRecord.DeliveryStatus.FAILING
+                        it?.status == Model.ShortMessageRecord.DeliveryStatus.SENDING
                     }
                     assertTrue(storedMsgRecord != null)
                     assertEquals(
-                        Model.ShortMessageRecord.DeliveryStatus.FAILING,
+                        Model.ShortMessageRecord.DeliveryStatus.SENDING,
                         storedMsgRecord.status,
                         "attempt to send to cat before cat has started registering preKeys should have resulted in a UserMessage with failing status"
                     )
@@ -278,8 +278,8 @@ private suspend fun <T> waitFor(maxWait: Long, get: suspend () -> T?): T? {
         if (result != null) {
             return result
         }
-        delay(250)
-        elapsed += 250
+        delay(25)
+        elapsed += 25
     }
     return null
 }

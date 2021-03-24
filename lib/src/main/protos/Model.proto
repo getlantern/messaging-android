@@ -40,7 +40,7 @@ message ShortMessageRecord {
 
   enum DeliveryStatus {
     UNSENT = 0;
-    FAILING = 1; // message is currently failing to send but we'll try again
+    SENDING = 1; // message is currently in the process of sending but hasn't successfully finished yet
     PARTIALLY_FAILED = 2; // message failed to send to a subset of recipients, will not retry
     COMPLETELY_FAILED = 3; // message failed to send to any recipients, will not retry
     SENT = 4; // message has been successfully sent

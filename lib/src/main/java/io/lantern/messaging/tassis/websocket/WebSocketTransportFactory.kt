@@ -1,34 +1,31 @@
 package io.lantern.messaging.tassis.websocket
 
-import io.lantern.messaging.tassis.Callback
 import io.lantern.messaging.tassis.MessageHandler
 import io.lantern.messaging.tassis.Transport
 import io.lantern.messaging.tassis.TransportFactory
 import mu.KotlinLogging
 import org.java_websocket.client.WebSocketClient
+import org.java_websocket.drafts.Draft_6455
 import org.java_websocket.framing.CloseFrame
 import org.java_websocket.handshake.ServerHandshake
 import java.net.URI
 import java.nio.ByteBuffer
-import java.util.concurrent.TimeUnit
 
 private val logger = KotlinLogging.logger {}
 
 class WebSocketTransportFactory(
     private val url: String,
-    private val connectTimeoutMillis: Long = 15000,
+    private val connectTimeoutMillis: Int = 15000,
     private val connectionLostTimeoutSeconds: Int = 30
 ) : TransportFactory {
-    override fun build(handler: MessageHandler, cb: Callback<Transport>) {
+    override fun connect(handler: MessageHandler) {
         try {
-            val transport = WebSocketTransport(url, handler, connectionLostTimeoutSeconds)
-            transport.connectBlocking(
-                connectTimeoutMillis,
-                TimeUnit.MILLISECONDS
-            ) // todo: use timeout
-            cb.onSuccess(transport)
+            val transport =
+                WebSocketTransport(url, handler, connectTimeoutMillis, connectionLostTimeoutSeconds)
+            handler.setTransport(transport)
+            transport.connect()
         } catch (t: Throwable) {
-            cb.onError(t)
+            handler.onConnectError(t)
         }
     }
 }
@@ -36,9 +33,13 @@ class WebSocketTransportFactory(
 class WebSocketTransport(
     url: String,
     private val handler: MessageHandler,
+    connectTimeoutMillis: Int,
     connectionLostTimeoutSeconds: Int = 30
 ) :
-    WebSocketClient(URI(url)), Transport {
+    WebSocketClient(URI(url), Draft_6455(), null, connectTimeoutMillis), Transport {
+
+    private var closedByHandler = false
+
     init {
         // enable checking for lost connections, which helps keep the connection alive and also
         // closes it when it seems to have been disconnected
@@ -46,7 +47,9 @@ class WebSocketTransport(
     }
 
     override fun onOpen(handshakedata: ServerHandshake?) {
-        // ignore
+        // we ignore this. In practice, once connected, the server will send an authentication
+        // challenge. Once the client sees this and responds to it as appropriate, it will notify
+        // its delegate that we're connected
     }
 
     override fun onMessage(message: String?) {
@@ -54,10 +57,21 @@ class WebSocketTransport(
     }
 
     override fun onMessage(bytes: ByteBuffer?) {
+        // Note - from what I can tell, this will always be the complete message, even if it was
+        // fragmented into multiple frames
         handler.onMessage(bytes)
     }
 
+    override fun close() {
+        closedByHandler = true
+        super.close()
+    }
+
     override fun onClose(code: Int, reason: String?, remote: Boolean) {
+        if (closedByHandler) {
+            // the handler already knows we closed, don't bother reporting
+            return
+        }
         if (code != CloseFrame.NORMAL) {
             handler.onClose(AbnormalCloseException("websocket closed abnormally: $reason"))
         } else {

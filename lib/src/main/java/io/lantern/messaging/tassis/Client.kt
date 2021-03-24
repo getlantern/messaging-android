@@ -23,21 +23,17 @@ interface Callback<T> {
     fun onError(err: Throwable)
 }
 
-internal class BlockingCallback<T> : Callback<T> {
-    private val blockingResult = java9.util.concurrent.CompletableFuture<T>()
-
-    override fun onSuccess(result: T) {
-        blockingResult.complete(result)
+internal class AckCallback(private val cb: Callback<Unit>) : Callback<Messages.Ack> {
+    override fun onSuccess(result: Messages.Ack) {
+        try {
+            cb.onSuccess(Unit)
+        } catch (t: Throwable) {
+            logger.error("error on client callback: $t.message", t)
+        }
     }
 
     override fun onError(err: Throwable) {
-        fail(err)
-    }
-
-    fun await(): T = blockingResult.get()
-
-    private fun fail(err: Throwable) {
-        blockingResult.completeExceptionally(err)
+        cb.onError(err)
     }
 }
 
@@ -45,6 +41,16 @@ internal class BlockingCallback<T> : Callback<T> {
  * A handler for messages received from a transport (e.g. a websocket connection)
  */
 interface MessageHandler {
+    /**
+     * A place for the Transport to register itself
+     */
+    fun setTransport(transport: Transport)
+
+    /**
+     * Called if there's an error connecting the Transport
+     */
+    fun onConnectError(err: Throwable)
+
     /**
      * Called whenever a new message arrives from the remote end
      */
@@ -70,7 +76,7 @@ interface Transport {
  * A factory for Transports.
  */
 interface TransportFactory {
-    fun build(handler: MessageHandler, cb: Callback<Transport>)
+    fun connect(handler: MessageHandler)
 }
 
 /**
@@ -108,6 +114,11 @@ class InboundMessage internal constructor(
  */
 interface ClientDelegate {
     /**
+     * Called if there's an error connecting the Client
+     */
+    fun onConnectError(err: Throwable)
+
+    /**
      * Called when a client closes. If the client closed due to an exception, err will be populated
      * with the relevant exception.
      */
@@ -118,6 +129,11 @@ interface ClientDelegate {
  * A delegate for receiving asynchronous callbacks on an authenticated client connection.
  */
 interface AuthenticatedClientDelegate : ClientDelegate {
+    /**
+     * Called once the client has been connected
+     */
+    fun onConnected(client: AuthenticatedClient)
+
     /**
      * Used to sign the response to an AuthChallenge
      */
@@ -134,21 +150,36 @@ interface AuthenticatedClientDelegate : ClientDelegate {
     fun onInboundMessage(msg: InboundMessage)
 }
 
+interface AnonymousClientDelegate : ClientDelegate {
+    /**
+     * Called once the client has been connected
+     */
+    fun onConnected(client: AnonymousClient)
+}
+
 /**
  * Client provides a mechanism for talking to a tassis service.
  */
 abstract class Client<D : ClientDelegate>(
-    protected val delegate: D
+    protected val delegate: D,
 ) : MessageHandler {
-    internal val transport = BlockingCallback<Transport>()
+    private lateinit var transport: Transport
     private val msgSequence = AtomicInteger(1)
     protected val pending = ConcurrentHashMap<Int, Callback<Any?>>()
+
+    override fun setTransport(transport: Transport) {
+        this.transport = transport
+    }
+
+    override fun onConnectError(err: Throwable) {
+        delegate.onConnectError(err)
+    }
 
     internal fun send(msg: Messages.Message, callback: Callback<*>? = null) {
         if (callback != null) {
             pending[msg.sequence] = callback as Callback<Any?>
         }
-        transport.await().send(msg.toByteArray())
+        transport.send(msg.toByteArray())
     }
 
     protected fun nextMessage(): Messages.Message.Builder {
@@ -176,12 +207,15 @@ abstract class Client<D : ClientDelegate>(
     }
 
     fun close() {
-        transport.await().close()
+        transport.close()
     }
 
     override fun onClose(err: Throwable?) {
-        pending.clear()
         delegate.onClose(err)
+        val finalErr = err ?: ClientClosedException()
+        pending.values.forEach {
+            it.onError(finalErr)
+        }
     }
 }
 
@@ -189,27 +223,22 @@ abstract class Client<D : ClientDelegate>(
  * Authenticated client is a Client that has authenticated against the tassis cluster and can be
  * used for operations that require authentication.
  */
-class AuthenticatedClient private constructor(
+class AuthenticatedClient(
     private val identityKey: ECPublicKey,
     private val deviceId: DeviceId,
-    delegate: AuthenticatedClientDelegate,
-    private val connectCallback: Callback<AuthenticatedClient>
+    delegate: AuthenticatedClientDelegate
 ) : Client<AuthenticatedClientDelegate>(delegate) {
-    fun register(signedPreKey: ByteArray, preKeys: List<ByteArray>) {
+    fun register(signedPreKey: ByteArray, preKeys: List<ByteArray>, cb: Callback<Unit>) {
         val msg = nextMessage().setRegister(
             Messages.Register.newBuilder().setSignedPreKey(signedPreKey.byteString())
                 .addAllOneTimePreKeys(preKeys.map { it.byteString() }).build()
         ).build()
-        val cb = BlockingCallback<Messages.Ack>()
-        send(msg, cb)
-        cb.await()
+        send(msg, AckCallback(cb))
     }
 
-    fun unregister() {
+    fun unregister(cb: Callback<Unit>) {
         val msg = nextMessage().setUnregister(Messages.Unregister.newBuilder().build()).build()
-        val cb = BlockingCallback<Messages.Ack>()
-        send(msg, cb)
-        cb.await()
+        send(msg, AckCallback(cb))
     }
 
     override fun onMessage(data: ByteBuffer?) {
@@ -247,32 +276,17 @@ class AuthenticatedClient private constructor(
         try {
             send(authResponse, object : Callback<Messages.Ack> {
                 override fun onSuccess(result: Messages.Ack) {
-                    connectCallback.onSuccess(this@AuthenticatedClient)
+                    delegate.onConnected(this@AuthenticatedClient)
                 }
 
                 override fun onError(err: Throwable) {
-                    connectCallback.onError(err)
+                    close()
+                    onConnectError(err)
                 }
             })
-        } catch (t: Throwable) {
-            connectCallback.onError(t)
-        }
-    }
-
-    companion object {
-        /**
-         * Connects an AuthenticatedClient using the given transportFactory.
-         */
-        fun connect(
-            transportFactory: TransportFactory,
-            identityKey: ECPublicKey,
-            deviceId: DeviceId,
-            delegate: AuthenticatedClientDelegate,
-        ): AuthenticatedClient {
-            val cb = BlockingCallback<AuthenticatedClient>()
-            val client = AuthenticatedClient(identityKey, deviceId, delegate, cb)
-            transportFactory.build(client, client.transport)
-            return cb.await()
+        } catch (err: Throwable) {
+            close()
+            onConnectError(err)
         }
     }
 }
@@ -281,26 +295,36 @@ class AuthenticatedClient private constructor(
  * Anonymous client is a client that does not authenticate against the tassis service. It is used
  * for anonymous operations like requesting pre keys and sending sealed sender messages.
  */
-class AnonymousClient private constructor(
-    delegate: ClientDelegate,
-    private val connectCallback: Callback<AnonymousClient>
-) : Client<ClientDelegate>(delegate) {
+class AnonymousClient(delegate: AnonymousClientDelegate) :
+    Client<AnonymousClientDelegate>(delegate) {
     fun retrievePreKeys(
         identityKey: ECPublicKey,
-        knownDeviceIds: List<DeviceId>
-    ): List<Messages.PreKey> {
+        knownDeviceIds: List<DeviceId>,
+        cb: Callback<List<Messages.PreKey>>
+    ) {
         val requestPreKeys = Messages.RequestPreKeys.newBuilder()
             .setIdentityKey(identityKey.bytes.byteString())
         knownDeviceIds.forEach { requestPreKeys.addKnownDeviceIds(it.bytes.byteString()) }
         val msg = nextMessage().setRequestPreKeys(requestPreKeys.build()).build()
-        val cb = BlockingCallback<Messages.PreKeys>()
-        send(msg, cb)
-        return cb.await().preKeysList
+        send(msg, object : Callback<Messages.PreKeys> {
+            override fun onSuccess(result: Messages.PreKeys) {
+                try {
+                    cb.onSuccess(result.preKeysList)
+                } catch (t: Throwable) {
+                    logger.error("error after retrieving pre keys: $t.message", t)
+                }
+            }
+
+            override fun onError(err: Throwable) {
+                cb.onError(err)
+            }
+        })
     }
 
     fun sendUnidentifiedSenderMessage(
         to: SignalProtocolAddress,
-        unidentifiedSenderMessage: ByteArray
+        unidentifiedSenderMessage: ByteArray,
+        cb: Callback<Unit>
     ) {
         val msg = nextMessage().setOutboundMessage(
             Messages.OutboundMessage.newBuilder().setTo(
@@ -309,33 +333,16 @@ class AnonymousClient private constructor(
                     .setDeviceId(to.deviceId.bytes.byteString())
             ).setUnidentifiedSenderMessage(unidentifiedSenderMessage.byteString())
         ).build()
-        val cb = BlockingCallback<Messages.Ack>()
-        send(msg, cb)
-        cb.await()
+        send(msg, AckCallback(cb))
     }
 
     override fun onMessage(data: ByteBuffer?) {
         val msg = Messages.Message.parseFrom(data)
         when (msg.payloadCase) {
-            Messages.Message.PayloadCase.AUTHCHALLENGE -> connectCallback.onSuccess(this)
+            Messages.Message.PayloadCase.AUTHCHALLENGE -> delegate.onConnected(this)
             Messages.Message.PayloadCase.PREKEYS -> pending.remove(msg.sequence)
                 ?.onSuccess(msg.preKeys)
             else -> super.onMessage(msg)
-        }
-    }
-
-    companion object {
-        /**
-         * Connects an AnonymousClient using the given transportFactory.
-         */
-        fun connect(
-            transportFactory: TransportFactory,
-            delegate: ClientDelegate
-        ): AnonymousClient {
-            val cb = BlockingCallback<AnonymousClient>()
-            val client = AnonymousClient(delegate, cb)
-            transportFactory.build(client, client.transport)
-            return cb.await()
         }
     }
 }
@@ -347,3 +354,5 @@ fun ByteArray.message(): Messages.Message {
 fun ByteArray.byteString(): ByteString {
     return ByteString.copyFrom(this)
 }
+
+class ClientClosedException : Exception("Client closed")
