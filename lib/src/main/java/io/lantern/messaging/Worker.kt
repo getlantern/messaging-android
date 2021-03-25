@@ -5,7 +5,7 @@ import java.util.concurrent.TimeUnit
 
 internal abstract class Worker(
     protected val messaging: Messaging,
-    protected val retryDelayMillis: Long,
+    private val retryDelayMillis: Long,
     name: String
 ) {
     internal val executor = Executors.newSingleThreadScheduledExecutor {
@@ -18,6 +18,7 @@ internal abstract class Worker(
                 cmd()
             } catch (t: Throwable) {
                 messaging.logger.error(t.message, t)
+                retryFailed(cmd)
             }
         }
     }

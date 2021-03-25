@@ -40,9 +40,8 @@ message ShortMessageRecord {
 
   enum DeliveryStatus {
     SENDING = 0; // message is currently in the process of sending but hasn't successfully finished yet
-    PARTIALLY_FAILED = 1; // message failed to send to a subset of recipients, will not retry
-    COMPLETELY_FAILED = 2; // message failed to send to any recipients, will not retry
-    SENT = 3; // message has been successfully sent
+    PARTIALLY_SENT = 1; // message failed to send to a subset of recipients, will not retry
+    COMPLETELY_SENT = 2; // message has been successfully sent
   }
 
   string senderId = 1; // the id of who sent this message
@@ -54,22 +53,20 @@ message ShortMessageRecord {
 }
 
 message OutgoingShortMessage {
-  string identityKey = 1; // The identity key of the recipient
-  ShortMessage message = 2; // The plain-text message
-  repeated string deviceIds = 3; // List of deviceIds to which to send
-  map<string, OutgoingShortMessageToDevice> perDeviceMessages = 4; // Tracks the versions of this message sent to each device (each will differ because each device has its own encryption keys)
-  int64 firstFailed = 5; // Time of first failure processing
-  int64 lastFailed = 6; // Time of last failure processing
+  enum SubDeliveryStatus {
+    SENDING = 0; // message is currently in the process of sending to specific deviceId but hasn't successfully finished yet
+    SENT = 1; // message has been sent to specific deviceId
+  }
+
+  string senderId = 1; // the id of who sent this message (same as on ShortMessageRecord)
+  string id = 2; // the id of the message (same as on ShortMessage), encoded in base32
+  int64 sent = 3; // The unix timestamp in nanoseconds for when the message was sent
+  string recipientId = 4; // the id of the recipient
+  map<string, SubDeliveryStatus> subDeliveryStatuses = 5; // Statuses of subdeliveries to specific deviceIds
 }
 
 message TransferMessage {
   oneof content {
-    ShortMessage shortMessage = 1;
+    bytes shortMessage = 1; // the serialized ShortMessage
   }
-}
-
-message OutgoingShortMessageToDevice {
-  string deviceId = 1;
-  bytes unidentifiedSenderMessage = 2;
-  bool sent = 3;
 }

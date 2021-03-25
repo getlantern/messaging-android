@@ -74,17 +74,19 @@ class MessagingTest : BaseMessagingTest() {
                     assertEquals(msgRecord.sent, storedMsgRecord.sent)
                     assertEquals(
                         "hello cat",
-                        Model.ShortMessage.parseFrom(storedMsgRecord.message).text
+                        runBlocking {
+                            Model.ShortMessage.parseFrom(storedMsgRecord!!.message).text
+                        }
                     )
 
                     // start the Messaging system for cat, which will result in the registration of pre
                     // keys, allowing the message to send successfully
                     val cat = newMessaging("cat", store = catStore)
                     storedMsgRecord =
-                        dog.waitFor(msgRecord.dbPath) { it?.status == Model.ShortMessageRecord.DeliveryStatus.SENT }
+                        dog.waitFor(msgRecord.dbPath) { it?.status == Model.ShortMessageRecord.DeliveryStatus.COMPLETELY_SENT }
                     assertTrue(storedMsgRecord != null)
                     assertEquals(
-                        Model.ShortMessageRecord.DeliveryStatus.SENT,
+                        Model.ShortMessageRecord.DeliveryStatus.COMPLETELY_SENT,
                         storedMsgRecord.status,
                         "once cat has started registering preKeys, pending message should successfully send"
                     )
@@ -147,16 +149,6 @@ class MessagingTest : BaseMessagingTest() {
         return sendAndVerifyReceived(testCase, from, to.store, text)
     }
 
-    private suspend fun <T> sendAndVerifyDropped(
-        testCase: String,
-        from: Messaging,
-        to: Messaging,
-        text: String,
-        afterSend: (suspend (msgRecord: Model.ShortMessageRecord) -> T)? = null
-    ): T? {
-        return sendAndVerifyDropped(testCase, from, to.store, text)
-    }
-
     private suspend fun <T> sendAndVerifyReceived(
         testCase: String,
         from: Messaging,
@@ -195,7 +187,9 @@ class MessagingTest : BaseMessagingTest() {
         assertEquals(Model.ShortMessageRecord.Direction.OUT, msgRecord.direction, testCase)
         assertEquals(fromId, msgRecord.senderId, testCase)
         assertTrue(msgRecord.sent < nowUnixNano, testCase)
-        assertEquals(text, Model.ShortMessage.parseFrom(msgRecord.message).text, testCase)
+        assertEquals(text, runBlocking {
+            Model.ShortMessage.parseFrom(msgRecord.message).text
+        }, testCase)
 
         // make sure the contact has been updated and that there's only one index entry
         var storedContact =
@@ -234,7 +228,9 @@ class MessagingTest : BaseMessagingTest() {
             assertEquals(Model.ShortMessageRecord.Direction.IN, storedMsgRecord.direction, testCase)
             assertEquals(fromId, storedMsgRecord.senderId, testCase)
             assertEquals(msgRecord.sent, storedMsgRecord.sent, testCase)
-            assertEquals(text, Model.ShortMessage.parseFrom(storedMsgRecord.message).text, testCase)
+            assertEquals(text, runBlocking {
+                Model.ShortMessage.parseFrom(storedMsgRecord.message).text
+            }, testCase)
 
             // ensure that recipient has the conversation too
             storedContact =
@@ -313,7 +309,7 @@ private suspend fun <T> waitFor(maxWait: Long, get: suspend () -> T?): T? {
     return null
 }
 
-internal fun DB.dump() = {
+internal fun DB.dump() {
     val dumpString = this.list<Any>("%").sortedBy { it.path }.map {
         "${it.path}: ${it.value}"
     }
@@ -348,7 +344,7 @@ internal class MisbehavingTransportFactory(url: String) : WebSocketTransportFact
     }
 
     companion object {
-        private val transports = ArrayList<MisbehavingTransport>();
+        private val transports = ArrayList<MisbehavingTransport>()
 
         @Synchronized
         fun addTransport(transport: MisbehavingTransport) {

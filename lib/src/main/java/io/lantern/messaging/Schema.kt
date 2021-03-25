@@ -16,16 +16,6 @@ object Schema {
     const val PATH_CONTACT_MESSAGES = "/cm"
 }
 
-fun Model.ShortMessage.outbound(
-    senderId: String,
-    status: Model.ShortMessageRecord.DeliveryStatus
-): Model.ShortMessageRecord {
-    return Model.ShortMessageRecord.newBuilder().setSenderId(senderId).setId(id.base32)
-        .setSent(sent)
-        .setDirection(Model.ShortMessageRecord.Direction.OUT).setStatus(status)
-        .setMessage(toByteString()).build()
-}
-
 fun Model.ShortMessage.inbound(senderId: String): Model.ShortMessageRecord {
     return Model.ShortMessageRecord.newBuilder().setSenderId(senderId).setId(id.base32)
         .setSent(sent)
@@ -42,6 +32,12 @@ val String.groupContactPath: String
 val Model.ShortMessageRecord.dbPath: String
     get() = Schema.PATH_MESSAGES.path(sent, senderId, id)
 
+val Model.OutgoingShortMessage.Builder.shortMessagePath: String
+    get() = Schema.PATH_MESSAGES.path(sent, senderId, id)
+
+val Model.OutgoingShortMessage.Builder.dbPath: String
+    get() = Schema.PATH_OUTBOUND.path(sent, id)
+
 val Model.ShortMessageRecord.outboundPath: String
     get() = Schema.PATH_OUTBOUND.path(sent, id)
 
@@ -52,9 +48,6 @@ val Model.Contact.pathSegment: String
 
 val Model.Contact.timestampedIdxPath: String
     get() = Schema.PATH_CONTACTS_BY_ACTIVITY.path(mostRecentMessageTime, pathSegment)
-
-val Model.Contact.dbPath: String
-    get() = Schema.PATH_CONTACTS.path(pathSegment)
 
 fun Model.ShortMessageRecord.contactMessagePath(contact: Model.Contact): String =
     Schema.PATH_CONTACT_MESSAGES.path(

@@ -2,8 +2,6 @@ package io.lantern.messaging
 
 import com.google.protobuf.ByteString
 import io.lantern.db.DB
-import io.lantern.db.Raw
-import io.lantern.db.RawSubscriber
 import io.lantern.db.Transaction
 import io.lantern.messaging.store.MessagingStore
 import io.lantern.messaging.tassis.*
@@ -17,7 +15,6 @@ import org.whispersystems.libsignal.ecc.ECKeyPair
 import java.io.Closeable
 import java.nio.ByteBuffer
 import java.util.*
-import java.util.concurrent.Executors
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import kotlin.math.pow
@@ -29,8 +26,8 @@ class Messaging(
     private val transportFactory: TransportFactory,
     private val redialBackoffMillis: Long = 50L.secondsToMillis,
     private val maxRedialDelayMillis: Long = 15L.secondsToMillis,
-    private val failedSendRetryDelayMillis: Long = 5L.secondsToMillis,
-    private val stopSendRetryAfterMillis: Long = 10L.minutesToMillis,
+    failedSendRetryDelayMillis: Long = 5L.secondsToMillis,
+    stopSendRetryAfterMillis: Long = 10L.minutesToMillis,
     numInitialPreKeysToRegister: Int = 5,
     internal val name: String = "messaging",
 ) : Closeable {
@@ -44,16 +41,10 @@ class Messaging(
     private val anonymousClientLock = Semaphore(1)
     private var anonymousClientConnectFailures = 0
     private var anonymousClient: AnonymousClient? = null
-    private val anonymousClientExecutor = Executors.newSingleThreadScheduledExecutor {
-        Thread(it, "${name}-anonymous-client-executor")
-    }
 
     private val authenticatedClientLock = Semaphore(1)
     private var authenticatedClientConnectFailures = 0
     private var authenticatedClient: AuthenticatedClient? = null
-    private val authenticatedClientExecutor = Executors.newSingleThreadScheduledExecutor {
-        Thread(it, "${name}-authenticated-client-executor")
-    }
 
     internal val identityKeyPair: ECKeyPair
     private val deviceId: DeviceId
@@ -80,22 +71,6 @@ class Messaging(
         // this also has the welcome side effect of starting an authenticated client, which we need
         // in order to receive messages
         cryptoWorker.registerPreKeys(numInitialPreKeysToRegister)
-
-        // listen for outbound messages (including pulling any previously unprocessed outbound
-        // messages)
-        db.subscribe(object :
-            RawSubscriber<Model.OutgoingShortMessage>(
-                subscriberId,
-                "${Schema.PATH_OUTBOUND}/"
-            ) {
-            override fun onUpdate(path: String, value: Raw<Model.OutgoingShortMessage>) {
-                cryptoWorker.processOutgoing(path)
-            }
-
-            override fun onDelete(path: String) {
-                // not interested
-            }
-        })
     }
 
     val db: DB get() = store.db
@@ -134,7 +109,7 @@ class Messaging(
      * Send an outbound message from the user to a direct contact
      */
     fun sendToDirectContact(
-        identityKey: String,
+        recipientId: String,
         text: String?,
         oggVoice: ByteArray? = null
     ): Model.ShortMessageRecord {
@@ -152,9 +127,11 @@ class Messaging(
             shortMessageBuilder.oggVoice = oggVoice?.byteString()
         }
         val msg = shortMessageBuilder.build()
-        val outgoing =
-            Model.OutgoingShortMessage.newBuilder().setIdentityKey(identityKey).setMessage(msg)
-                .build()
+        val out =
+            Model.OutgoingShortMessage.newBuilder().setId(msg.id.base32)
+                .setSent(msg.sent)
+                .setSenderId(store.identityKeyPair.publicKey.toString())
+                .setRecipientId(recipientId)
         val msgRecord =
             Model.ShortMessageRecord.newBuilder()
                 .setSenderId(store.identityKeyPair.publicKey.toString()).setId(msg.id.base32)
@@ -165,12 +142,13 @@ class Messaging(
             // save the message in a list of all messages
             tx.put(msgRecord.dbPath, msgRecord)
             // update the relevant contact
-            val contact = updateDirectContactMetaData(tx, identityKey, msg.sent, msg.text)
+            val contact = updateDirectContactMetaData(tx, recipientId, msg.sent, msg.text)
             // save the message under the relevant contact messages
             tx.put(msgRecord.contactMessagePath(contact), msgRecord.dbPath)
             // enqueue the outgoing message in the db for sending (actual send happens in the
             // message processing loop)
-            tx.put(msgRecord.outboundPath, outgoing)
+            tx.put(msgRecord.outboundPath, out.build())
+            cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
         }
         return msgRecord
     }
@@ -233,9 +211,8 @@ class Messaging(
         anonymousClientLock.acquire()
         val existing = anonymousClient
         if (existing != null) {
-            val client = existing
             anonymousClientLock.release()
-            cb.onClient(client)
+            cb.onClient(existing)
             return
         }
 
@@ -256,7 +233,7 @@ class Messaging(
 
             override fun onClose(err: Throwable?) {
                 if (err != null) {
-                    logger.error("anonymous tassis client closed with error ${err}")
+                    logger.error("anonymous tassis client closed with error ${err.message}")
                 } else {
                     logger.debug("anonymous tassis client closed normally")
                 }
@@ -283,9 +260,8 @@ class Messaging(
         authenticatedClientLock.acquire()
         val existing = authenticatedClient
         if (existing != null) {
-            val client = existing
             authenticatedClientLock.release()
-            cb.onClient(client)
+            cb.onClient(existing)
             return
         }
 
@@ -321,7 +297,7 @@ class Messaging(
 
                 override fun onClose(err: Throwable?) {
                     if (err != null) {
-                        logger.error("authenticated tassis client closed with error ${err}")
+                        logger.error("authenticated tassis client closed with error ${err.message}")
                     } else {
                         logger.debug("authenticated tassis client closed normally")
                     }

@@ -323,7 +323,7 @@ class AnonymousClient(delegate: AnonymousClientDelegate) :
 
     fun sendUnidentifiedSenderMessage(
         to: SignalProtocolAddress,
-        unidentifiedSenderMessage: ByteString,
+        unidentifiedSenderMessage: ByteArray,
         cb: Callback<Unit>
     ) {
         val msg = nextMessage().setOutboundMessage(
@@ -331,7 +331,7 @@ class AnonymousClient(delegate: AnonymousClientDelegate) :
                 Messages.Address.newBuilder()
                     .setIdentityKey(to.identityKey.bytes.byteString())
                     .setDeviceId(to.deviceId.bytes.byteString())
-            ).setUnidentifiedSenderMessage(unidentifiedSenderMessage)
+            ).setUnidentifiedSenderMessage(unidentifiedSenderMessage.byteString())
         ).build()
         send(msg, AckCallback(cb))
     }
