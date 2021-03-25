@@ -39,11 +39,10 @@ message ShortMessageRecord {
   }
 
   enum DeliveryStatus {
-    UNSENT = 0;
-    SENDING = 1; // message is currently in the process of sending but hasn't successfully finished yet
-    PARTIALLY_FAILED = 2; // message failed to send to a subset of recipients, will not retry
-    COMPLETELY_FAILED = 3; // message failed to send to any recipients, will not retry
-    SENT = 4; // message has been successfully sent
+    SENDING = 0; // message is currently in the process of sending but hasn't successfully finished yet
+    PARTIALLY_FAILED = 1; // message failed to send to a subset of recipients, will not retry
+    COMPLETELY_FAILED = 2; // message failed to send to any recipients, will not retry
+    SENT = 3; // message has been successfully sent
   }
 
   string senderId = 1; // the id of who sent this message
@@ -55,18 +54,22 @@ message ShortMessageRecord {
 }
 
 message OutgoingShortMessage {
-  // Whom this Conversation pertains to, either a direct Contact or a Group
-  oneof recipient {
-    string identityKey = 1;
-    string groupId = 2;
-  }
-  repeated string remainingRecipients = 3; // identityKeys of recipients who still need to be sent the message, base32 encoded
-  ShortMessage message = 4;
-  int64 lastFailed = 5; // Time of last failure (nanoseconds since epoch)
+  string identityKey = 1; // The identity key of the recipient
+  ShortMessage message = 2; // The plain-text message
+  repeated string deviceIds = 3; // List of deviceIds to which to send
+  map<string, OutgoingShortMessageToDevice> perDeviceMessages = 4; // Tracks the versions of this message sent to each device (each will differ because each device has its own encryption keys)
+  int64 lastFailed = 5; // Time of last failure processing
 }
 
 message TransferMessage {
   oneof content {
     ShortMessage shortMessage = 1;
   }
+}
+
+message OutgoingShortMessageToDevice {
+  string deviceId = 1;
+  bytes unidentifiedSenderMessage = 2;
+  bool sent = 3;
+  int64 lastFailed = 4; // Time of last failure processing
 }

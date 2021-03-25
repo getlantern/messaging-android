@@ -13,28 +13,35 @@ import java.nio.ByteBuffer
 
 private val logger = KotlinLogging.logger {}
 
-class WebSocketTransportFactory(
+open class WebSocketTransportFactory(
     private val url: String,
     private val connectTimeoutMillis: Int = 15000,
-    private val connectionLostTimeoutSeconds: Int = 30
+    private val connectionLostTimeoutSeconds: Int = 60
 ) : TransportFactory {
     override fun connect(handler: MessageHandler) {
         try {
             val transport =
-                WebSocketTransport(url, handler, connectTimeoutMillis, connectionLostTimeoutSeconds)
+                buildTransport(url, handler, connectTimeoutMillis, connectionLostTimeoutSeconds)
             handler.setTransport(transport)
             transport.connect()
         } catch (t: Throwable) {
             handler.onConnectError(t)
         }
     }
+
+    protected open fun buildTransport(
+        url: String, handler: MessageHandler, connectTimeoutMillis: Int,
+        connectionLostTimeoutSeconds: Int
+    ): WebSocketTransport {
+        return WebSocketTransport(url, handler, connectTimeoutMillis, connectionLostTimeoutSeconds)
+    }
 }
 
-class WebSocketTransport(
+open class WebSocketTransport(
     url: String,
     private val handler: MessageHandler,
     connectTimeoutMillis: Int,
-    connectionLostTimeoutSeconds: Int = 30
+    connectionLostTimeoutSeconds: Int
 ) :
     WebSocketClient(URI(url), Draft_6455(), null, connectTimeoutMillis), Transport {
 
@@ -72,6 +79,10 @@ class WebSocketTransport(
             // the handler already knows we closed, don't bother reporting
             return
         }
+        doOnClose(code, reason, remote)
+    }
+
+    protected fun doOnClose(code: Int, reason: String?, remote: Boolean) {
         if (code != CloseFrame.NORMAL) {
             handler.onClose(AbnormalCloseException("websocket closed abnormally: $reason"))
         } else {
