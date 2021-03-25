@@ -55,15 +55,7 @@ internal class CryptoWorker(
             } catch (t: Throwable) {
                 logger.error("unexpected error processing outgoing message: ${t}")
                 db.mutate { tx ->
-                    tx.get<Model.OutgoingShortMessage>(outgoingMessagePath)?.let {
-                        tx.put(
-                            outgoingMessagePath,
-                            it.toBuilder()
-                                .setLastFailed(
-                                    nowUnixNano
-                                ).build()
-                        )
-                    }
+                    tx.markOutgoingFailed(outgoingMessagePath)
                 }
             }
         }
@@ -99,7 +91,7 @@ internal class CryptoWorker(
         val finished =
             outgoingMessage.deviceIdsCount > 0 && outgoingMessage.perDeviceMessagesMap.values.count { it.sent } == outgoingMessage.deviceIdsCount
         val permanentlyFailed =
-            !finished && outgoingMessage.lastFailed > 0 && nowUnixNano - outgoingMessage.lastFailed > stopSendRetryAfterMillis.millisToNanos
+            !finished && outgoingMessage.firstFailed > 0 && nowUnixNano - outgoingMessage.firstFailed > stopSendRetryAfterMillis.millisToNanos
         val deliveryStatus = if (finished) {
             Model.ShortMessageRecord.DeliveryStatus.SENT
         } else if (permanentlyFailed) {
@@ -155,12 +147,7 @@ internal class CryptoWorker(
         val markFailed = { err: Throwable ->
             logger.debug("error retrieving pre keys, mark failed so that it will reprocess after some delay: ${err.message}")
             db.mutate { tx ->
-                tx.get<Model.OutgoingShortMessage>(outgoingMessagePath)?.let {
-                    tx.put(
-                        outgoingMessagePath,
-                        it.toBuilder().setLastFailed(nowUnixNano).build()
-                    )
-                }
+                tx.markOutgoingFailed(outgoingMessagePath)
             }
         }
 
@@ -241,7 +228,7 @@ internal class CryptoWorker(
                         unidentifiedSenderMessage.byteString()
                     )
                 } catch (t: Throwable) {
-                    deviceMessage.setLastFailed(nowUnixNano)
+                    // that's okay, we'll try again later
                 }
                 outgoingMessage.putPerDeviceMessages(deviceId, deviceMessage.build()).build()
                 changed = true
@@ -268,15 +255,7 @@ internal class CryptoWorker(
     ) {
         val markFailed = {
             db.mutate { tx ->
-                tx.get<Model.OutgoingShortMessage>(outgoingMessagePath)?.let {
-                    val now = nowUnixNano
-                    var latestOutgoingMessage =
-                        it.toBuilder().setLastFailed(now).putPerDeviceMessages(
-                            deviceId,
-                            msg.toBuilder().setLastFailed(now).build()
-                        ).build()
-                    tx.put(outgoingMessagePath, latestOutgoingMessage)
-                }
+                tx.markOutgoingFailed(outgoingMessagePath)
             }
         }
 
@@ -394,5 +373,18 @@ internal class CryptoWorker(
             )
             registerPreKeys(numPreKeys, 5000)
         }
+    }
+}
+
+internal fun Transaction.markOutgoingFailed(outgoingMessagePath: String) {
+    this.get<Model.OutgoingShortMessage>(outgoingMessagePath)?.let {
+        val builder = it.toBuilder()
+            .setLastFailed(
+                nowUnixNano
+            )
+        if (builder.firstFailed == 0L) {
+            builder.setFirstFailed(builder.lastFailed)
+        }
+        this.put(outgoingMessagePath, builder.build())
     }
 }

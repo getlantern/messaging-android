@@ -58,7 +58,8 @@ message OutgoingShortMessage {
   ShortMessage message = 2; // The plain-text message
   repeated string deviceIds = 3; // List of deviceIds to which to send
   map<string, OutgoingShortMessageToDevice> perDeviceMessages = 4; // Tracks the versions of this message sent to each device (each will differ because each device has its own encryption keys)
-  int64 lastFailed = 5; // Time of last failure processing
+  int64 firstFailed = 5; // Time of first failure processing
+  int64 lastFailed = 6; // Time of last failure processing
 }
 
 message TransferMessage {
@@ -71,5 +72,4 @@ message OutgoingShortMessageToDevice {
   string deviceId = 1;
   bytes unidentifiedSenderMessage = 2;
   bool sent = 3;
-  int64 lastFailed = 4; // Time of last failure processing
 }
