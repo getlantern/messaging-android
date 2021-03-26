@@ -5,10 +5,13 @@ import io.lantern.messaging.store.MessagingStore
 import io.lantern.messaging.tassis.MessageHandler
 import io.lantern.messaging.tassis.websocket.WebSocketTransport
 import io.lantern.messaging.tassis.websocket.WebSocketTransportFactory
+import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import mu.KotlinLogging
 import org.junit.Test
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -82,6 +85,12 @@ class MessagingTest : BaseMessagingTest() {
 
                     // Close and reopen dog to make sure we can pick up where we left off
                     dog.close()
+                    // Before reopening dog, set dials to fail for a while
+                    MisbehavingTransportFactory.succeedDialing.set(false)
+                    GlobalScope.launch {
+                        delay(2000)
+                        MisbehavingTransportFactory.succeedDialing.set(true)
+                    }
                     dog = newMessaging("dog")
 
                     // start the Messaging system for cat, which will result in the registration of pre
@@ -349,10 +358,15 @@ internal class MisbehavingTransportFactory(url: String) : WebSocketTransportFact
             connectionLostTimeoutSeconds
         )
         addTransport(transport)
+        if (!succeedDialing.get()) {
+            transport.onError(Exception("closed cause I'm bad"))
+            transport.close()
+        }
         return transport
     }
 
     companion object {
+        var succeedDialing = AtomicBoolean(true)
         private val transports = ArrayList<MisbehavingTransport>()
 
         @Synchronized

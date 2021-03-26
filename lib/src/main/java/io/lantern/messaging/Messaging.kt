@@ -16,6 +16,7 @@ import java.nio.ByteBuffer
 import java.util.*
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.pow
 
 class UnknownSenderException : Exception("Unknown sender")
@@ -188,7 +189,6 @@ class Messaging(
                     override fun onError(err: Throwable) {
                         logger.error("failed to unregister: ${err.message}", err)
                     }
-
                 })
             }
 
@@ -217,9 +217,11 @@ class Messaging(
         }
 
         logger.debug("building new anonymous client")
+        val successfullyConnected = AtomicBoolean()
         val newClient = AnonymousClient(object : AnonymousClientDelegate {
             override fun onConnected(client: AnonymousClient) {
                 logger.debug("successfully connected anonymous client to tassis")
+                successfullyConnected.set(true)
                 anonymousClient = client
                 anonymousClientConnectFailures = 0
                 anonymousClientLock.release()
@@ -228,12 +230,17 @@ class Messaging(
 
             override fun onConnectError(err: Throwable) {
                 anonymousClientConnectFailures++
+                anonymousClientLock.release()
                 cb.onClientUnavailable(err)
             }
 
             override fun onClose(err: Throwable?) {
                 if (err != null) {
                     logger.error("anonymous tassis client closed with error ${err.message}")
+                    if (!successfullyConnected.get()) {
+                        cb.onClientUnavailable(err)
+                        anonymousClientLock.release()
+                    }
                 } else {
                     logger.debug("anonymous tassis client closed normally")
                 }
@@ -266,11 +273,13 @@ class Messaging(
         }
 
         logger.debug("building new authenticated client")
+        val successfullyConnected = AtomicBoolean()
         val newClient = AuthenticatedClient(identityKeyPair.publicKey,
             deviceId,
             object : AuthenticatedClientDelegate {
                 override fun onConnected(client: AuthenticatedClient) {
                     logger.debug("successfully connected authenticated client to tassis")
+                    successfullyConnected.set(true)
                     authenticatedClient = client
                     authenticatedClientConnectFailures = 0
                     authenticatedClientLock.release()
@@ -279,6 +288,7 @@ class Messaging(
 
                 override fun onConnectError(err: Throwable) {
                     authenticatedClientConnectFailures++
+                    authenticatedClientLock.release()
                     cb.onClientUnavailable(err)
                 }
 
@@ -298,6 +308,10 @@ class Messaging(
                 override fun onClose(err: Throwable?) {
                     if (err != null) {
                         logger.error("authenticated tassis client closed with error ${err.message}")
+                        if (!successfullyConnected.get()) {
+                            authenticatedClientLock.release()
+                            cb.onClientUnavailable(err)
+                        }
                     } else {
                         logger.debug("authenticated tassis client closed normally")
                     }
