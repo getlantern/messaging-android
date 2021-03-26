@@ -197,6 +197,14 @@ class MessagingTest : BaseMessagingTest() {
         val fromId = from.store.identityKeyPair.publicKey.toString()
         val toId = to.identityKeyPair.publicKey.toString()
 
+//        logger.debug("ignore sends for a while to make sure client handles this well")
+//        BrokenTransportFactory.ignoreSends.set(true)
+//        GlobalScope.launch {
+//            delay(2000)
+//            logger.debug("start honoring sends again")
+//            BrokenTransportFactory.ignoreSends.set(false)
+//        }
+
         // send a message
         val msgRecord = from.sendToDirectContact(toId, text)
         assertEquals(Model.ShortMessageRecord.DeliveryStatus.SENDING, msgRecord.status, testCase)
@@ -366,6 +374,7 @@ internal class BrokenTransportFactory(url: String) : WebSocketTransportFactory(u
 
     companion object {
         var succeedDialing = AtomicBoolean(true)
+        val ignoreSends = AtomicBoolean(false)
         private val transports = ArrayList<BrokenTransport>()
 
         @Synchronized
@@ -398,6 +407,13 @@ internal class BrokenTransport(
             throw RuntimeException("closed cause I'm bad")
         }
         super.connect()
+    }
+
+    override fun send(data: ByteArray) {
+        if (BrokenTransportFactory.ignoreSends.get()) {
+            return
+        }
+        super.send(data)
     }
 
     override fun onClose(code: Int, reason: String?, remote: Boolean) {

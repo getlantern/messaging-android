@@ -94,10 +94,12 @@ internal class CryptoWorker(
                         submit {
                             db.mutate {
                                 result.forEach { preKey ->
+                                    val oneTimePreKey = preKey.oneTimePreKey?.let {
+                                        // it's okay for oneTimePreKey to be empty
+                                        if (it.size() > 0) PreKeyRecord(it.toByteArray()) else null
+                                    }
                                     val signedPreKey =
                                         SignedPreKeyRecord(preKey.signedPreKey.toByteArray())
-                                    val oneTimePreKey =
-                                        PreKeyRecord(preKey.oneTimePreKey.toByteArray())
                                     // TODO: implement max_recv checking for signed pre key age
                                     val builder = SessionBuilder(
                                         store,
@@ -108,8 +110,8 @@ internal class CryptoWorker(
                                     )
                                     builder.process(
                                         PreKeyBundle(
-                                            oneTimePreKey.id,
-                                            oneTimePreKey.keyPair.publicKey,
+                                            oneTimePreKey?.id ?: 0,
+                                            oneTimePreKey?.keyPair?.publicKey,
                                             signedPreKey.id,
                                             signedPreKey.keyPair.publicKey,
                                             signedPreKey.signature,
