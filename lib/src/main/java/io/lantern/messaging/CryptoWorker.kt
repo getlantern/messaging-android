@@ -1,7 +1,10 @@
 package io.lantern.messaging
 
 import com.google.protobuf.ByteString
-import io.lantern.messaging.tassis.*
+import io.lantern.messaging.tassis.Callback
+import io.lantern.messaging.tassis.InboundMessage
+import io.lantern.messaging.tassis.Messages
+import io.lantern.messaging.tassis.Padding
 import io.lantern.messaging.time.nanosToMillis
 import org.signal.libsignal.metadata.SealedSessionCipher
 import org.whispersystems.libsignal.DeviceId
@@ -17,8 +20,7 @@ internal class CryptoWorker(
     retryDelayMillis: Long,
     private val stopSendRetryAfterMillis: Long
 ) :
-    Worker(messaging, retryDelayMillis, "crypto") {
-    private val logger = messaging.logger
+    Worker(messaging, "crypto", retryDelayMillis = retryDelayMillis) {
     private val db = messaging.db
     private val store = messaging.store
     private val cipher = SealedSessionCipher(store, store.deviceId)
@@ -82,57 +84,50 @@ internal class CryptoWorker(
     private fun retrievePreKeys(out: Model.OutgoingShortMessage.Builder) {
         logger.debug("retrieving pre keys")
         val recipientIdentityKey = out.recipientIdentityKey
-        messaging.withAnonymousClient(object : Messaging.ClientCallback<AnonymousClient> {
-            override fun onClient(client: AnonymousClient) {
-                client.retrievePreKeys(
-                    recipientIdentityKey,
-                    emptyList(),
-                    object : Callback<List<Messages.PreKey>> {
-                        override fun onSuccess(result: List<Messages.PreKey>) {
-                            logger.debug("successfully retrieved pre keys")
-                            submit {
-                                db.mutate {
-                                    result.forEach { preKey ->
-                                        val signedPreKey =
-                                            SignedPreKeyRecord(preKey.signedPreKey.toByteArray())
-                                        val oneTimePreKey =
-                                            PreKeyRecord(preKey.oneTimePreKey.toByteArray())
-                                        // TODO: implement max_recv checking for signed pre key age
-                                        val builder = SessionBuilder(
-                                            store,
-                                            SignalProtocolAddress(
-                                                recipientIdentityKey,
-                                                DeviceId(preKey.deviceId.toByteArray())
-                                            )
+        messaging.anonymousClientWorker.withClient { client ->
+            client.retrievePreKeys(
+                recipientIdentityKey,
+                emptyList(),
+                object : Callback<List<Messages.PreKey>> {
+                    override fun onSuccess(result: List<Messages.PreKey>) {
+                        logger.debug("successfully retrieved pre keys")
+                        submit {
+                            db.mutate {
+                                result.forEach { preKey ->
+                                    val signedPreKey =
+                                        SignedPreKeyRecord(preKey.signedPreKey.toByteArray())
+                                    val oneTimePreKey =
+                                        PreKeyRecord(preKey.oneTimePreKey.toByteArray())
+                                    // TODO: implement max_recv checking for signed pre key age
+                                    val builder = SessionBuilder(
+                                        store,
+                                        SignalProtocolAddress(
+                                            recipientIdentityKey,
+                                            DeviceId(preKey.deviceId.toByteArray())
                                         )
-                                        builder.process(
-                                            PreKeyBundle(
-                                                oneTimePreKey.id,
-                                                oneTimePreKey.keyPair.publicKey,
-                                                signedPreKey.id,
-                                                signedPreKey.keyPair.publicKey,
-                                                signedPreKey.signature,
-                                                recipientIdentityKey
-                                            )
+                                    )
+                                    builder.process(
+                                        PreKeyBundle(
+                                            oneTimePreKey.id,
+                                            oneTimePreKey.keyPair.publicKey,
+                                            signedPreKey.id,
+                                            signedPreKey.keyPair.publicKey,
+                                            signedPreKey.signature,
+                                            recipientIdentityKey
                                         )
-                                    }
+                                    )
                                 }
-                                processOutgoing(out)
                             }
+                            processOutgoing(out)
                         }
+                    }
 
-                        override fun onError(err: Throwable) {
-                            logger.debug("error retrieving pre keys: ${err.message}")
-                            retryFailed { processOutgoing(out) }
-                        }
-                    })
-            }
-
-            override fun onClientUnavailable(err: Throwable) {
-                logger.debug("unable to obtain client to retrieve pre keys: ${err.message}")
-                retryFailed { processOutgoing(out) }
-            }
-        })
+                    override fun onError(err: Throwable) {
+                        logger.debug("error retrieving pre keys: ${err.message}")
+                        retryFailed { processOutgoing(out) }
+                    }
+                })
+        }
     }
 
     private fun encryptAndSendTo(
@@ -153,56 +148,49 @@ internal class CryptoWorker(
         val unidentifiedSenderMessage: ByteArray =
             cipher.encrypt(to, paddedPlainText)
 
-        messaging.withAnonymousClient(object : Messaging.ClientCallback<AnonymousClient> {
-            override fun onClient(client: AnonymousClient) {
-                client.sendUnidentifiedSenderMessage(
-                    to,
-                    unidentifiedSenderMessage,
-                    object : Callback<Unit> {
-                        override fun onSuccess(result: Unit) {
-                            logger.debug("successfully sent message")
-                            db.mutate { tx ->
-                                // re-read message to make sure we're updating the latest
-                                tx.get<Model.OutgoingShortMessage>(out.dbPath)?.let {
-                                    val completelySent =
-                                        it.subDeliveryStatusesMap.count { (deviceId, status) -> status != Model.OutgoingShortMessage.SubDeliveryStatus.SENT } == 1
-                                    if (completelySent) {
-                                        // we're done
-                                        tx.delete(out.dbPath)
-                                    } else {
-                                        tx.put(
-                                            out.dbPath,
-                                            it.toBuilder().putSubDeliveryStatuses(
-                                                deviceId,
-                                                Model.OutgoingShortMessage.SubDeliveryStatus.SENT
-                                            ).build()
-                                        )
-                                    }
-                                    val shortMessagePath = out.shortMessagePath
-                                    tx.get<Model.ShortMessageRecord>(shortMessagePath)?.let { msg ->
-                                        tx.put(
-                                            shortMessagePath,
-                                            msg.toBuilder()
-                                                .setStatus(if (completelySent) Model.ShortMessageRecord.DeliveryStatus.COMPLETELY_SENT else Model.ShortMessageRecord.DeliveryStatus.PARTIALLY_SENT)
-                                                .build()
-                                        )
-                                    }
+        messaging.anonymousClientWorker.withClient { client ->
+            client.sendUnidentifiedSenderMessage(
+                to,
+                unidentifiedSenderMessage,
+                object : Callback<Unit> {
+                    override fun onSuccess(result: Unit) {
+                        logger.debug("successfully sent message")
+                        db.mutate { tx ->
+                            // re-read message to make sure we're updating the latest
+                            tx.get<Model.OutgoingShortMessage>(out.dbPath)?.let {
+                                val completelySent =
+                                    it.subDeliveryStatusesMap.count { (deviceId, status) -> status != Model.OutgoingShortMessage.SubDeliveryStatus.SENT } == 1
+                                if (completelySent) {
+                                    // we're done
+                                    tx.delete(out.dbPath)
+                                } else {
+                                    tx.put(
+                                        out.dbPath,
+                                        it.toBuilder().putSubDeliveryStatuses(
+                                            deviceId,
+                                            Model.OutgoingShortMessage.SubDeliveryStatus.SENT
+                                        ).build()
+                                    )
+                                }
+                                val shortMessagePath = out.shortMessagePath
+                                tx.get<Model.ShortMessageRecord>(shortMessagePath)?.let { msg ->
+                                    tx.put(
+                                        shortMessagePath,
+                                        msg.toBuilder()
+                                            .setStatus(if (completelySent) Model.ShortMessageRecord.DeliveryStatus.COMPLETELY_SENT else Model.ShortMessageRecord.DeliveryStatus.PARTIALLY_SENT)
+                                            .build()
+                                    )
                                 }
                             }
                         }
+                    }
 
-                        override fun onError(err: Throwable) {
-                            logger.error("failed to send: ${err.message}")
-                            retryFailed { encryptAndSendTo(out, deviceId, msg) }
-                        }
-                    })
-            }
-
-            override fun onClientUnavailable(err: Throwable) {
-                logger.error("failed to obtain client to send: ${err.message}")
-                retryFailed { encryptAndSendTo(out, deviceId, msg) }
-            }
-        })
+                    override fun onError(err: Throwable) {
+                        logger.error("failed to send: ${err.message}")
+                        retryFailed { encryptAndSendTo(out, deviceId, msg) }
+                    }
+                })
+        }
     }
 
     internal fun decryptAndStore(inbound: InboundMessage) {
@@ -238,8 +226,8 @@ internal class CryptoWorker(
         }
     }
 
-    internal fun registerPreKeys(numPreKeys: Int, delayMillis: Long = 0) {
-        schedule(delayMillis) {
+    internal fun registerPreKeys(numPreKeys: Int) {
+        submit {
             doRegisterPreKeys(numPreKeys)
         }
     }
@@ -249,37 +237,31 @@ internal class CryptoWorker(
             db.mutate {
                 val spk = store.nextSignedPreKey
                 val otpks = store.generatePreKeys(numPreKeys)
-                messaging.withAuthenticatedClient(object :
-                    Messaging.ClientCallback<AuthenticatedClient> {
-                    override fun onClient(client: AuthenticatedClient) {
-                        client.register(
-                            spk.serialize(),
-                            otpks.map { it.serialize() },
-                            object : Callback<Unit> {
-                                override fun onSuccess(result: Unit) {
-                                    logger.debug("successfully registered pre keys")
-                                }
+                messaging.authenticatedClientWorker.withClient { client ->
+                    client.register(
+                        spk.serialize(),
+                        otpks.map { it.serialize() },
+                        object : Callback<Unit> {
+                            override fun onSuccess(result: Unit) {
+                                logger.debug("successfully registered pre keys")
+                            }
 
-                                override fun onError(err: Throwable) {
-                                    logger.error(
-                                        "failed to register pre keys: ${err.message}",
-                                        err
-                                    )
-                                }
-                            })
-                    }
-
-                    override fun onClientUnavailable(err: Throwable) {
-                        logger.error("failed to register pre keys: ${err.message}", err)
-                    }
-                })
+                            override fun onError(err: Throwable) {
+                                logger.error(
+                                    "failed to register pre keys: ${err.message}",
+                                    err
+                                )
+                            }
+                        })
+                }
             }
         } catch (t: Throwable) {
             logger.debug(
                 "unable to register pre keys, will try again later: ${t.message}",
                 t
             )
-            registerPreKeys(numPreKeys, 5000)
+            // TODO: make sure this actually gets delayed
+            registerPreKeys(numPreKeys)
         }
     }
 }

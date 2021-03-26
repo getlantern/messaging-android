@@ -86,10 +86,10 @@ class MessagingTest : BaseMessagingTest() {
                     // Close and reopen dog to make sure we can pick up where we left off
                     dog.close()
                     // Before reopening dog, set dials to fail for a while
-                    MisbehavingTransportFactory.succeedDialing.set(false)
+                    BrokenTransportFactory.succeedDialing.set(false)
                     GlobalScope.launch {
                         delay(2000)
-                        MisbehavingTransportFactory.succeedDialing.set(true)
+                        BrokenTransportFactory.succeedDialing.set(true)
                     }
                     dog = newMessaging("dog")
 
@@ -113,7 +113,7 @@ class MessagingTest : BaseMessagingTest() {
                     cat.addOrUpdateDirectContact(dogId, "Dog")
 
                     // close connections to make sure reconnecting works okay
-                    MisbehavingTransportFactory.closeAll()
+                    BrokenTransportFactory.closeAll()
 
                     // now try sending again from dog
                     sendAndVerifyReceived<Any>(
@@ -282,7 +282,7 @@ class MessagingTest : BaseMessagingTest() {
     ): Messaging {
         return Messaging(
             store ?: newStore(name = name),
-            MisbehavingTransportFactory("wss://tassis.lantern.io/api"),
+            BrokenTransportFactory("wss://tassis.lantern.io/api"),
             failedSendRetryDelayMillis = failedSendRetryDelayMillis,
             name = name
         )
@@ -343,7 +343,7 @@ internal suspend fun Messaging.with(fn: suspend (messaging: Messaging) -> Unit) 
     }
 }
 
-internal class MisbehavingTransportFactory(url: String) : WebSocketTransportFactory(url) {
+internal class BrokenTransportFactory(url: String) : WebSocketTransportFactory(url) {
     override fun buildTransport(
         url: String,
         handler: MessageHandler,
@@ -351,7 +351,7 @@ internal class MisbehavingTransportFactory(url: String) : WebSocketTransportFact
         connectionLostTimeoutSeconds: Int
     ): WebSocketTransport {
         // Connect a little slowly
-        val transport = MisbehavingTransport(
+        val transport = BrokenTransport(
             url,
             handler,
             connectTimeoutMillis,
@@ -367,27 +367,27 @@ internal class MisbehavingTransportFactory(url: String) : WebSocketTransportFact
 
     companion object {
         var succeedDialing = AtomicBoolean(true)
-        private val transports = ArrayList<MisbehavingTransport>()
+        private val transports = ArrayList<BrokenTransport>()
 
         @Synchronized
-        fun addTransport(transport: MisbehavingTransport) {
+        fun addTransport(transport: BrokenTransport) {
             transports.add(transport)
         }
 
         @Synchronized
-        fun removeTransport(transport: MisbehavingTransport) {
+        fun removeTransport(transport: BrokenTransport) {
             transports.remove(transport)
         }
 
         @Synchronized
         fun closeAll() {
-            transports.forEach { it.closeBlocking() }
+            transports.forEach { it.forceClose(); }
             transports.clear()
         }
     }
 }
 
-internal class MisbehavingTransport(
+internal class BrokenTransport(
     url: String,
     handler: MessageHandler,
     connectTimeoutMillis: Int,
@@ -395,7 +395,7 @@ internal class MisbehavingTransport(
 ) : WebSocketTransport(url, handler, connectTimeoutMillis, connectionLostTimeoutSeconds) {
     override fun onClose(code: Int, reason: String?, remote: Boolean) {
         Thread {
-            MisbehavingTransportFactory.removeTransport(this)
+            BrokenTransportFactory.removeTransport(this)
         }.start()
         super.doOnClose(code, reason, remote)
     }

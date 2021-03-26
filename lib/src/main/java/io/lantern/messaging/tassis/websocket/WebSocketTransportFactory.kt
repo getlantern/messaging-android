@@ -74,6 +74,13 @@ open class WebSocketTransport(
         super.close()
     }
 
+    /**
+     * This is really just for testing
+     */
+    fun forceClose() {
+        super.closeBlocking()
+    }
+
     override fun onClose(code: Int, reason: String?, remote: Boolean) {
         if (closedByHandler) {
             // the handler already knows we closed, don't bother reporting
