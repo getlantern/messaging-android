@@ -58,7 +58,7 @@ class MessagingTest : BaseMessagingTest() {
                 // we do not expect this message to be delivered to cat because cat hasn't added dog
                 // as a contact
                 val cat = sendAndVerifyDropped(
-                    "dog->cat only sends successfully one cat registers pre keys",
+                    "dog->cat only sends successfully onec cat registers pre keys",
                     dog,
                     catStore,
                     "hello cat"
@@ -83,14 +83,16 @@ class MessagingTest : BaseMessagingTest() {
                         }
                     )
 
-                    // Close and reopen dog to make sure we can pick up where we left off
+                    logger.debug("close dog")
                     dog.close()
-                    // Before reopening dog, set dials to fail for a while
+                    logger.debug("before reopening dog, set dials to fail for a while")
                     BrokenTransportFactory.succeedDialing.set(false)
                     GlobalScope.launch {
                         delay(2000)
+                        logger.debug("allow dials to succeed again")
                         BrokenTransportFactory.succeedDialing.set(true)
                     }
+                    logger.debug("reopen dog to make sure we can pick up where we left off")
                     dog = newMessaging("dog")
 
                     // start the Messaging system for cat, which will result in the registration of pre
@@ -283,6 +285,8 @@ class MessagingTest : BaseMessagingTest() {
         return Messaging(
             store ?: newStore(name = name),
             BrokenTransportFactory("wss://tassis.lantern.io/api"),
+            redialBackoffMillis = 50L,
+            maxRedialDelayMillis = 500L,
             failedSendRetryDelayMillis = failedSendRetryDelayMillis,
             name = name
         )
@@ -350,7 +354,6 @@ internal class BrokenTransportFactory(url: String) : WebSocketTransportFactory(u
         connectTimeoutMillis: Int,
         connectionLostTimeoutSeconds: Int
     ): WebSocketTransport {
-        // Connect a little slowly
         val transport = BrokenTransport(
             url,
             handler,
@@ -358,10 +361,6 @@ internal class BrokenTransportFactory(url: String) : WebSocketTransportFactory(u
             connectionLostTimeoutSeconds
         )
         addTransport(transport)
-        if (!succeedDialing.get()) {
-            transport.onError(Exception("closed cause I'm bad"))
-            transport.close()
-        }
         return transport
     }
 
@@ -393,6 +392,14 @@ internal class BrokenTransport(
     connectTimeoutMillis: Int,
     connectionLostTimeoutSeconds: Int
 ) : WebSocketTransport(url, handler, connectTimeoutMillis, connectionLostTimeoutSeconds) {
+    override fun connect() {
+        if (!BrokenTransportFactory.succeedDialing.get()) {
+            BrokenTransportFactory.removeTransport(this)
+            throw RuntimeException("closed cause I'm bad")
+        }
+        super.connect()
+    }
+
     override fun onClose(code: Int, reason: String?, remote: Boolean) {
         Thread {
             BrokenTransportFactory.removeTransport(this)

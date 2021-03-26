@@ -227,6 +227,7 @@ internal class CryptoWorker(
     }
 
     internal fun registerPreKeys(numPreKeys: Int) {
+        logger.debug("requested to register pre keys")
         submit {
             doRegisterPreKeys(numPreKeys)
         }
@@ -238,6 +239,7 @@ internal class CryptoWorker(
                 val spk = store.nextSignedPreKey
                 val otpks = store.generatePreKeys(numPreKeys)
                 messaging.authenticatedClientWorker.withClient { client ->
+                    logger.debug("registering pre keys")
                     client.register(
                         spk.serialize(),
                         otpks.map { it.serialize() },
@@ -251,6 +253,7 @@ internal class CryptoWorker(
                                     "failed to register pre keys: ${err.message}",
                                     err
                                 )
+                                registerPreKeys(numPreKeys)
                             }
                         })
                 }
@@ -260,7 +263,6 @@ internal class CryptoWorker(
                 "unable to register pre keys, will try again later: ${t.message}",
                 t
             )
-            // TODO: make sure this actually gets delayed
             registerPreKeys(numPreKeys)
         }
     }

@@ -259,23 +259,24 @@ class AuthenticatedClient(
     }
 
     private fun processAuth(challenge: Messages.AuthChallenge) {
-        val login = Messages.Login.newBuilder()
-            .setNonce(challenge.nonce)
-            .setAddress(
-                Messages.Address.newBuilder()
-                    .setIdentityKey(identityKey.bytes.byteString())
-                    .setDeviceId(deviceId.bytes.byteString())
-            ).build()
-        val loginBytes = login.toByteArray()
-        val signature = delegate.signLogin(loginBytes)
-        val authResponse = Messages.Message.newBuilder().setAuthResponse(
-            Messages.AuthResponse.newBuilder()
-                .setLogin(loginBytes.byteString())
-                .setSignature(signature.byteString())
-        ).build()
         try {
+            val login = Messages.Login.newBuilder()
+                .setNonce(challenge.nonce)
+                .setAddress(
+                    Messages.Address.newBuilder()
+                        .setIdentityKey(identityKey.bytes.byteString())
+                        .setDeviceId(deviceId.bytes.byteString())
+                ).build()
+            val loginBytes = login.toByteArray()
+            val signature = delegate.signLogin(loginBytes)
+            val authResponse = Messages.Message.newBuilder().setAuthResponse(
+                Messages.AuthResponse.newBuilder()
+                    .setLogin(loginBytes.byteString())
+                    .setSignature(signature.byteString())
+            ).build()
             send(authResponse, object : Callback<Messages.Ack> {
                 override fun onSuccess(result: Messages.Ack) {
+                    logger.debug("successfully logged in")
                     delegate.onConnected(this@AuthenticatedClient)
                 }
 

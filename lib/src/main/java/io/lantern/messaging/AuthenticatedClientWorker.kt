@@ -23,10 +23,13 @@ internal class AuthenticatedClientWorker(
         return AuthenticatedClient(messaging.identityKeyPair.publicKey, messaging.deviceId, this)
     }
 
-    override fun signLogin(loginBytes: ByteArray): ByteArray = Curve.calculateSignature(
-        messaging.identityKeyPair.privateKey,
-        loginBytes
-    )
+    override fun signLogin(loginBytes: ByteArray): ByteArray {
+        logger.debug("signing login")
+        return Curve.calculateSignature(
+            messaging.identityKeyPair.privateKey,
+            loginBytes
+        )
+    }
 
     override fun onPreKeysLow(numPreKeysRequested: Int) {
         messaging.cryptoWorker.registerPreKeys(numPreKeysRequested)

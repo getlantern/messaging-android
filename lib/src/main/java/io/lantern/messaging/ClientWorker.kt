@@ -3,9 +3,15 @@ package io.lantern.messaging
 import io.lantern.messaging.tassis.Client
 import io.lantern.messaging.tassis.ClientDelegate
 import io.lantern.messaging.tassis.TransportFactory
-import java.util.concurrent.Semaphore
 import kotlin.math.pow
 
+/**
+ * This handles client connections in a single threaded executor. All connecting and handling of
+ * disconnects happens on this single thread in order to ensure that we only ever have one active
+ * client and that whenever we encounter an error while connecting or a client is closed before we
+ * could submit an operation, we automatically retry the pending operation once successfully
+ * connected.
+ */
 internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
     private val transportFactory: TransportFactory,
     messaging: Messaging,
@@ -14,10 +20,10 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
     private val maxRedialDelayMillis: Long,
     private val autoConnect: Boolean = false
 ) : Worker(messaging, "$name-client"), ClientDelegate {
-    private val lock = Semaphore(1)
     private var client: C? = null
-    private var cbAfterConnect: ((C) -> Unit)? = null
-    private var connsecutiveFailures = -1
+    private var currentlyConnecting = false
+    private val cbsAfterConnect = ArrayList<((C) -> Unit)>()
+    private var consecutiveFailures = -1
 
     init {
         autoConnectIfNecessary()
@@ -25,20 +31,31 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
 
     internal fun withClient(cb: (C) -> Unit) {
         submit {
-            client?.let { cb(it) } ?: connectThen(cb)
+            client?.let {
+                cb(it)
+            } ?: connectThen(cb)
         }
     }
 
     private fun connectThen(cb: (C) -> Unit) {
-        if (connsecutiveFailures > -1) {
+        cbsAfterConnect.add(cb)
+
+        if (currentlyConnecting) {
+            logger.debug("already in the process of connecting")
+            return
+        }
+
+        if (consecutiveFailures > -1) {
             val redialDelay =
-                (redialBackoffMillis * 2.0.pow(connsecutiveFailures)).toLong()
+                (redialBackoffMillis * 2.0.pow(consecutiveFailures)).toLong()
             val actualRedialDelay =
                 if (maxRedialDelayMillis < redialDelay) maxRedialDelayMillis else redialDelay
-            logger.debug("due to $connsecutiveFailures previous errors connecting to tassis, will wait ${actualRedialDelay}ms before dialing again")
+            logger.debug("due to $consecutiveFailures previous errors communicating with tassis, will wait ${actualRedialDelay}ms before dialing again")
             Thread.sleep(actualRedialDelay)
         }
-        cbAfterConnect = cb
+
+        logger.debug("connecting")
+        currentlyConnecting = true
         val newClient = buildClient()
         transportFactory.connect(newClient)
     }
@@ -47,47 +64,44 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
 
     fun onConnected(client: C) {
         submit {
-            lock.release()
+            logger.debug("successfully connected")
             this.client = client
-            connsecutiveFailures = -1
-            cbAfterConnect?.let { it(client) }
-            cbAfterConnect = null
+            consecutiveFailures = -1
+            currentlyConnecting = false
+            cbsAfterConnect.forEach { it(client) }
+            cbsAfterConnect.clear()
         }
     }
 
     override fun onConnectError(err: Throwable) {
-        logger.error("error connecting client: ${err.message}")
         submit {
-            lock.release()
-            cbAfterConnect?.let { submit { withClient(it) } }
-            cbAfterConnect = null
+            logger.error("error connecting client: ${err.message}")
+            connectFailed()
         }
     }
 
     override fun onClose(err: Throwable?) {
         submit {
             if (err != null) {
-                logger.error("anonymous tassis client closed with error ${err.message}")
-                if (cbAfterConnect != null) {
-                    connsecutiveFailures++
-                    lock.release()
-                    cbAfterConnect?.let { submit { withClient(it) } }
-                    cbAfterConnect = null
+                logger.error("closed with error ${err.message}")
+                if (currentlyConnecting) {
+                    // this means we got the error while still in the process of connecting
+                    connectFailed()
                 }
             } else {
-                logger.debug("anonymous tassis client closed normally")
-                submit {
-                    client = null
-                }
+                logger.debug("client closed normally")
+                client = null
+                autoConnectIfNecessary()
             }
-            autoConnectIfNecessary()
         }
     }
 
     override fun close() {
         submit {
-            client?.let { it.close() }
-            client = null
+            client?.let {
+                it.close()
+                client = null
+            }
             super.close()
         }
     }
@@ -97,5 +111,13 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
             return
         }
         withClient { logger.debug("auto connected") }
+    }
+
+    private fun connectFailed() {
+        consecutiveFailures++
+        // re-enqueue pending callbacks
+        cbsAfterConnect.forEach { withClient(it) }
+        cbsAfterConnect.clear()
+        currentlyConnecting = false
     }
 }
