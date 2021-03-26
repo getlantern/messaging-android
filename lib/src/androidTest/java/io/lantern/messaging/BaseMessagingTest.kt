@@ -12,14 +12,13 @@ import java.util.*
 abstract class BaseMessagingTest {
     private var tempDir: Path? = null
 
-    protected val newStore: MessagingStore
-        get() = MessagingStore(
-            InstrumentationRegistry.getInstrumentation().targetContext,
-            dbPath = Paths.get(
-                tempDir.toString(),
-                UUID.randomUUID().toString(),
-            ).toString()
-        )
+    protected fun newStore(name: String? = null): MessagingStore = MessagingStore(
+        InstrumentationRegistry.getInstrumentation().targetContext,
+        dbPath = Paths.get(
+            tempDir.toString(),
+            name ?: UUID.randomUUID().toString(),
+        ).toString()
+    )
 
     @Before
     fun setupTempDir() {

@@ -17,7 +17,7 @@ import kotlin.test.*
 class MessagingStoreTest : BaseMessagingTest() {
     @Test
     fun testIdentityKeyPair() {
-        newStore.use { ms ->
+        newStore().use { ms ->
             val kp1 = ms.identityKeyPair
             val kp2 = ms.identityKeyPair
             assertEquals(kp1.publicKey, kp2.publicKey)
@@ -37,7 +37,7 @@ class MessagingStoreTest : BaseMessagingTest() {
 
     @Test
     fun testPreKeys() {
-        newStore.use { ms ->
+        newStore().use { ms ->
             try {
                 ms.storePreKey(1, KeyHelper.generatePreKeys(0, 1)[0])
                 fail("should not be allowed to directly store one time pre keys")
@@ -67,7 +67,7 @@ class MessagingStoreTest : BaseMessagingTest() {
 
     @Test
     fun testSignedPreKeys() {
-        newStore.use { ms ->
+        newStore().use { ms ->
             try {
                 ms.storeSignedPreKey(1, KeyHelper.generateSignedPreKey(ms.identityKeyPair, 1))
                 fail("should not be allowed to directly store signed pre keys")
@@ -95,7 +95,7 @@ class MessagingStoreTest : BaseMessagingTest() {
 
     @Test
     fun testSessions() {
-        newStore.use { ms ->
+        newStore().use { ms ->
             val address1 =
                 SignalProtocolAddress(Curve.generateKeyPair().publicKey, DeviceId.random())
             val address2 = SignalProtocolAddress(address1.identityKey, DeviceId.random())

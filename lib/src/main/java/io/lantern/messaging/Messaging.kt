@@ -11,7 +11,6 @@ import io.lantern.messaging.time.secondsToMillis
 import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.ecc.Curve
-import org.whispersystems.libsignal.ecc.ECKeyPair
 import java.io.Closeable
 import java.nio.ByteBuffer
 import java.util.*
@@ -33,6 +32,14 @@ class Messaging(
 ) : Closeable {
     internal val logger = KotlinLogging.logger(name)
 
+    init {
+        // Need to register types before starting crypto worker or doing anything else that accesses
+        // database
+        db.registerType(21, Model.Contact::class.java)
+        db.registerType(22, Model.ShortMessageRecord::class.java)
+        db.registerType(23, Model.OutgoingShortMessage::class.java)
+    }
+
     // All processing that involves crypto operations happens on this executor to keep the
     // SignalProtocolStore in a consistent state
     private val cryptoWorker =
@@ -46,19 +53,12 @@ class Messaging(
     private var authenticatedClientConnectFailures = 0
     private var authenticatedClient: AuthenticatedClient? = null
 
-    internal val identityKeyPair: ECKeyPair
-    private val deviceId: DeviceId
+    internal val identityKeyPair = store.identityKeyPair
+    private val deviceId: DeviceId = store.deviceId
 
     private val subscriberId = UUID.randomUUID().toString()
 
     init {
-        db.registerType(21, Model.Contact::class.java)
-        db.registerType(22, Model.ShortMessageRecord::class.java)
-        db.registerType(23, Model.OutgoingShortMessage::class.java)
-
-        identityKeyPair = store.identityKeyPair
-        deviceId = store.deviceId
-
         // make sure we have a contact entry for ourselves
         db.mutate { tx ->
             tx.get<Model.Contact>(Schema.PATH_ME) ?: tx.put(
@@ -334,17 +334,20 @@ class Messaging(
     }
 
     override fun close() {
-        cryptoWorker.executor.shutdownNow()
-        synchronized(this) {
-            anonymousClient?.close()
-            anonymousClient = null
-            authenticatedClient?.close()
-            authenticatedClient = null
+        try {
+            cryptoWorker.executor.shutdownNow()
+            synchronized(this) {
+                anonymousClient?.close()
+                anonymousClient = null
+                authenticatedClient?.close()
+                authenticatedClient = null
+            }
+            cryptoWorker.executor.awaitTermination(10, TimeUnit.SECONDS)
+            db.unsubscribe(subscriberId)
+            store.close()
+        } catch (t: Throwable) {
+            logger.error(t.message)
         }
-        cryptoWorker.executor.awaitTermination(10, TimeUnit.SECONDS)
-        db.unsubscribe(subscriberId)
-        store.close()
-
     }
 }
 

@@ -24,11 +24,12 @@ class MessagingTest : BaseMessagingTest() {
 
     @Test
     fun testCompleteFlow() {
-        val catStore = newStore
+        val catStore = newStore()
         val dog = newMessaging("dog")
 
         testInCoroutine {
-            dog.with { dog ->
+            dog.with { it ->
+                var dog = it
                 val catId = catStore.identityKeyPair.publicKey.toString()
                 val dogId = dog.store.identityKeyPair.publicKey.toString()
 
@@ -78,6 +79,10 @@ class MessagingTest : BaseMessagingTest() {
                             Model.ShortMessage.parseFrom(storedMsgRecord!!.message).text
                         }
                     )
+
+                    // Close and reopen dog to make sure we can pick up where we left off
+                    dog.close()
+                    dog = newMessaging("dog")
 
                     // start the Messaging system for cat, which will result in the registration of pre
                     // keys, allowing the message to send successfully
@@ -267,7 +272,7 @@ class MessagingTest : BaseMessagingTest() {
         store: MessagingStore? = null
     ): Messaging {
         return Messaging(
-            store ?: newStore,
+            store ?: newStore(name = name),
             MisbehavingTransportFactory("wss://tassis.lantern.io/api"),
             failedSendRetryDelayMillis = failedSendRetryDelayMillis,
             name = name
@@ -320,7 +325,11 @@ internal suspend fun Messaging.with(fn: suspend (messaging: Messaging) -> Unit) 
     try {
         fn(this)
     } catch (t: Throwable) {
-        this.store.db.dump()
+        try {
+            this.store.db.dump()
+        } catch (t: Throwable) {
+            // ignore
+        }
         throw t
     }
 }

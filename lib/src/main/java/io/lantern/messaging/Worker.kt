@@ -13,24 +13,32 @@ internal abstract class Worker(
     }
 
     internal fun submit(cmd: () -> Unit) {
-        executor.submit {
-            try {
-                cmd()
-            } catch (t: Throwable) {
-                messaging.logger.error(t.message, t)
-                retryFailed(cmd)
+        try {
+            executor.submit {
+                try {
+                    cmd()
+                } catch (t: Throwable) {
+                    messaging.logger.error(t.message, t)
+                    retryFailed(cmd)
+                }
             }
+        } catch (t: Throwable) {
+            messaging.logger.error(t.message)
         }
     }
 
     protected fun schedule(delayMillis: Long, cmd: () -> Unit) {
-        executor.schedule({
-            try {
-                cmd()
-            } catch (t: Throwable) {
-                messaging.logger.error(t.message, t)
-            }
-        }, delayMillis, TimeUnit.MILLISECONDS)
+        try {
+            executor.schedule({
+                try {
+                    cmd()
+                } catch (t: Throwable) {
+                    messaging.logger.error(t.message, t)
+                }
+            }, delayMillis, TimeUnit.MILLISECONDS)
+        } catch (t: Throwable) {
+            messaging.logger.error(t.message)
+        }
     }
 
     protected fun retryFailed(cmd: () -> Unit) {
