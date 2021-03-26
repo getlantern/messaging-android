@@ -84,12 +84,13 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
         submit {
             if (err != null) {
                 logger.error("closed with error ${err.message}")
-                if (currentlyConnecting) {
-                    // this means we got the error while still in the process of connecting
-                    connectFailed()
-                }
             } else {
                 logger.debug("client closed normally")
+            }
+            if (currentlyConnecting) {
+                // this means we got the error while still in the process of connecting
+                connectFailed()
+            } else {
                 client = null
                 autoConnectIfNecessary()
             }
@@ -114,8 +115,10 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
     }
 
     private fun connectFailed() {
+        logger.debug("connect failed")
         consecutiveFailures++
         // re-enqueue pending callbacks
+        logger.debug("re-enqueuing ${cbsAfterConnect.size} pending callbacks")
         cbsAfterConnect.forEach { withClient(it) }
         cbsAfterConnect.clear()
         currentlyConnecting = false
