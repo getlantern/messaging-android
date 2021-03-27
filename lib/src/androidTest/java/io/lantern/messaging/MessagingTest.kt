@@ -5,6 +5,8 @@ import io.lantern.messaging.store.MessagingStore
 import io.lantern.messaging.tassis.MessageHandler
 import io.lantern.messaging.tassis.websocket.WebSocketTransport
 import io.lantern.messaging.tassis.websocket.WebSocketTransportFactory
+import io.lantern.messaging.time.millisToSeconds
+import io.lantern.messaging.time.secondsToMillis
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -197,13 +199,13 @@ class MessagingTest : BaseMessagingTest() {
         val fromId = from.store.identityKeyPair.publicKey.toString()
         val toId = to.identityKeyPair.publicKey.toString()
 
-//        logger.debug("ignore sends for a while to make sure client handles this well")
-//        BrokenTransportFactory.ignoreSends.set(true)
-//        GlobalScope.launch {
-//            delay(2000)
-//            logger.debug("start honoring sends again")
-//            BrokenTransportFactory.ignoreSends.set(false)
-//        }
+        logger.debug("ignore sends for a while to make sure client handles this well")
+        BrokenTransportFactory.ignoreSends.set(true)
+        GlobalScope.launch {
+            delay(2000)
+            logger.debug("start honoring sends again")
+            BrokenTransportFactory.ignoreSends.set(false)
+        }
 
         // send a message
         val msgRecord = from.sendToDirectContact(toId, text)
@@ -287,12 +289,17 @@ class MessagingTest : BaseMessagingTest() {
 
     private fun newMessaging(
         name: String,
+        clientTimeoutMillis: Long = 5L.secondsToMillis,
         failedSendRetryDelayMillis: Long = 100,
         store: MessagingStore? = null
     ): Messaging {
         return Messaging(
             store ?: newStore(name = name),
-            BrokenTransportFactory("wss://tassis.lantern.io/api"),
+            BrokenTransportFactory(
+                "wss://tassis.lantern.io/api",
+                (clientTimeoutMillis / 2).millisToSeconds.toInt()
+            ),
+            clientTimeoutMillis = clientTimeoutMillis,
             redialBackoffMillis = 50L,
             maxRedialDelayMillis = 500L,
             failedSendRetryDelayMillis = failedSendRetryDelayMillis,
@@ -304,7 +311,7 @@ class MessagingTest : BaseMessagingTest() {
 @ExperimentalTime
 internal suspend fun <T : Any> Messaging.waitFor(
     path: String,
-    duration: Duration = 10.seconds,
+    duration: Duration = 30.seconds,
     check: (T?) -> Boolean
 ): T? {
     return this.store.waitFor(path, duration, check)
@@ -313,7 +320,7 @@ internal suspend fun <T : Any> Messaging.waitFor(
 @ExperimentalTime
 internal suspend fun <T : Any> MessagingStore.waitFor(
     path: String,
-    duration: Duration = 10.seconds,
+    duration: Duration = 30.seconds,
     check: (T?) -> Boolean
 ): T? {
     return waitFor(duration.toLongMilliseconds()) {
@@ -327,11 +334,13 @@ private suspend fun <T> waitFor(maxWait: Long, get: suspend () -> T?): T? {
     while (elapsed < maxWait) {
         val result = get()
         if (result != null) {
+            logger.debug("waited ${elapsed}ms to find result")
             return result
         }
         delay(25)
         elapsed += 25
     }
+    logger.debug("waited ${elapsed}ms without finding result")
     return null
 }
 
@@ -355,7 +364,8 @@ internal suspend fun Messaging.with(fn: suspend (messaging: Messaging) -> Unit) 
     }
 }
 
-internal class BrokenTransportFactory(url: String) : WebSocketTransportFactory(url) {
+internal class BrokenTransportFactory(url: String, connectionLostTimeoutSeconds: Int) :
+    WebSocketTransportFactory(url, connectionLostTimeoutSeconds = connectionLostTimeoutSeconds) {
     override fun buildTransport(
         url: String,
         handler: MessageHandler,
@@ -414,6 +424,13 @@ internal class BrokenTransport(
             return
         }
         super.send(data)
+    }
+
+    override fun sendPing() {
+        if (BrokenTransportFactory.ignoreSends.get()) {
+            return
+        }
+        super.sendPing()
     }
 
     override fun onClose(code: Int, reason: String?, remote: Boolean) {

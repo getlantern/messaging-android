@@ -9,6 +9,7 @@ import org.whispersystems.libsignal.ecc.Curve
 internal class AuthenticatedClientWorker(
     transportFactory: TransportFactory,
     messaging: Messaging,
+    private val roundTripTimeoutMillis: Long,
     redialBackoffMillis: Long,
     maxRedialDelayMillis: Long
 ) : ClientWorker<AuthenticatedClientDelegate, AuthenticatedClient>(
@@ -20,7 +21,7 @@ internal class AuthenticatedClientWorker(
     autoConnect = true
 ), AuthenticatedClientDelegate {
     override fun buildClient(): AuthenticatedClient {
-        return AuthenticatedClient(messaging.identityKeyPair.publicKey, messaging.deviceId, this)
+        return AuthenticatedClient(messaging.identityKeyPair.publicKey, messaging.deviceId, this, roundTripTimeoutMillis)
     }
 
     override fun signLogin(loginBytes: ByteArray): ByteArray {

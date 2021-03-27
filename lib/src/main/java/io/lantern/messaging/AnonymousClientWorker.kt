@@ -7,6 +7,7 @@ import io.lantern.messaging.tassis.TransportFactory
 internal class AnonymousClientWorker(
     transportFactory: TransportFactory,
     messaging: Messaging,
+    private val roundTripTimeoutMillis: Long,
     redialBackoffMillis: Long,
     maxRedialDelayMillis: Long
 ) : ClientWorker<AnonymousClientDelegate, AnonymousClient>(
@@ -17,6 +18,6 @@ internal class AnonymousClientWorker(
     maxRedialDelayMillis
 ), AnonymousClientDelegate {
     override fun buildClient(): AnonymousClient {
-        return AnonymousClient(this)
+        return AnonymousClient(this, roundTripTimeoutMillis)
     }
 }

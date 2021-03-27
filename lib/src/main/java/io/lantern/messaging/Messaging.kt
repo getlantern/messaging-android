@@ -22,6 +22,7 @@ class UnknownSenderException : Exception("Unknown sender")
 class Messaging(
     internal val store: MessagingStore,
     transportFactory: TransportFactory,
+    clientTimeoutMillis: Long = 10L.secondsToMillis,
     redialBackoffMillis: Long = 500L,
     maxRedialDelayMillis: Long = 15L.secondsToMillis,
     failedSendRetryDelayMillis: Long = 5L.secondsToMillis,
@@ -49,9 +50,21 @@ class Messaging(
     internal val cryptoWorker =
         CryptoWorker(this, failedSendRetryDelayMillis, stopSendRetryAfterMillis)
     internal val anonymousClientWorker =
-        AnonymousClientWorker(transportFactory, this, redialBackoffMillis, maxRedialDelayMillis)
+        AnonymousClientWorker(
+            transportFactory,
+            this,
+            clientTimeoutMillis,
+            redialBackoffMillis,
+            maxRedialDelayMillis
+        )
     internal val authenticatedClientWorker =
-        AuthenticatedClientWorker(transportFactory, this, redialBackoffMillis, maxRedialDelayMillis)
+        AuthenticatedClientWorker(
+            transportFactory,
+            this,
+            clientTimeoutMillis,
+            redialBackoffMillis,
+            maxRedialDelayMillis
+        )
 
     init {
         // make sure we have a contact entry for ourselves

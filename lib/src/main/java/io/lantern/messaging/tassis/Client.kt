@@ -10,6 +10,9 @@ import org.whispersystems.libsignal.SignalProtocolAddress
 import org.whispersystems.libsignal.ecc.ECPublicKey
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 
 internal val logger = KotlinLogging.logger {}
@@ -162,10 +165,14 @@ interface AnonymousClientDelegate : ClientDelegate {
  */
 abstract class Client<D : ClientDelegate>(
     protected val delegate: D,
+    private val roundTripTimeoutMillis: Long
 ) : MessageHandler {
     private lateinit var transport: Transport
     private val msgSequence = AtomicInteger(1)
     protected val pending = ConcurrentHashMap<Int, Callback<Any?>>()
+    private val timeoutChecker = Executors.newSingleThreadScheduledExecutor {
+        Thread(it, "client-timeout-checker")
+    }
 
     override fun setTransport(transport: Transport) {
         this.transport = transport
@@ -176,10 +183,20 @@ abstract class Client<D : ClientDelegate>(
     }
 
     internal fun send(msg: Messages.Message, callback: Callback<*>? = null) {
+        val msgSequence = msg.sequence
         if (callback != null) {
-            pending[msg.sequence] = callback as Callback<Any?>
+            pending[msgSequence] = callback as Callback<Any?>
         }
         transport.send(msg.toByteArray())
+        if (callback != null) {
+            timeoutChecker.schedule({
+                pending.remove(msgSequence)?.let {
+                    // if any request times out, consider the whole connection bad and just close it
+                    it.onError(TimeoutException("request timed out"))
+                    close()
+                }
+            }, roundTripTimeoutMillis, TimeUnit.MILLISECONDS)
+        }
     }
 
     protected fun nextMessage(): Messages.Message.Builder {
@@ -211,6 +228,7 @@ abstract class Client<D : ClientDelegate>(
     }
 
     override fun onClose(err: Throwable?) {
+        timeoutChecker.shutdown()
         delegate.onClose(err)
         val finalErr = err ?: ClientClosedException()
         pending.values.forEach {
@@ -226,8 +244,9 @@ abstract class Client<D : ClientDelegate>(
 class AuthenticatedClient(
     private val identityKey: ECPublicKey,
     private val deviceId: DeviceId,
-    delegate: AuthenticatedClientDelegate
-) : Client<AuthenticatedClientDelegate>(delegate) {
+    delegate: AuthenticatedClientDelegate,
+    roundTripTimeoutMillis: Long
+) : Client<AuthenticatedClientDelegate>(delegate, roundTripTimeoutMillis) {
     fun register(signedPreKey: ByteArray, preKeys: List<ByteArray>, cb: Callback<Unit>) {
         val msg = nextMessage().setRegister(
             Messages.Register.newBuilder().setSignedPreKey(signedPreKey.byteString())
@@ -274,6 +293,7 @@ class AuthenticatedClient(
                     .setLogin(loginBytes.byteString())
                     .setSignature(signature.byteString())
             ).build()
+            logger.debug("sending login")
             send(authResponse, object : Callback<Messages.Ack> {
                 override fun onSuccess(result: Messages.Ack) {
                     logger.debug("successfully logged in")
@@ -281,6 +301,7 @@ class AuthenticatedClient(
                 }
 
                 override fun onError(err: Throwable) {
+                    logger.debug("error during login ${err.message}")
                     close()
                     onConnectError(err)
                 }
@@ -296,8 +317,11 @@ class AuthenticatedClient(
  * Anonymous client is a client that does not authenticate against the tassis service. It is used
  * for anonymous operations like requesting pre keys and sending sealed sender messages.
  */
-class AnonymousClient(delegate: AnonymousClientDelegate) :
-    Client<AnonymousClientDelegate>(delegate) {
+class AnonymousClient(
+    delegate: AnonymousClientDelegate,
+    roundTripTimeoutMillis: Long
+) :
+    Client<AnonymousClientDelegate>(delegate, roundTripTimeoutMillis) {
     fun retrievePreKeys(
         identityKey: ECPublicKey,
         knownDeviceIds: List<DeviceId>,
