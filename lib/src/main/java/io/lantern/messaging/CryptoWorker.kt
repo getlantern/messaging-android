@@ -236,36 +236,28 @@ internal class CryptoWorker(
     }
 
     private fun doRegisterPreKeys(numPreKeys: Int) {
-        try {
-            db.mutate {
-                val spk = store.nextSignedPreKey
-                val otpks = store.generatePreKeys(numPreKeys)
-                messaging.authenticatedClientWorker.withClient { client ->
-                    logger.debug("registering pre keys")
-                    client.register(
-                        spk.serialize(),
-                        otpks.map { it.serialize() },
-                        object : Callback<Unit> {
-                            override fun onSuccess(result: Unit) {
-                                logger.debug("successfully registered pre keys")
-                            }
+        db.mutate {
+            val spk = store.nextSignedPreKey
+            val otpks = store.generatePreKeys(numPreKeys)
+            messaging.authenticatedClientWorker.withClient { client ->
+                logger.debug("registering pre keys")
+                client.register(
+                    spk.serialize(),
+                    otpks.map { it.serialize() },
+                    object : Callback<Unit> {
+                        override fun onSuccess(result: Unit) {
+                            logger.debug("successfully registered pre keys")
+                        }
 
-                            override fun onError(err: Throwable) {
-                                logger.error(
-                                    "failed to register pre keys: ${err.message}",
-                                    err
-                                )
-                                registerPreKeys(numPreKeys)
-                            }
-                        })
-                }
+                        override fun onError(err: Throwable) {
+                            logger.error(
+                                "failed to register pre keys: ${err.message}",
+                                err
+                            )
+                            registerPreKeys(numPreKeys)
+                        }
+                    })
             }
-        } catch (t: Throwable) {
-            logger.debug(
-                "unable to register pre keys, will try again later: ${t.message}",
-                t
-            )
-            registerPreKeys(numPreKeys)
         }
     }
 }

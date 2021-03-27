@@ -76,7 +76,12 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
     override fun onConnectError(err: Throwable) {
         submit {
             logger.error("error connecting client: ${err.message}")
-            connectFailed()
+            consecutiveFailures++
+            // re-enqueue pending callbacks
+            logger.debug("re-enqueuing ${cbsAfterConnect.size} pending callbacks")
+            cbsAfterConnect.forEach { withClient(it) }
+            cbsAfterConnect.clear()
+            currentlyConnecting = false
         }
     }
 
@@ -87,10 +92,10 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
             } else {
                 logger.debug("client closed normally")
             }
-            if (currentlyConnecting) {
-                // this means we got the error while still in the process of connecting
-                connectFailed()
-            } else {
+            if (!currentlyConnecting) {
+                // only clear client if we're not currently still in the process of connecting
+                // otherwise, we expect that onConnectError will be called, at which point
+                // we'll clear the connection
                 client = null
                 autoConnectIfNecessary()
             }
@@ -112,15 +117,5 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
             return
         }
         withClient { logger.debug("auto connected") }
-    }
-
-    private fun connectFailed() {
-        logger.debug("connect failed")
-        consecutiveFailures++
-        // re-enqueue pending callbacks
-        logger.debug("re-enqueuing ${cbsAfterConnect.size} pending callbacks")
-        cbsAfterConnect.forEach { withClient(it) }
-        cbsAfterConnect.clear()
-        currentlyConnecting = false
     }
 }
