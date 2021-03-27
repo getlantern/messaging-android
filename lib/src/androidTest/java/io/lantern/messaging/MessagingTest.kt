@@ -14,10 +14,7 @@ import kotlinx.coroutines.runBlocking
 import mu.KotlinLogging
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
+import kotlin.test.*
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 import kotlin.time.seconds
@@ -76,8 +73,8 @@ class MessagingTest : BaseMessagingTest() {
                         storedMsgRecord.status,
                         "attempt to send to cat before cat has started registering preKeys should have resulted in a UserMessage with failing status"
                     )
-                    assertEquals(Model.ShortMessageRecord.Direction.OUT, storedMsgRecord.direction)
-                    assertEquals(msgRecord.sent, storedMsgRecord.sent)
+                    assertEquals(Model.MessageDirection.OUT, storedMsgRecord.direction)
+                    assertEquals(msgRecord.ts, storedMsgRecord.ts)
                     assertEquals(
                         "hello cat",
                         runBlocking {
@@ -127,12 +124,18 @@ class MessagingTest : BaseMessagingTest() {
                         "hello again cat"
                     )
 
-                    // now respond from cat
+                    // now reply from cat
+                    val mostRecentMsg = cat.db.list<Model.ShortMessageRecord>(
+                        Schema.PATH_MESSAGES.path("%"),
+                        count = 1,
+                        reverseSort = true
+                    ).first().value
                     sendAndVerifyReceived<Any>(
                         "cat can successfully respond to dog",
                         cat,
                         dog,
-                        "hi dog"
+                        "hi dog",
+                        replyToId = mostRecentMsg.id
                     )
 
                     dog.unregister()
@@ -162,9 +165,10 @@ class MessagingTest : BaseMessagingTest() {
         from: Messaging,
         to: Messaging,
         text: String,
+        replyToId: String? = null,
         afterSend: (suspend (msgRecord: Model.ShortMessageRecord) -> T)? = null
     ): T? {
-        return sendAndVerifyReceived(testCase, from, to.store, text)
+        return sendAndVerifyReceived(testCase, from, to.store, text, replyToId = replyToId)
     }
 
     private suspend fun <T> sendAndVerifyReceived(
@@ -172,9 +176,10 @@ class MessagingTest : BaseMessagingTest() {
         from: Messaging,
         to: MessagingStore,
         text: String,
+        replyToId: String? = null,
         afterSend: (suspend (msgRecord: Model.ShortMessageRecord) -> T)? = null
     ): T? {
-        return doSendAndVerify(testCase, from, to, text, true, afterSend)
+        return doSendAndVerify(testCase, from, to, text, true, replyToId, afterSend)
     }
 
     private suspend fun <T> sendAndVerifyDropped(
@@ -182,9 +187,10 @@ class MessagingTest : BaseMessagingTest() {
         from: Messaging,
         to: MessagingStore,
         text: String,
+        replyToId: String? = null,
         afterSend: (suspend (msgRecord: Model.ShortMessageRecord) -> T)? = null
     ): T? {
-        return doSendAndVerify(testCase, from, to, text, false, afterSend)
+        return doSendAndVerify(testCase, from, to, text, false, replyToId, afterSend)
     }
 
     private suspend fun <T> doSendAndVerify(
@@ -193,6 +199,7 @@ class MessagingTest : BaseMessagingTest() {
         to: MessagingStore,
         text: String,
         expectDelivery: Boolean,
+        replyToId: String? = null,
         afterSend: (suspend (msgRecord: Model.ShortMessageRecord) -> T)? = null
     ): T? {
         logger.debug("running case $testCase")
@@ -208,11 +215,21 @@ class MessagingTest : BaseMessagingTest() {
         }
 
         // send a message
-        val msgRecord = from.sendToDirectContact(toId, text)
+        val msgRecord = from.sendToDirectContact(
+            toId,
+            text,
+            replyToId = replyToId,
+            replyToSenderId = replyToId?.let { toId })
+        assertFalse(msgRecord.id.isNullOrBlank())
         assertEquals(Model.ShortMessageRecord.DeliveryStatus.SENDING, msgRecord.status, testCase)
-        assertEquals(Model.ShortMessageRecord.Direction.OUT, msgRecord.direction, testCase)
+        assertEquals(Model.MessageDirection.OUT, msgRecord.direction, testCase)
         assertEquals(fromId, msgRecord.senderId, testCase)
-        assertTrue(msgRecord.sent < nowUnixNano, testCase)
+        assertTrue(msgRecord.ts > 0, testCase)
+        assertTrue(msgRecord.ts < nowUnixNano, testCase)
+        if (replyToId != null) {
+            assertEquals(toId, msgRecord.replyToSenderId)
+            assertEquals(replyToId, msgRecord.replyToId)
+        }
         assertEquals(text, runBlocking {
             Model.ShortMessage.parseFrom(msgRecord.message).text
         }, testCase)
@@ -222,7 +239,8 @@ class MessagingTest : BaseMessagingTest() {
             from.db.get<Model.Contact>(toId.directContactPath)
         assertTrue(storedContact != null, testCase)
         assertEquals(toId, storedContact.id, testCase)
-        assertEquals(msgRecord.sent, storedContact.mostRecentMessageTime, testCase)
+        assertEquals(msgRecord.ts, storedContact.mostRecentMessageTs, testCase)
+        assertEquals(msgRecord.direction, storedContact.mostRecentMessageDirection, testCase)
         assertEquals(text, storedContact.mostRecentMessageText, testCase)
         assertEquals(
             1,
@@ -246,14 +264,21 @@ class MessagingTest : BaseMessagingTest() {
 
         // ensure that recipient has received the message
         val storedMsgRecord =
-            to.waitFor<Model.ShortMessageRecord>(msgRecord.dbPath) { it != null }
+            to.waitFor<Model.ShortMessageRecord>(msgRecord.timestampUnknownQuery) { it != null }
         if (!expectDelivery) {
             assertNull(storedMsgRecord, testCase)
         } else {
             assertTrue(storedMsgRecord != null, testCase)
-            assertEquals(Model.ShortMessageRecord.Direction.IN, storedMsgRecord.direction, testCase)
+            assertEquals(msgRecord.id, storedMsgRecord.id)
+            assertEquals(Model.MessageDirection.IN, storedMsgRecord.direction, testCase)
             assertEquals(fromId, storedMsgRecord.senderId, testCase)
-            assertEquals(msgRecord.sent, storedMsgRecord.sent, testCase)
+            assertTrue(msgRecord.ts < storedMsgRecord.ts, testCase)
+            assertEquals(Model.MessageDirection.IN, storedMsgRecord.direction)
+            if (replyToId != null) {
+                assertEquals(toId, storedMsgRecord.replyToSenderId)
+                assertEquals(replyToId, storedMsgRecord.replyToId)
+            }
+
             assertEquals(text, runBlocking {
                 Model.ShortMessage.parseFrom(storedMsgRecord.message).text
             }, testCase)
@@ -263,7 +288,12 @@ class MessagingTest : BaseMessagingTest() {
                 to.db.get(fromId.directContactPath)
             assertTrue(storedContact != null, testCase)
             assertEquals(fromId, storedContact.id, testCase)
-            assertEquals(msgRecord.sent, storedContact.mostRecentMessageTime, testCase)
+            assertEquals(storedMsgRecord.ts, storedContact.mostRecentMessageTs, testCase)
+            assertEquals(
+                storedMsgRecord.direction,
+                storedContact.mostRecentMessageDirection,
+                testCase
+            )
             assertEquals(text, storedContact.mostRecentMessageText, testCase)
             assertEquals(
                 1,
@@ -280,7 +310,7 @@ class MessagingTest : BaseMessagingTest() {
             // make sure that there's a link to the message in recipient's contact messages
             assertEquals(
                 storedMsgRecord.dbPath,
-                to.db.get(msgRecord.contactMessagePath(storedContact)),
+                to.db.get(storedMsgRecord.contactMessagePath(storedContact)),
                 testCase
             )
         }
@@ -324,7 +354,7 @@ internal suspend fun <T : Any> MessagingStore.waitFor(
     check: (T?) -> Boolean
 ): T? {
     return waitFor(duration.toLongMilliseconds()) {
-        val result: T? = this.db.get(path)
+        val result: T? = this.db.findOne(path)
         if (check(result)) result else null
     }
 }

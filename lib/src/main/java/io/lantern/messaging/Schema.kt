@@ -17,10 +17,13 @@ object Schema {
 }
 
 fun Model.ShortMessage.inbound(senderId: String): Model.ShortMessageRecord {
-    return Model.ShortMessageRecord.newBuilder().setSenderId(senderId).setId(id.base32)
-        .setSent(sent)
-        .setDirection(Model.ShortMessageRecord.Direction.IN)
-        .setMessage(toByteString()).build()
+    val builder = Model.ShortMessageRecord.newBuilder().setSenderId(senderId).setId(id.base32)
+        .setTs(nowUnixNano)
+        .setDirection(Model.MessageDirection.IN)
+        .setMessage(toByteString())
+    this.replyToSenderId?.let { builder.setReplyToSenderId(it.base32) }
+    this.replyToId?.let { builder.setReplyToId(it.base32) }
+    return builder.build()
 }
 
 val String.directContactPath: String
@@ -30,7 +33,10 @@ val String.groupContactPath: String
     get() = Schema.PATH_CONTACTS.path(Schema.CONTACT_GROUP_PREFIX, this)
 
 val Model.ShortMessageRecord.dbPath: String
-    get() = Schema.PATH_MESSAGES.path(sent, senderId, id)
+    get() = Schema.PATH_MESSAGES.path(ts, senderId, id)
+
+val Model.ShortMessageRecord.timestampUnknownQuery: String
+    get() = Schema.PATH_MESSAGES.path("%", senderId, id)
 
 val Model.OutgoingShortMessage.Builder.shortMessagePath: String
     get() = Schema.PATH_MESSAGES.path(sent, senderId, id)
@@ -39,7 +45,7 @@ val Model.OutgoingShortMessage.Builder.dbPath: String
     get() = Schema.PATH_OUTBOUND.path(sent, id)
 
 val Model.ShortMessageRecord.outboundPath: String
-    get() = Schema.PATH_OUTBOUND.path(sent, id)
+    get() = Schema.PATH_OUTBOUND.path(ts, id)
 
 val Model.Contact.pathSegment: String
     get() = if (type == Model.Contact.Type.DIRECT) Schema.CONTACT_DIRECT_PREFIX.path(id) else Schema.CONTACT_GROUP_PREFIX.path(
@@ -47,12 +53,12 @@ val Model.Contact.pathSegment: String
     )
 
 val Model.Contact.timestampedIdxPath: String
-    get() = Schema.PATH_CONTACTS_BY_ACTIVITY.path(mostRecentMessageTime, pathSegment)
+    get() = Schema.PATH_CONTACTS_BY_ACTIVITY.path(mostRecentMessageTs, pathSegment)
 
 fun Model.ShortMessageRecord.contactMessagePath(contact: Model.Contact): String =
     Schema.PATH_CONTACT_MESSAGES.path(
         contact.pathSegment,
-        sent,
+        ts,
         senderId,
         id
     )
@@ -60,6 +66,8 @@ fun Model.ShortMessageRecord.contactMessagePath(contact: Model.Contact): String 
 val ByteArray.base32: String get() = Base32.humanFriendly.encodeToString(this)
 
 val ByteString.base32: String get() = Base32.humanFriendly.encodeToString(toByteArray())
+
+val String.fromBase32: ByteArray get() = Base32.humanFriendly.decodeFromString(this)
 
 fun String.path(vararg elements: Any): String {
     val builder = StringBuilder(this)

@@ -117,38 +117,52 @@ class Messaging(
     fun sendToDirectContact(
         recipientId: String,
         text: String?,
-        oggVoice: ByteArray? = null
+        oggVoice: ByteArray? = null,
+        replyToSenderId: String? = null,
+        replyToId: String? = null
     ): Model.ShortMessageRecord {
-        if (text == null && oggVoice == null) {
+        if (text.isNullOrBlank() && oggVoice == null) {
             throw IllegalArgumentException("Please specify either text or oggVoice")
         } else if (text != null && oggVoice != null) {
             throw IllegalArgumentException("Please specify either text or oggVoice but not both")
+        } else if ((!replyToSenderId.isNullOrBlank() || !replyToId.isNullOrBlank()) && (replyToSenderId.isNullOrBlank() || replyToId.isNullOrBlank())) {
+            throw IllegalArgumentException("If specifying either replyToSenderId and replyToId, please specify both")
         }
-        val shortMessageBuilder = Model.ShortMessage.newBuilder().setId(randomMessageId).setSent(
-            nowUnixNano
-        )
+        val shortMessageBuilder = Model.ShortMessage.newBuilder().setId(randomMessageId)
+        replyToSenderId?.let { shortMessageBuilder.setReplyToSenderId(it.fromBase32.byteString()) }
+        replyToId?.let { shortMessageBuilder.setReplyToId(it.fromBase32.byteString()) }
         if (text != null) {
             shortMessageBuilder.text = text
         } else {
             shortMessageBuilder.oggVoice = oggVoice?.byteString()
         }
+        val sent = nowUnixNano
         val msg = shortMessageBuilder.build()
         val out =
             Model.OutgoingShortMessage.newBuilder().setId(msg.id.base32)
-                .setSent(msg.sent)
+                .setSent(sent)
                 .setSenderId(store.identityKeyPair.publicKey.toString())
                 .setRecipientId(recipientId)
-        val msgRecord =
+        val msgRecordBuilder =
             Model.ShortMessageRecord.newBuilder()
                 .setSenderId(store.identityKeyPair.publicKey.toString()).setId(msg.id.base32)
-                .setSent(msg.sent)
-                .setMessage(msg.toByteString()).setDirection(Model.ShortMessageRecord.Direction.OUT)
-                .setStatus(Model.ShortMessageRecord.DeliveryStatus.SENDING).build()
+                .setTs(sent)
+                .setMessage(msg.toByteString()).setDirection(Model.MessageDirection.OUT)
+                .setStatus(Model.ShortMessageRecord.DeliveryStatus.SENDING)
+        replyToSenderId?.let { msgRecordBuilder.setReplyToSenderId(it) }
+        replyToId?.let { msgRecordBuilder.setReplyToId(it) }
+        val msgRecord = msgRecordBuilder.build()
         db.mutate { tx ->
             // save the message in a list of all messages
             tx.put(msgRecord.dbPath, msgRecord)
             // update the relevant contact
-            val contact = updateDirectContactMetaData(tx, recipientId, msg.sent, msg.text)
+            val contact = updateDirectContactMetaData(
+                tx,
+                recipientId,
+                sent,
+                Model.MessageDirection.OUT,
+                msg.text
+            )
             // save the message under the relevant contact messages
             tx.put(msgRecord.contactMessagePath(contact), msgRecord.dbPath)
             // enqueue the outgoing message in the db for sending (actual send happens in the
@@ -162,20 +176,22 @@ class Messaging(
     internal fun updateDirectContactMetaData(
         tx: Transaction,
         identityKey: String,
-        messageTime: Long = 0,
+        messageTs: Long = 0,
+        messageDirection: Model.MessageDirection,
         messageText: String = ""
     ): Model.Contact {
         val contactPath = identityKey.directContactPath
         val contact = tx.get<Model.Contact>(contactPath)
             ?: throw IllegalArgumentException("unknown direct contact")
-        if (messageTime <= contact.mostRecentMessageTime) {
+        if (messageTs <= contact.mostRecentMessageTs) {
             return contact
         }
         // delete existing index entry
         tx.delete(contact.timestampedIdxPath)
         // update the contact
-        val updatedContact = contact.toBuilder().setMostRecentMessageTime(messageTime)
-            .setMostRecentMessageText(messageText).build()
+        val updatedContact = contact.toBuilder().setMostRecentMessageTs(messageTs)
+            .setMostRecentMessageDirection(messageDirection).setMostRecentMessageText(messageText)
+            .build()
         tx.put(contactPath, updatedContact)
         // create a new index entry
         tx.put(updatedContact.timestampedIdxPath, contactPath)
@@ -215,10 +231,11 @@ class Messaging(
 val randomMessageId: ByteString
     get() {
         val uuid = UUID.randomUUID()
-        val bb = ByteBuffer.wrap(ByteArray(16))
+        val bytes = ByteArray(16)
+        val bb = ByteBuffer.wrap(bytes)
         bb.putLong(uuid.mostSignificantBits)
         bb.putLong(uuid.leastSignificantBits)
-        return ByteString.copyFrom(bb)
+        return ByteString.copyFrom(bytes)
     }
 
 val nowUnixNano: Long

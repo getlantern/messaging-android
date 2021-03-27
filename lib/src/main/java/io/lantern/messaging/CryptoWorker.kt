@@ -161,7 +161,7 @@ internal class CryptoWorker(
                             // re-read message to make sure we're updating the latest
                             tx.get<Model.OutgoingShortMessage>(out.dbPath)?.let {
                                 val completelySent =
-                                    it.subDeliveryStatusesMap.count { (deviceId, status) -> status != Model.OutgoingShortMessage.SubDeliveryStatus.SENT } == 1
+                                    it.subDeliveryStatusesMap.count { (_, status) -> status != Model.OutgoingShortMessage.SubDeliveryStatus.SENT } == 1
                                 if (completelySent) {
                                     // we're done
                                     tx.delete(out.dbPath)
@@ -222,7 +222,13 @@ internal class CryptoWorker(
             // save the message record itself
             tx.put(msgRecord.dbPath, msgRecord)
             // update the Contact metadata
-            val contact = messaging.updateDirectContactMetaData(tx, senderId, msg.sent, msg.text)
+            val contact = messaging.updateDirectContactMetaData(
+                tx,
+                senderId,
+                msgRecord.ts,
+                Model.MessageDirection.IN,
+                msg.text
+            )
             // save a pointer to the message under the contact message path
             tx.put(msgRecord.contactMessagePath(contact), msgRecord.dbPath)
         }
