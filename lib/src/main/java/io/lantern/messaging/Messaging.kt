@@ -7,6 +7,7 @@ import io.lantern.messaging.store.MessagingStore
 import io.lantern.messaging.tassis.Callback
 import io.lantern.messaging.tassis.TransportFactory
 import io.lantern.messaging.tassis.byteString
+import io.lantern.messaging.time.hoursToMillis
 import io.lantern.messaging.time.millisToNanos
 import io.lantern.messaging.time.minutesToMillis
 import io.lantern.messaging.time.secondsToMillis
@@ -26,7 +27,7 @@ class Messaging(
     redialBackoffMillis: Long = 500L,
     maxRedialDelayMillis: Long = 15L.secondsToMillis,
     failedSendRetryDelayMillis: Long = 5L.secondsToMillis,
-    stopSendRetryAfterMillis: Long = 10L.minutesToMillis,
+    stopSendRetryAfterMillis: Long = 24L.hoursToMillis,
     numInitialPreKeysToRegister: Int = 5,
     internal val name: String = "messaging",
 ) : Closeable {

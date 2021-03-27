@@ -76,11 +76,11 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
         submit {
             logger.error("error connecting client: ${err.message}")
             consecutiveFailures++
-            // re-enqueue pending callbacks
-            logger.debug("rescheduling ${cbsAfterConnect.size} pending callbacks")
-            cbsAfterConnect.forEach { withClient(it) }
-            cbsAfterConnect.clear()
             currentlyConnecting = false
+            // note - we leave the cbsAfterConnect in place so that they have a chance to be run
+            withClient {
+                // this is simply invoked to force an attempt at reconnecting
+            }
         }
     }
 
@@ -91,13 +91,11 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
             } else {
                 logger.debug("closed normally")
             }
-            if (!currentlyConnecting) {
-                // only clear client if we're not currently still in the process of connecting
-                // otherwise, we expect that onConnectError will be called, at which point
-                // we'll clear the connection
-                client = null
-                autoConnectIfNecessary()
-            }
+            // only clear client if we're not currently still in the process of connecting
+            // otherwise, we expect that onConnectError will be called, at which point
+            // we'll clear the connection
+            client = null
+            autoConnectIfNecessary()
         }
     }
 

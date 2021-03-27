@@ -13,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 internal val logger = KotlinLogging.logger {}
@@ -123,7 +124,8 @@ interface ClientDelegate {
 
     /**
      * Called when a client closes. If the client closed due to an exception, err will be populated
-     * with the relevant exception.
+     * with the relevant exception. If the client closed while we were still in the process of
+     * connecting, the delegate will only receive a call to onConnectError.
      */
     fun onClose(err: Throwable? = null)
 }
@@ -170,6 +172,7 @@ abstract class Client<D : ClientDelegate>(
     private lateinit var transport: Transport
     private val msgSequence = AtomicInteger(1)
     protected val pending = ConcurrentHashMap<Int, Callback<Any?>>()
+    protected val isConnecting = AtomicBoolean(true)
     private val timeoutChecker = Executors.newSingleThreadScheduledExecutor {
         Thread(it, "client-timeout-checker")
     }
@@ -228,12 +231,18 @@ abstract class Client<D : ClientDelegate>(
     }
 
     override fun onClose(err: Throwable?) {
-        timeoutChecker.shutdown()
-        delegate.onClose(err)
+        timeoutChecker.shutdown() // TODO: move timeoutChecker to a companion object
         val finalErr = err ?: ClientClosedException()
+        if (isConnecting.compareAndSet(true, false)) {
+            logger.debug("client closed while still connecting, treat like connect error")
+            delegate.onConnectError(finalErr)
+        } else {
+            delegate.onClose(err)
+        }
         pending.values.forEach {
             it.onError(finalErr)
         }
+        pending.clear()
     }
 }
 
@@ -297,7 +306,9 @@ class AuthenticatedClient(
             send(authResponse, object : Callback<Messages.Ack> {
                 override fun onSuccess(result: Messages.Ack) {
                     logger.debug("successfully logged in")
-                    delegate.onConnected(this@AuthenticatedClient)
+                    if (isConnecting.compareAndSet(true, false)) {
+                        delegate.onConnected(this@AuthenticatedClient)
+                    }
                 }
 
                 override fun onError(err: Throwable) {
@@ -364,7 +375,11 @@ class AnonymousClient(
     override fun onMessage(data: ByteBuffer?) {
         val msg = Messages.Message.parseFrom(data)
         when (msg.payloadCase) {
-            Messages.Message.PayloadCase.AUTHCHALLENGE -> delegate.onConnected(this)
+            Messages.Message.PayloadCase.AUTHCHALLENGE -> {
+                if (isConnecting.compareAndSet(true, false)) {
+                    delegate.onConnected(this)
+                }
+            }
             Messages.Message.PayloadCase.PREKEYS -> pending.remove(msg.sequence)
                 ?.onSuccess(msg.preKeys)
             else -> super.onMessage(msg)

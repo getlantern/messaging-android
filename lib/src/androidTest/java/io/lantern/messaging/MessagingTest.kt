@@ -6,6 +6,7 @@ import io.lantern.messaging.tassis.MessageHandler
 import io.lantern.messaging.tassis.websocket.WebSocketTransport
 import io.lantern.messaging.tassis.websocket.WebSocketTransportFactory
 import io.lantern.messaging.time.millisToSeconds
+import io.lantern.messaging.time.minutesToMillis
 import io.lantern.messaging.time.secondsToMillis
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.delay
@@ -13,6 +14,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import mu.KotlinLogging
 import org.junit.Test
+import org.whispersystems.libsignal.util.KeyHelper
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.*
 import kotlin.time.Duration
@@ -146,6 +148,39 @@ class MessagingTest : BaseMessagingTest() {
 
         }
         logger.debug("finished runBlocking")
+    }
+
+    @Test
+    fun testDeliveryStatus() {
+        testInCoroutine {
+            newMessaging("cat").with { cat ->
+                newMessaging("dog", stopSendRetryAfterMillis = 5000).with { dog ->
+                    val catId = cat.store.identityKeyPair.publicKey.toString()
+                    val dogId = dog.store.identityKeyPair.publicKey.toString()
+                    val fakeId = KeyHelper.generateIdentityKeyPair().publicKey.toString()
+
+                    cat.addOrUpdateDirectContact(dogId, "Dog")
+                    dog.addOrUpdateDirectContact(catId, "Cat")
+                    dog.addOrUpdateDirectContact(fakeId, "Fake")
+
+                    val msg1 = dog.sendToDirectContact(catId, "hi cat")
+                    assertNotNull(dog.waitFor<Model.ShortMessageRecord>(msg1.dbPath) {
+                        it?.status == Model.ShortMessageRecord.DeliveryStatus.COMPLETELY_SENT
+                    }, "sending to real recipient should have succeeded")
+
+                    val msg2 = dog.sendToDirectContact(fakeId, "hi fake one")
+                    assertNotNull(dog.waitFor<Model.ShortMessageRecord>(msg2.dbPath) {
+                        it?.status == Model.ShortMessageRecord.DeliveryStatus.COMPLETELY_FAILED
+                    }, "sending to fake recipient should have failed")
+
+                    assertEquals(
+                        0,
+                        dog.db.list<Any>(Schema.PATH_OUTBOUND.path("%")).size,
+                        "there should be no queued outbound messages once deliveries have succeeded and failed"
+                    )
+                }
+            }
+        }
     }
 
     private fun testInCoroutine(fn: suspend () -> Unit) {
@@ -321,6 +356,7 @@ class MessagingTest : BaseMessagingTest() {
         name: String,
         clientTimeoutMillis: Long = 5L.secondsToMillis,
         failedSendRetryDelayMillis: Long = 100,
+        stopSendRetryAfterMillis: Long = 5L.minutesToMillis,
         store: MessagingStore? = null
     ): Messaging {
         return Messaging(
@@ -333,6 +369,7 @@ class MessagingTest : BaseMessagingTest() {
             redialBackoffMillis = 50L,
             maxRedialDelayMillis = 500L,
             failedSendRetryDelayMillis = failedSendRetryDelayMillis,
+            stopSendRetryAfterMillis = stopSendRetryAfterMillis,
             name = name
         )
     }
@@ -403,7 +440,7 @@ internal class BrokenTransportFactory(url: String, connectionLostTimeoutSeconds:
         connectionLostTimeoutSeconds: Int
     ): WebSocketTransport {
         val transport = BrokenTransport(
-            url,
+            if (succeedDialing.get()) url else "wss://unknownbaddomain.lantern.io", // use a bad url to mimic a dial failure
             handler,
             connectTimeoutMillis,
             connectionLostTimeoutSeconds
@@ -441,14 +478,6 @@ internal class BrokenTransport(
     connectTimeoutMillis: Int,
     connectionLostTimeoutSeconds: Int
 ) : WebSocketTransport(url, handler, connectTimeoutMillis, connectionLostTimeoutSeconds) {
-    override fun connect() {
-        if (!BrokenTransportFactory.succeedDialing.get()) {
-            BrokenTransportFactory.removeTransport(this)
-            throw RuntimeException("closed cause I'm bad")
-        }
-        super.connect()
-    }
-
     override fun send(data: ByteArray) {
         if (BrokenTransportFactory.ignoreSends.get()) {
             return

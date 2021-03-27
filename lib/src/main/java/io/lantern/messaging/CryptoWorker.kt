@@ -34,6 +34,22 @@ internal class CryptoWorker(
             this.recipientId
         )
 
+    private fun Model.OutgoingShortMessage.Builder.deleteFailed() {
+        logger.debug("deleting failed message")
+        db.mutate { tx ->
+            tx.delete(this.dbPath)
+            val finalStatus =
+                if (this.subDeliveryStatusesMap.count { it.value == Model.OutgoingShortMessage.SubDeliveryStatus.SENT } > 0)
+                    Model.ShortMessageRecord.DeliveryStatus.PARTIALLY_FAILED else Model.ShortMessageRecord.DeliveryStatus.COMPLETELY_FAILED
+            val shortMessagePath = this.shortMessagePath
+            tx.put(
+                shortMessagePath,
+                tx.get<Model.ShortMessageRecord>(shortMessagePath)?.toBuilder()
+                    ?.setStatus(finalStatus)?.build()
+            )
+        }
+    }
+
     init {
         db.list<Model.OutgoingShortMessage>(Schema.PATH_OUTBOUND.path("%")).forEach {
             submit { processOutgoing(it.value.toBuilder()) }
@@ -42,10 +58,7 @@ internal class CryptoWorker(
 
     fun processOutgoing(out: Model.OutgoingShortMessage.Builder) {
         if (out.expired) {
-            logger.debug("deleting expired message")
-            db.mutate { tx ->
-                tx.delete(out.dbPath)
-            }
+            out.deleteFailed()
             return
         }
 
@@ -137,6 +150,11 @@ internal class CryptoWorker(
         deviceId: String,
         msg: ByteString
     ) {
+        if (out.expired) {
+            out.deleteFailed()
+            return
+        }
+
         val transferMsg =
             Model.TransferMessage.newBuilder()
                 .setShortMessage(msg).build()

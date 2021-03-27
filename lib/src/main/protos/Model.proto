@@ -42,8 +42,10 @@ message ShortMessage {
 message ShortMessageRecord {
   enum DeliveryStatus {
     SENDING = 0; // message is currently in the process of sending but hasn't successfully finished yet
-    PARTIALLY_SENT = 1; // message failed to send to a subset of recipients, will not retry
-    COMPLETELY_SENT = 2; // message has been successfully sent
+    PARTIALLY_SENT = 1; // message has been successfully sent to some of the recipients, will retry other recipients
+    COMPLETELY_SENT = 2; // message has been successfully sent to all recipients
+    PARTIALLY_FAILED = 3; // message failed to send to a subset of recipients, will not retry
+    COMPLETELY_FAILED = 4; // message failed to send to any recipients, will not retry
   }
 
   string senderId = 1; // the id of who sent this message
