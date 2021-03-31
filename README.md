@@ -24,3 +24,7 @@ A record of all messages for a given Contact, by the sent timestamp of the messa
 A queue of outbound messages that are pending send. If sending to some recipients fails, messages
 will be re-queued here for a limited period of time until they either send successfully or time
 runs out.
+
+## Included Signal Code
+The included Signal code (like AttachmentCipherInputStream) comes from https://github.com/signalapp/Signal-Android,
+ not from https://github.com/signalapp/libsignal-service-java
