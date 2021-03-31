@@ -333,7 +333,7 @@ class AnonymousClient(
     roundTripTimeoutMillis: Long
 ) :
     Client<AnonymousClientDelegate>(delegate, roundTripTimeoutMillis) {
-    fun retrievePreKeys(
+    fun requestPreKeys(
         identityKey: ECPublicKey,
         knownDeviceIds: List<DeviceId>,
         cb: Callback<List<Messages.PreKey>>

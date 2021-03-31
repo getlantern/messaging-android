@@ -131,22 +131,43 @@ message OutboundMessage {
   bytes   unidentifiedSenderMessage = 2;  // A sealed sender message (opaque to tassis). This is what will be delivered to the recipient.
 }
 
+// Requests attachment upload authorizations.
+message RequestUploadAuthorizations {
+  int32 numRequested = 1; // the number of authorizations requested. The server may not return the number requested.
+}
+
+// Provides authorization to upload an attachment to cloud storage
+message UploadAuthorization {
+  string              uploadURL              = 1; // The URL to which to upload
+  map<string, string> uploadFormData         = 2; // This form data needs to be included with the upload in order to authorize it
+  int64               authorizationExpiresAt = 3; // The unix timestamp in nanoseconds when this authorization expires and can no longer be used
+  int64               maxUploadSize          = 4; // The maxmimum number of bytes that are allowed to be uploaded
+  string              downloadURL            = 5; // The URL from which the attachment may be downloaded once it has been uploaded
+}
+
+// Multiple UploadAuthorizations
+message UploadAuthorizations {
+  repeated UploadAuthorization authorizations = 1;
+}
+
 // The envelope for all messages sent to/from clients.
 message Message {
   uint32 sequence = 1; // the message sequence, either a unique number for request messages or the number of the request message to which a response message corresponds
 
   oneof payload {
-    Ack             ack             =  2;
-    Error           error           =  3;
-    AuthChallenge   authChallenge   =  4;
-    AuthResponse    authResponse    =  5;
-    Register        register        =  6;
-    Unregister      unregister      =  7;
-    RequestPreKeys  requestPreKeys  =  8;
-    PreKeys         preKeys         =  9;
-    PreKeysLow      preKeysLow      = 10;
-    OutboundMessage outboundMessage = 11;
-    bytes           inboundMessage  = 12;
+    Ack                         ack                         =  2;
+    Error                       error                       =  3;
+    AuthChallenge               authChallenge               =  4;
+    AuthResponse                authResponse                =  5;
+    Register                    register                    =  6;
+    Unregister                  unregister                  =  7;
+    RequestPreKeys              requestPreKeys              =  8;
+    PreKeys                     preKeys                     =  9;
+    PreKeysLow                  preKeysLow                  = 10;
+    RequestUploadAuthorizations requestUploadAuthorizations = 11;
+    UploadAuthorizations        uploadAuthorizations        = 12;
+    OutboundMessage             outboundMessage             = 13;
+    bytes                       inboundMessage              = 14;
   }
 }
 

@@ -98,7 +98,7 @@ internal class CryptoWorker(
         logger.debug("retrieving pre keys")
         val recipientIdentityKey = out.recipientIdentityKey
         messaging.anonymousClientWorker.withClient { client ->
-            client.retrievePreKeys(
+            client.requestPreKeys(
                 recipientIdentityKey,
                 emptyList(),
                 object : Callback<List<Messages.PreKey>> {
