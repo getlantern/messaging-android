@@ -149,7 +149,7 @@ class MessagingTest : BaseMessagingTest() {
                                     "new attachment for cat".toByteArray(
                                         Charset.defaultCharset()
                                     )
-                                )
+                                ), mapOf("mymetadata" to "metadatavalue")
                             )
                         )
                     )
@@ -360,7 +360,9 @@ class MessagingTest : BaseMessagingTest() {
         if (attachments != null) {
             assertEquals(attachments.size, storedMsg.attachmentsCount)
             attachments.forEach { attachment ->
-                assertNotNull(storedMsg.attachmentsMap.values.find { it.guid == attachment.guid })
+                val storedAttachment = storedMsg.attachmentsMap.values.find { it.guid == attachment.guid }
+                assertNotNull(storedAttachment)
+                assertEquals(attachment.attachment.metadataMap, storedAttachment.attachment.metadataMap)
                 assertEquals(
                     File(attachment.filePath).length(),
                     AttachmentCipherOutputStream.getCiphertextLength(attachment.attachment.plaintextLength)
@@ -429,6 +431,8 @@ class MessagingTest : BaseMessagingTest() {
                     }
                 assertNotNull(storedMsgWithDownloadedAttachments, testCase)
                 storedMsgWithDownloadedAttachments.attachmentsMap.forEach { (id, attachment) ->
+                    // make sure metadata matches expected
+                    assertEquals(attachments[id].attachment.metadataMap, attachment.attachment.metadataMap)
                     // make sure decrypted content matches expected
                     assertTrue(
                         Util.streamsEqual(

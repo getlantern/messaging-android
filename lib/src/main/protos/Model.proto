@@ -32,7 +32,8 @@ message Attachment {
   bytes keyMaterial = 2; // 64 bytes of key material (32 bytes for AES256 encryption, 32 bytes for HmacSHA256 authentication)
   bytes digest = 3; // secure digest of the attachment
   int64 plaintextLength = 4; // the content length of the plain text
-  string downloadUrl = 5; // the URL from which the encrypted attachment can be downloaded
+  map<string, string> metadata = 5;
+  string downloadUrl = 6; // the URL from which the encrypted attachment can be downloaded
 }
 
 // A locally stored Attachment

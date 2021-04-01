@@ -196,8 +196,12 @@ class Messaging(
     }
 
     // Creates a StoredAttachment from the given File
-    fun createAttachment(mimeType: String, file: File): Model.StoredAttachment =
-        createAttachment(mimeType, file.length(), FileInputStream(file))
+    fun createAttachment(
+        mimeType: String,
+        file: File,
+        metadata: Map<String, String>? = null,
+    ): Model.StoredAttachment =
+        createAttachment(mimeType, file.length(), FileInputStream(file), metadata)
 
     /**
      * Creates a StoredAttachment from the data read from the given InputStream.
@@ -205,7 +209,8 @@ class Messaging(
     fun createAttachment(
         mimeType: String,
         length: Long,
-        input: InputStream
+        input: InputStream,
+        metadata: Map<String, String>? = null,
     ): Model.StoredAttachment {
         input.use {
             val maxLength = cfg.get().maxAttachmentSize
@@ -222,11 +227,12 @@ class Messaging(
                     FileOutputStream(storedAttachment.filePath)
                 )
             val plaintextLength = Util.copy(input, output)
-            val attachment = Model.Attachment.newBuilder().setMimeType(mimeType)
+            val attachmentBuilder = Model.Attachment.newBuilder().setMimeType(mimeType)
                 .setKeyMaterial(keyMaterial.byteString())
                 .setPlaintextLength(plaintextLength)
-                .setDigest(output.transmittedDigest.byteString()).build()
-            return storedAttachment.setAttachment(attachment).build()
+                .setDigest(output.transmittedDigest.byteString())
+            metadata?.let { attachmentBuilder.putAllMetadata(it) }
+            return storedAttachment.setAttachment(attachmentBuilder.build()).build()
         }
     }
 
