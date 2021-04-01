@@ -24,6 +24,8 @@ import javax.crypto.spec.SecretKeySpec;
 
 public class AttachmentCipherOutputStream extends DigestingOutputStream {
 
+  public static final long MAXIMUM_ENCRYPTION_OVERHEAD = 64;
+
   private final Cipher cipher;
   private final Mac    mac;
 

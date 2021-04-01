@@ -2,6 +2,7 @@ package io.lantern.messaging
 
 import io.lantern.messaging.tassis.AnonymousClient
 import io.lantern.messaging.tassis.AnonymousClientDelegate
+import io.lantern.messaging.tassis.Messages
 import io.lantern.messaging.tassis.TransportFactory
 
 internal class AnonymousClientWorker(
@@ -19,5 +20,9 @@ internal class AnonymousClientWorker(
 ), AnonymousClientDelegate {
     override fun buildClient(): AnonymousClient {
         return AnonymousClient(this, roundTripTimeoutMillis)
+    }
+
+    override fun onConfigUpdate(cfg: Messages.Configuration) {
+        messaging.updateConfig(cfg)
     }
 }

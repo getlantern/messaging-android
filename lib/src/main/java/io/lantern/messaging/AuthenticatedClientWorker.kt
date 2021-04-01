@@ -1,9 +1,6 @@
 package io.lantern.messaging
 
-import io.lantern.messaging.tassis.AuthenticatedClient
-import io.lantern.messaging.tassis.AuthenticatedClientDelegate
-import io.lantern.messaging.tassis.InboundMessage
-import io.lantern.messaging.tassis.TransportFactory
+import io.lantern.messaging.tassis.*
 import org.whispersystems.libsignal.ecc.Curve
 
 internal class AuthenticatedClientWorker(
@@ -38,5 +35,9 @@ internal class AuthenticatedClientWorker(
 
     override fun onInboundMessage(msg: InboundMessage) {
         messaging.cryptoWorker.decryptAndStore(msg)
+    }
+
+    override fun onConfigUpdate(cfg: Messages.Configuration) {
+        messaging.updateConfig(cfg)
     }
 }

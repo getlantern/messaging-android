@@ -6,6 +6,7 @@ import org.whispersystems.libsignal.ecc.ECPublicKey
 import org.whispersystems.libsignal.util.Base32
 
 object Schema {
+    const val PATH_CONFIG = "/cfg"
     const val PATH_OUTBOUND = "/o"
     const val PATH_INBOUND_ATTACHMENTS = "/ia"
     const val PATH_ME = "/me"

@@ -5,6 +5,7 @@ import io.lantern.db.DB
 import io.lantern.db.Transaction
 import io.lantern.messaging.store.MessagingStore
 import io.lantern.messaging.tassis.Callback
+import io.lantern.messaging.tassis.Messages
 import io.lantern.messaging.tassis.TransportFactory
 import io.lantern.messaging.tassis.byteString
 import io.lantern.messaging.time.hoursToMillis
@@ -15,16 +16,16 @@ import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherInputStream
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
 import org.whispersystems.signalservice.internal.util.Util
-import java.io.Closeable
-import java.io.File
-import java.io.FileOutputStream
-import java.io.InputStream
+import java.io.*
 import java.nio.ByteBuffer
 import java.security.SecureRandom
 import java.util.*
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 class UnknownSenderException : Exception("Unknown sender")
+
+class AttachmentTooBigException(val maxAttachmentBytes: Long) : Exception("Attachment Too Big")
 
 class Messaging(
     private val attachmentsDirectory: File,
@@ -37,22 +38,37 @@ class Messaging(
     stopSendRetryAfterMillis: Long = 24L.hoursToMillis,
     numInitialPreKeysToRegister: Int = 5,
     internal val name: String = "messaging",
+    defaultConfiguration: Messages.Configuration = Messages.Configuration.newBuilder()
+        .setMaxAttachmentSize(100000000).build()
 ) : Closeable {
     internal val logger = KotlinLogging.logger(name)
 
+    val db: DB get() = store.db
+
     init {
-        // Need to register types before starting crypto worker or doing anything else that accesses
-        // database
+        // register protocol buffer types before starting crypto worker or doing anything else that
+        // accesses the database
+        db.registerType(20, Messages.Configuration::class.java)
         db.registerType(21, Model.Contact::class.java)
         db.registerType(22, Model.StoredMessage::class.java)
         db.registerType(23, Model.OutboundMessage::class.java)
         db.registerType(24, Model.InboundAttachment::class.java)
     }
 
+    private val cfg = AtomicReference<Messages.Configuration>()
+
+    init {
+        // initialize configuration
+        db.mutate { tx ->
+            val latestCfg =
+                db.get<Messages.Configuration>(Schema.PATH_CONFIG) ?: defaultConfiguration
+            cfg.set(latestCfg)
+            tx.put(Schema.PATH_CONFIG, latestCfg)
+        }
+    }
+
     internal val identityKeyPair = store.identityKeyPair
     internal val deviceId: DeviceId = store.deviceId
-
-    val db: DB get() = store.db
 
     // All processing that involves crypto operations happens on this executor to keep the
     // SignalProtocolStore in a consistent state
@@ -179,21 +195,39 @@ class Messaging(
         return msg
     }
 
+    // Creates a StoredAttachment from the given File
+    fun createAttachment(mimeType: String, file: File): Model.StoredAttachment =
+        createAttachment(mimeType, file.length(), FileInputStream(file))
+
     /**
      * Creates a StoredAttachment from the data read from the given InputStream.
      */
-    fun createAttachment(mimeType: String, input: InputStream): Model.StoredAttachment {
-        val storedAttachment = newStoredAttachment
-        val keyMaterial = ByteArray(64)
-        SecureRandom().nextBytes(keyMaterial)
-        val output =
-            AttachmentCipherOutputStream(keyMaterial, FileOutputStream(storedAttachment.filePath))
-        val plaintextLength = Util.copy(input, output)
-        val attachment = Model.Attachment.newBuilder().setMimeType(mimeType)
-            .setKeyMaterial(keyMaterial.byteString())
-            .setPlaintextLength(plaintextLength)
-            .setDigest(output.transmittedDigest.byteString()).build()
-        return storedAttachment.setAttachment(attachment).build()
+    fun createAttachment(
+        mimeType: String,
+        length: Long,
+        input: InputStream
+    ): Model.StoredAttachment {
+        input.use {
+            val maxLength = cfg.get().maxAttachmentSize
+            if (AttachmentCipherOutputStream.getCiphertextLength(length) > maxLength) {
+                throw AttachmentTooBigException(maxLength - AttachmentCipherOutputStream.MAXIMUM_ENCRYPTION_OVERHEAD)
+            }
+
+            val storedAttachment = newStoredAttachment
+            val keyMaterial = ByteArray(64)
+            SecureRandom().nextBytes(keyMaterial)
+            val output =
+                AttachmentCipherOutputStream(
+                    keyMaterial,
+                    FileOutputStream(storedAttachment.filePath)
+                )
+            val plaintextLength = Util.copy(input, output)
+            val attachment = Model.Attachment.newBuilder().setMimeType(mimeType)
+                .setKeyMaterial(keyMaterial.byteString())
+                .setPlaintextLength(plaintextLength)
+                .setDigest(output.transmittedDigest.byteString()).build()
+            return storedAttachment.setAttachment(attachment).build()
+        }
     }
 
     internal val newStoredAttachment: Model.StoredAttachment.Builder
@@ -253,6 +287,13 @@ class Messaging(
                     logger.error("failed to unregister: ${err.message}", err)
                 }
             })
+        }
+    }
+
+    internal fun updateConfig(newCfg: Messages.Configuration) {
+        db.mutate { tx ->
+            tx.put(Schema.PATH_CONFIG, newCfg)
+            this.cfg.set(newCfg)
         }
     }
 

@@ -53,6 +53,15 @@ class MessagingTest : BaseMessagingTest() {
                     dog.store.db.get<Model.Contact>(Schema.PATH_ME)?.displayName
                 )
 
+                // try to create an overly large attachment and make sure it fails
+                try {
+                    dog.createAttachment("application/octet-stream", Long.MAX_VALUE - AttachmentCipherOutputStream.MAXIMUM_ENCRYPTION_OVERHEAD, ByteArrayInputStream(ByteArray(0)))
+                    fail("creating a giant attachment shouldn't be allowed")
+                } catch (e: AttachmentTooBigException) {
+                    assertTrue(e.maxAttachmentBytes > 0)
+                    assertTrue(e.maxAttachmentBytes < Long.MAX_VALUE)
+                }
+
                 // first add Cat as a contact
                 dog.addOrUpdateDirectContact(catId, "Cat")
                 // ensure that we immediately have a Contact
@@ -71,7 +80,7 @@ class MessagingTest : BaseMessagingTest() {
                     "hello cat",
                     attachments = arrayOf(
                         dog.createAttachment(
-                            "text/plain", ByteArrayInputStream(
+                            "text/plain", "attachment for cat".length.toLong(), ByteArrayInputStream(
                                 "attachment for cat".toByteArray(
                                     Charset.defaultCharset()
                                 )
@@ -136,7 +145,7 @@ class MessagingTest : BaseMessagingTest() {
                         text = "hello again cat",
                         attachments = arrayOf(
                             dog.createAttachment(
-                                "text/plain", ByteArrayInputStream(
+                                "text/plain", "new attachment for cat".length.toLong(), ByteArrayInputStream(
                                     "new attachment for cat".toByteArray(
                                         Charset.defaultCharset()
                                     )

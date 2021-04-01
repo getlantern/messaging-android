@@ -60,6 +60,11 @@ message Address {
   bytes deviceId    = 2;  // Identifier for a specific device, only unique for a given identityKey
 }
 
+// Provides configuration information to clients
+message Configuration {
+  int64 maxAttachmentSize = 1; // The maxmimum allows attachment size (encrypted size, not plaintext)
+}
+
 // Login information supplied by clients in response to an AuthChallenge.
 message Login {
   Address address = 1;  // The Address that's logging in. This will become permanently associated with the current connection
@@ -157,17 +162,18 @@ message Message {
   oneof payload {
     Ack                         ack                         =  2;
     Error                       error                       =  3;
-    AuthChallenge               authChallenge               =  4;
-    AuthResponse                authResponse                =  5;
-    Register                    register                    =  6;
-    Unregister                  unregister                  =  7;
-    RequestPreKeys              requestPreKeys              =  8;
-    PreKeys                     preKeys                     =  9;
-    PreKeysLow                  preKeysLow                  = 10;
-    RequestUploadAuthorizations requestUploadAuthorizations = 11;
-    UploadAuthorizations        uploadAuthorizations        = 12;
-    OutboundMessage             outboundMessage             = 13;
-    bytes                       inboundMessage              = 14;
+    Configuration               configuration               =  4;
+    AuthChallenge               authChallenge               =  5;
+    AuthResponse                authResponse                =  6;
+    Register                    register                    =  7;
+    Unregister                  unregister                  =  8;
+    RequestPreKeys              requestPreKeys              =  9;
+    PreKeys                     preKeys                     = 10;
+    PreKeysLow                  preKeysLow                  = 12;
+    RequestUploadAuthorizations requestUploadAuthorizations = 13;
+    UploadAuthorizations        uploadAuthorizations        = 14;
+    OutboundMessage             outboundMessage             = 15;
+    bytes                       inboundMessage              = 16;
   }
 }
 

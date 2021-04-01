@@ -123,6 +123,11 @@ interface ClientDelegate {
     fun onConnectError(err: Throwable)
 
     /**
+     * Called whenever we get a new Configuration from the server
+     */
+    fun onConfigUpdate(cfg: Messages.Configuration)
+
+    /**
      * Called when a client closes. If the client closed due to an exception, err will be populated
      * with the relevant exception. If the client closed while we were still in the process of
      * connecting, the delegate will only receive a call to onConnectError.
@@ -222,6 +227,7 @@ abstract class Client<D : ClientDelegate>(
                     msg.error!!.description
                 )
             )
+            Messages.Message.PayloadCase.CONFIGURATION -> delegate.onConfigUpdate(msg.configuration)
             else -> println("unknown payload type ${msg.payloadCase}")
         }
     }
