@@ -20,10 +20,14 @@ sent from the given senderIdentityKey (in practice it's a type 4 UUID).
 ### /cm/[d/[identityKey]|g/[groupId]]/[timestamp]/[senderIdentityKey]/[messageId]
 A record of all messages for a given Contact, by the sent timestamp of the message.
 
-### /o/[messageId]
+### /o/[timestamp]/[messageId]
 A queue of outbound messages that are pending send. If sending to some recipients fails, messages
 will be re-queued here for a limited period of time until they either send successfully or time
 runs out.
+
+### /ia/[timestamp]/[senderIdentityKey]/[messageId]
+A queue of inbound attachments that are pending download. If downloading fails, downloads will be
+re-queued here for a limited period of time until they either send successfully or time runs out.
 
 ## Included Signal Code
 The included Signal code (like AttachmentCipherInputStream) comes from https://github.com/signalapp/Signal-Android,

@@ -46,6 +46,7 @@ class Messaging(
         db.registerType(21, Model.Contact::class.java)
         db.registerType(22, Model.ShortMessageRecord::class.java)
         db.registerType(23, Model.OutgoingShortMessage::class.java)
+        db.registerType(24, Model.InboundAttachment::class.java)
     }
 
     internal val identityKeyPair = store.identityKeyPair
@@ -154,7 +155,6 @@ class Messaging(
         attachments?.forEach {
             shortMessageBuilder.putAttachments(attachmentId, it.attachment);
             msgRecordBuilder.putAttachments(attachmentId, it)
-            msgRecordBuilder.putAttachmentStatus(attachmentId, Model.ShortMessageRecord.AttachmentStatus.PENDING)
             attachmentId++
         }
         val msg = shortMessageBuilder.build()
@@ -284,8 +284,8 @@ val nowUnixNano: Long
 
 val Model.StoredAttachment.inputStream: InputStream
     get() = AttachmentCipherInputStream.createForAttachment(
-        File(this.filePath),
-        this.attachment.plaintextLength,
-        this.attachment.keyMaterial.toByteArray(),
-        this.attachment.digest.toByteArray()
+        File(filePath),
+        attachment.plaintextLength,
+        attachment.keyMaterial.toByteArray(),
+        attachment.digest.toByteArray()
     )

@@ -32,13 +32,21 @@ message Attachment {
   bytes keyMaterial = 2; // 64 bytes of key material (32 bytes for AES256 encryption, 32 bytes for HmacSHA256 authentication)
   bytes digest = 3; // secure digest of the attachment
   int64 plaintextLength = 4; // the content length of the plain text
+  string downloadUrl = 5; // the URL from which the encrypted attachment can be downloaded
 }
 
 // A locally stored Attachment
 message StoredAttachment {
+  enum Status {
+    PENDING = 0; // attachment has not yet been uploaded/downloaded
+    DONE = 1; // attachment has been uploaded/downloaded
+    FAILED = 2; // attachment permanently failed to upload/download
+  }
+
   string guid = 1; // a globally unique ID for the attachment
   Attachment attachment = 2; // the Attachment
   string filePath = 3; // path to the on-disk location of this attachment
+  Status status = 4; // the status of the upload/download
 }
 
 // A short message, the primary type of message exchanged by users. It's either text or ogg encoded
@@ -61,12 +69,6 @@ message ShortMessageRecord {
     COMPLETELY_FAILED = 4; // message failed to send to any recipients, will not retry
   }
 
-  enum AttachmentStatus {
-    PENDING = 0; // attachment is still pending upload/download
-    DONE = 1; // attachment has been uploaded/downloaded
-    FAILED = 2; // attachment permanently failed to upload/download
-  }
-
   string senderId = 1; // the id of who sent this message
   string id = 2; // the id of the message (same as on ShortMessage), encoded in base32
   int64 ts = 3; // The unix timestamp in nanoseconds for when the message was sent (for OUT) or received (for IN)
@@ -76,9 +78,9 @@ message ShortMessageRecord {
   DeliveryStatus status = 7; // for outgoing messages, the status of its sending and delivery
   bytes message = 8; // the serialized ShortMessage
   map<int32, StoredAttachment> attachments = 9; // attachments keyed to unique IDs for each attachment within this message
-  map<int32, AttachmentStatus> attachmentStatus = 10; // statuses of attachment uploads (or downloads) keyed to the attachment IDs
 }
 
+// A ShortMessage that's been sent
 message OutgoingShortMessage {
   enum SubDeliveryStatus {
     SENDING = 0; // message is currently in the process of sending to specific deviceId but hasn't successfully finished yet
@@ -90,6 +92,14 @@ message OutgoingShortMessage {
   int64 sent = 3; // The unix timestamp in nanoseconds for when the message was sent
   string recipientId = 4; // the id of the recipient
   map<string, SubDeliveryStatus> subDeliveryStatuses = 5; // Statuses of subdeliveries to specific deviceIds
+}
+
+// An attachment that's been received
+message InboundAttachment {
+  string senderId = 1; // the id of who sent the message associated to the attachment
+  string messageId = 2; // the id of the ShortMessageRecord, encoded in base32
+  int64 ts = 3; // The unix timestamp in nanoseconds for when the message was received (has to match what's on the ShortMessageRecord
+  int32 attachmentId = 4; // The id of the attachment within the ShortMessage
 }
 
 message TransferMessage {

@@ -7,6 +7,7 @@ import org.whispersystems.libsignal.util.Base32
 
 object Schema {
     const val PATH_OUTBOUND = "/o"
+    const val PATH_INBOUND_ATTACHMENTS = "/ia"
     const val PATH_ME = "/me"
     const val PATH_CONTACTS = "/contacts"
     const val CONTACT_DIRECT_PREFIX = "d"
@@ -46,6 +47,9 @@ val Model.OutgoingShortMessage.Builder.dbPath: String
 
 val Model.ShortMessageRecord.outboundPath: String
     get() = Schema.PATH_OUTBOUND.path(ts, id)
+
+val Model.InboundAttachment.dbPath: String
+    get() = Schema.PATH_INBOUND_ATTACHMENTS.path(ts, senderId, messageId)
 
 val Model.Contact.pathSegment: String
     get() = if (type == Model.Contact.Type.DIRECT) Schema.CONTACT_DIRECT_PREFIX.path(id) else Schema.CONTACT_GROUP_PREFIX.path(

@@ -334,7 +334,6 @@ class MessagingTest : BaseMessagingTest() {
         if (attachments != null) {
             if (attachments.size > 0) {
                 assertEquals(attachments.size, msgRecord.attachmentsCount)
-                assertEquals(attachments.size, msgRecord.attachmentStatusCount)
                 attachments.forEach { attachment ->
                     assertNotNull(msgRecord.attachmentsMap.values.find { it.guid == attachment.guid })
                     assertEquals(
