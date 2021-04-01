@@ -44,9 +44,11 @@ public abstract class DigestingOutputStream extends FilterOutputStream {
     out.flush();
   }
 
-  public void close() throws IOException {
-    out.close();
-  }
+  // Removed this to make sue FilterOutputStream.close() is called, which triggers a flush when
+  // necessary, which gives us the final digest.
+//  public void close() throws IOException {
+//    out.close();
+//  }
 
   public byte[] getTransmittedDigest() {
     return digest;

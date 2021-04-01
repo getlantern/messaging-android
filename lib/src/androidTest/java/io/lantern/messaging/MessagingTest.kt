@@ -1,5 +1,6 @@
 package io.lantern.messaging
 
+import androidx.test.platform.app.InstrumentationRegistry
 import io.lantern.db.DB
 import io.lantern.messaging.store.MessagingStore
 import io.lantern.messaging.tassis.MessageHandler
@@ -15,6 +16,10 @@ import kotlinx.coroutines.runBlocking
 import mu.KotlinLogging
 import org.junit.Test
 import org.whispersystems.libsignal.util.KeyHelper
+import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
+import java.io.ByteArrayInputStream
+import java.io.File
+import java.nio.charset.Charset
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.*
 import kotlin.time.Duration
@@ -29,10 +34,10 @@ class MessagingTest : BaseMessagingTest() {
     @Test
     fun testCompleteFlow() {
         val catStore = newStore()
-        val dog = newMessaging("dog")
+        val theDog = newMessaging("dog")
 
         testInCoroutine {
-            dog.with { it ->
+            theDog.with { it ->
                 var dog = it
                 val catId = catStore.identityKeyPair.publicKey.toString()
                 val dogId = dog.store.identityKeyPair.publicKey.toString()
@@ -59,10 +64,19 @@ class MessagingTest : BaseMessagingTest() {
                 // we do not expect this message to be delivered to cat because cat hasn't added dog
                 // as a contact
                 val cat = sendAndVerifyDropped(
-                    "dog->cat only sends successfully onec cat registers pre keys",
+                    "dog->cat only sends successfully once cat registers pre keys",
                     dog,
                     catStore,
-                    "hello cat"
+                    "hello cat",
+                    attachments = arrayOf(
+                        dog.createAttachment(
+                            "text/plain", ByteArrayInputStream(
+                                "attachment for cat".toByteArray(
+                                    Charset.defaultCharset()
+                                )
+                            )
+                        )
+                    )
                 ) { msgRecord ->
                     // wait for the message to attempt to send and fail, make sure the status is correct
                     // and that the message is still populated correctly
@@ -123,7 +137,16 @@ class MessagingTest : BaseMessagingTest() {
                         "cat receives message after adding dog as contact",
                         dog,
                         cat,
-                        "hello again cat"
+                        text = "hello again cat",
+                        attachments = arrayOf(
+                            dog.createAttachment(
+                                "text/plain", ByteArrayInputStream(
+                                    "new attachment for cat".toByteArray(
+                                        Charset.defaultCharset()
+                                    )
+                                )
+                            )
+                        )
                     )
 
                     // now reply from cat
@@ -199,40 +222,52 @@ class MessagingTest : BaseMessagingTest() {
         testCase: String,
         from: Messaging,
         to: Messaging,
-        text: String,
+        text: String?,
+        attachments: Array<Model.StoredAttachment>? = null,
         replyToId: String? = null,
         afterSend: (suspend (msgRecord: Model.ShortMessageRecord) -> T)? = null
     ): T? {
-        return sendAndVerifyReceived(testCase, from, to.store, text, replyToId = replyToId)
+        return sendAndVerifyReceived(
+            testCase,
+            from,
+            to.store,
+            text,
+            attachments,
+            replyToId = replyToId,
+            afterSend = afterSend
+        )
     }
 
     private suspend fun <T> sendAndVerifyReceived(
         testCase: String,
         from: Messaging,
         to: MessagingStore,
-        text: String,
+        text: String?,
+        attachments: Array<Model.StoredAttachment>? = null,
         replyToId: String? = null,
         afterSend: (suspend (msgRecord: Model.ShortMessageRecord) -> T)? = null
     ): T? {
-        return doSendAndVerify(testCase, from, to, text, true, replyToId, afterSend)
+        return doSendAndVerify(testCase, from, to, text, attachments, true, replyToId, afterSend)
     }
 
     private suspend fun <T> sendAndVerifyDropped(
         testCase: String,
         from: Messaging,
         to: MessagingStore,
-        text: String,
+        text: String?,
+        attachments: Array<Model.StoredAttachment>? = null,
         replyToId: String? = null,
         afterSend: (suspend (msgRecord: Model.ShortMessageRecord) -> T)? = null
     ): T? {
-        return doSendAndVerify(testCase, from, to, text, false, replyToId, afterSend)
+        return doSendAndVerify(testCase, from, to, text, attachments, false, replyToId, afterSend)
     }
 
     private suspend fun <T> doSendAndVerify(
         testCase: String,
         from: Messaging,
         to: MessagingStore,
-        text: String,
+        text: String?,
+        attachments: Array<Model.StoredAttachment>? = null,
         expectDelivery: Boolean,
         replyToId: String? = null,
         afterSend: (suspend (msgRecord: Model.ShortMessageRecord) -> T)? = null
@@ -253,6 +288,7 @@ class MessagingTest : BaseMessagingTest() {
         val msgRecord = from.sendToDirectContact(
             toId,
             text,
+            attachments = attachments,
             replyToId = replyToId,
             replyToSenderId = replyToId?.let { toId })
         assertFalse(msgRecord.id.isNullOrBlank())
@@ -294,6 +330,20 @@ class MessagingTest : BaseMessagingTest() {
             from.db.get(msgRecord.contactMessagePath(storedContact)),
             testCase
         )
+
+        if (attachments != null) {
+            if (attachments.size > 0) {
+                assertEquals(attachments.size, msgRecord.attachmentsCount)
+                assertEquals(attachments.size, msgRecord.attachmentStatusCount)
+                attachments.forEach { attachment ->
+                    assertNotNull(msgRecord.attachmentsMap.values.find { it.guid == attachment.guid })
+                    assertEquals(
+                        File(attachment.filePath).length(),
+                        AttachmentCipherOutputStream.getCiphertextLength(attachment.attachment.plaintextLength)
+                    )
+                }
+            }
+        }
 
         val result = afterSend?.let { it(msgRecord) }
 
@@ -360,6 +410,10 @@ class MessagingTest : BaseMessagingTest() {
         store: MessagingStore? = null
     ): Messaging {
         return Messaging(
+            File(
+                InstrumentationRegistry.getInstrumentation().targetContext.filesDir,
+                "attachments"
+            ),
             store ?: newStore(name = name),
             BrokenTransportFactory(
                 "wss://tassis.lantern.io/api",

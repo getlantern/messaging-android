@@ -209,10 +209,10 @@ public final class AttachmentCipherTest {
 
   private static EncryptResult encryptData(byte[] data, byte[] keyMaterial) throws IOException {
     ByteArrayOutputStream        outputStream  = new ByteArrayOutputStream();
-    AttachmentCipherOutputStream encryptStream = new AttachmentCipherOutputStream(keyMaterial, null, outputStream);
+    AttachmentCipherOutputStream encryptStream = new AttachmentCipherOutputStream(keyMaterial, outputStream);
 
     encryptStream.write(data);
-    encryptStream.flush();
+//    encryptStream.flush(); // removed to make sure digest is correctly updated just by closing
     encryptStream.close();
 
     return new EncryptResult(outputStream.toByteArray(), encryptStream.getTransmittedDigest());

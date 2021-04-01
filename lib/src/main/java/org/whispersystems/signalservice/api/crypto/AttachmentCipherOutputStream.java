@@ -28,7 +28,6 @@ public class AttachmentCipherOutputStream extends DigestingOutputStream {
   private final Mac    mac;
 
   public AttachmentCipherOutputStream(byte[] combinedKeyMaterial,
-                                      byte[] iv,
                                       OutputStream outputStream)
       throws IOException
   {
@@ -38,17 +37,12 @@ public class AttachmentCipherOutputStream extends DigestingOutputStream {
       this.mac          = initializeMac();
       byte[][] keyParts = Util.split(combinedKeyMaterial, 32, 32);
 
-      if (iv == null) {
-        this.cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(keyParts[0], "AES"));
-      } else {
-        this.cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(keyParts[0], "AES"), new IvParameterSpec(iv));
-      }
-
+      this.cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(keyParts[0], "AES"));
       this.mac.init(new SecretKeySpec(keyParts[1], "HmacSHA256"));
 
       mac.update(cipher.getIV());
       super.write(cipher.getIV());
-    } catch (InvalidKeyException | InvalidAlgorithmParameterException e) {
+    } catch (InvalidKeyException e) {
       throw new AssertionError(e);
     }
   }

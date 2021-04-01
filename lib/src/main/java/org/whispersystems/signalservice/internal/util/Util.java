@@ -42,16 +42,48 @@ public class Util {
     }
   }
 
-  public static void copy(InputStream in, OutputStream out) throws IOException {
+  public static long copy(InputStream in, OutputStream out) throws IOException {
+    long copied = 0;
     byte[] buffer = new byte[4096];
     int read;
 
     while ((read = in.read(buffer)) != -1) {
+      copied += read;
       out.write(buffer, 0, read);
     }
 
     in.close();
     out.close();
+    return copied;
+  }
+
+  public static boolean streamsEqual(InputStream a, InputStream b) throws IOException {
+    byte[] bufferA = new byte[4096];
+    byte[] bufferB = new byte[4096];
+    int readA;
+    int readB;
+
+    try {
+      while (true) {
+        readA = a.read(bufferA);
+        readB = b.read(bufferB);
+        if (readA != readB) {
+          return false;
+        }
+        if (readA == -1) {
+          return true;
+        }
+        for (int i=0; i<readA; i++) {
+          if (bufferA[i] != bufferB[i]) {
+            return false;
+          }
+        }
+      }
+    } finally {
+      a.close();
+      b.close();
+    }
+
   }
 
   public static int toIntExact(long value) {

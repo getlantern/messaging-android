@@ -347,7 +347,29 @@ class AnonymousClient(
                 try {
                     cb.onSuccess(result.preKeysList)
                 } catch (t: Throwable) {
-                    logger.error("error after retrieving pre keys: $t.message", t)
+                    logger.error("error after receiving pre keys: $t.message", t)
+                }
+            }
+
+            override fun onError(err: Throwable) {
+                cb.onError(err)
+            }
+        })
+    }
+
+    fun requestUploadAuthorizations(
+        numRequested: Int,
+        cb: Callback<List<Messages.UploadAuthorization>>
+    ) {
+        val requestUploadAuthorizations = Messages.RequestUploadAuthorizations.newBuilder()
+            .setNumRequested(numRequested).build()
+        val msg = nextMessage().setRequestUploadAuthorizations(requestUploadAuthorizations).build()
+        send(msg, object : Callback<Messages.UploadAuthorizations> {
+            override fun onSuccess(result: Messages.UploadAuthorizations) {
+                try {
+                    cb.onSuccess(result.authorizationsList)
+                } catch (t: Throwable) {
+                    logger.error("error after receiving upload authorizations: $t.message", t)
                 }
             }
 
@@ -382,6 +404,8 @@ class AnonymousClient(
             }
             Messages.Message.PayloadCase.PREKEYS -> pending.remove(msg.sequence)
                 ?.onSuccess(msg.preKeys)
+            Messages.Message.PayloadCase.UPLOADAUTHORIZATIONS -> pending.remove(msg.sequence)
+                ?.onSuccess(msg.uploadAuthorizations)
             else -> super.onMessage(msg)
         }
     }

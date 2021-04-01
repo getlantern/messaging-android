@@ -5,7 +5,11 @@ import io.lantern.messaging.tassis.Callback
 import io.lantern.messaging.tassis.InboundMessage
 import io.lantern.messaging.tassis.Messages
 import io.lantern.messaging.tassis.Padding
+import io.lantern.messaging.time.millisToNanos
+import io.lantern.messaging.time.minutesToMillis
 import io.lantern.messaging.time.nanosToMillis
+import okhttp3.*
+import okhttp3.RequestBody.Companion.asRequestBody
 import org.signal.libsignal.metadata.SealedSessionCipher
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.SessionBuilder
@@ -14,6 +18,8 @@ import org.whispersystems.libsignal.ecc.ECPublicKey
 import org.whispersystems.libsignal.state.PreKeyBundle
 import org.whispersystems.libsignal.state.PreKeyRecord
 import org.whispersystems.libsignal.state.SignedPreKeyRecord
+import java.io.File
+import java.io.IOException
 
 internal class CryptoWorker(
     messaging: Messaging,
@@ -23,7 +29,9 @@ internal class CryptoWorker(
     Worker(messaging, "crypto", retryDelayMillis = retryDelayMillis) {
     private val db = messaging.db
     private val store = messaging.store
+    private val httpClient = OkHttpClient() // TODO: configure support for proxying and stuff
     private val cipher = SealedSessionCipher(store, store.deviceId)
+    private val uploadAuthorizations = ArrayDeque<Messages.UploadAuthorization>()
 
     private val Model.OutgoingShortMessage.Builder.expired: Boolean get() = (nowUnixNano - this.sent).nanosToMillis > stopSendRetryAfterMillis
 
@@ -51,6 +59,9 @@ internal class CryptoWorker(
     }
 
     init {
+        // immediately request some upload authorizations so that we're ready to upload attachments
+        submit { getMoreUploadAuthorizationsIfNecessary() }
+
         db.list<Model.OutgoingShortMessage>(Schema.PATH_OUTBOUND.path("%")).forEach {
             submit { processOutgoing(it.value.toBuilder()) }
         }
@@ -90,6 +101,10 @@ internal class CryptoWorker(
                 if (status == Model.OutgoingShortMessage.SubDeliveryStatus.SENDING) {
                     submit { encryptAndSendTo(out, deviceId, msgRecord.message) }
                 }
+            }
+
+            msgRecord.attachmentsMap.forEach { (id, attachment) ->
+
             }
         }
     }
@@ -211,6 +226,98 @@ internal class CryptoWorker(
                     }
                 })
         }
+    }
+
+    private fun uploadAttachment(
+        out: Model.OutgoingShortMessage.Builder,
+        id: Int,
+        attachment: Model.StoredAttachment
+    ) {
+        if (out.expired) {
+            // don't bother uploading if outgoing message has been deleted
+            return
+        }
+
+        removeExpiredUploadAuthorizations()
+        val auth = uploadAuthorizations.removeLastOrNull()
+        if (auth == null) {
+            logger.debug("getting new upload authorization before uploading attachment")
+            getMoreUploadAuthorizationsIfNecessary { uploadAttachment(out, id, attachment) }
+            return
+        }
+
+        logger.debug("uploading attachment")
+        val requestBody = MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("file", "filename", File(attachment.filePath).asRequestBody())
+        auth.uploadFormDataMap.forEach { (key, value) ->
+            requestBody.addFormDataPart(key, value)
+        }
+        val request = Request.Builder().url(auth.uploadURL).post(requestBody.build()).build()
+        httpClient.newCall(request).enqueue(object : okhttp3.Callback {
+            override fun onResponse(call: Call, response: Response) {
+                submit {
+                    db.mutate { tx ->
+                        val attachmentStatus =
+                            if (response.code != 204) {
+                                logger.error("upload failed with unretriable status ${response.code}: ${response.body?.string()}")
+                                Model.ShortMessageRecord.AttachmentStatus.FAILED
+                            } else Model.ShortMessageRecord.AttachmentStatus.DONE
+                        val shortMessagePath = out.shortMessagePath
+                        tx.get<Model.ShortMessageRecord>(shortMessagePath)?.let { msg ->
+                            tx.put(
+                                shortMessagePath,
+                                msg.toBuilder()
+                                    .putAttachmentStatus(
+                                        id,
+                                        attachmentStatus
+                                    ).build()
+                            )
+                        }
+                    }
+                }
+            }
+
+            override fun onFailure(call: Call, e: IOException) {
+                logger.error("failed to upload attachment, will try again: ${e.message}")
+                retryFailed { uploadAttachment(out, id, attachment) }
+            }
+        })
+    }
+
+    private fun getMoreUploadAuthorizationsIfNecessary(then: () -> Unit = {}) {
+        removeExpiredUploadAuthorizations()
+        val numToRequest = 10 - uploadAuthorizations.size
+        if (numToRequest < 0) {
+            then()
+            return
+        }
+
+        logger.debug("requesting $numToRequest upload authorizations")
+        messaging.anonymousClientWorker.withClient { client ->
+            client.requestUploadAuthorizations(numToRequest,
+                object : Callback<List<Messages.UploadAuthorization>> {
+                    override fun onSuccess(result: List<Messages.UploadAuthorization>) {
+                        logger.debug("successfully retrieved ${result.size} upload authorizations")
+                        submit {
+                            uploadAuthorizations.addAll(result)
+                            then()
+                        }
+                    }
+
+                    override fun onError(err: Throwable) {
+                        logger.debug("error retrieving upload authorizations: ${err.message}")
+                        retryFailed { getMoreUploadAuthorizationsIfNecessary() }
+                    }
+                })
+        }
+    }
+
+    private fun removeExpiredUploadAuthorizations() {
+        // the 30 minute fudge factor ensures that we don't take chances with using authorizations that are near expiration
+        val activeAuthorizations =
+            uploadAuthorizations.filter { it.authorizationExpiresAt > nowUnixNano + 30L.minutesToMillis.millisToNanos }
+        uploadAuthorizations.clear()
+        uploadAuthorizations.addAll(activeAuthorizations)
     }
 
     internal fun decryptAndStore(inbound: InboundMessage) {

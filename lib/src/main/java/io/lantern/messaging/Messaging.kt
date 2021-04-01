@@ -9,18 +9,25 @@ import io.lantern.messaging.tassis.TransportFactory
 import io.lantern.messaging.tassis.byteString
 import io.lantern.messaging.time.hoursToMillis
 import io.lantern.messaging.time.millisToNanos
-import io.lantern.messaging.time.minutesToMillis
 import io.lantern.messaging.time.secondsToMillis
 import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
+import org.whispersystems.signalservice.api.crypto.AttachmentCipherInputStream
+import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
+import org.whispersystems.signalservice.internal.util.Util
 import java.io.Closeable
+import java.io.File
+import java.io.FileOutputStream
+import java.io.InputStream
 import java.nio.ByteBuffer
+import java.security.SecureRandom
 import java.util.*
 import java.util.concurrent.TimeUnit
 
 class UnknownSenderException : Exception("Unknown sender")
 
 class Messaging(
+    private val attachmentsDirectory: File,
     internal val store: MessagingStore,
     transportFactory: TransportFactory,
     clientTimeoutMillis: Long = 10L.secondsToMillis,
@@ -118,38 +125,40 @@ class Messaging(
     fun sendToDirectContact(
         recipientId: String,
         text: String?,
-        oggVoice: ByteArray? = null,
         replyToSenderId: String? = null,
-        replyToId: String? = null
+        replyToId: String? = null,
+        attachments: Array<Model.StoredAttachment>? = null,
     ): Model.ShortMessageRecord {
-        if (text.isNullOrBlank() && oggVoice == null) {
-            throw IllegalArgumentException("Please specify either text or oggVoice")
-        } else if (text != null && oggVoice != null) {
-            throw IllegalArgumentException("Please specify either text or oggVoice but not both")
+        if (text.isNullOrBlank() && attachments?.size == 0) {
+            throw IllegalArgumentException("Please specify either text or at least one attachment")
         } else if ((!replyToSenderId.isNullOrBlank() || !replyToId.isNullOrBlank()) && (replyToSenderId.isNullOrBlank() || replyToId.isNullOrBlank())) {
             throw IllegalArgumentException("If specifying either replyToSenderId and replyToId, please specify both")
         }
         val shortMessageBuilder = Model.ShortMessage.newBuilder().setId(randomMessageId)
         replyToSenderId?.let { shortMessageBuilder.setReplyToSenderId(it.fromBase32.byteString()) }
         replyToId?.let { shortMessageBuilder.setReplyToId(it.fromBase32.byteString()) }
-        if (text != null) {
-            shortMessageBuilder.text = text
-        } else {
-            shortMessageBuilder.oggVoice = oggVoice?.byteString()
-        }
+        shortMessageBuilder.text = text
         val sent = nowUnixNano
-        val msg = shortMessageBuilder.build()
+        val base32Id = shortMessageBuilder.id.base32
         val out =
-            Model.OutgoingShortMessage.newBuilder().setId(msg.id.base32)
+            Model.OutgoingShortMessage.newBuilder().setId(base32Id)
                 .setSent(sent)
                 .setSenderId(store.identityKeyPair.publicKey.toString())
                 .setRecipientId(recipientId)
         val msgRecordBuilder =
             Model.ShortMessageRecord.newBuilder()
-                .setSenderId(store.identityKeyPair.publicKey.toString()).setId(msg.id.base32)
+                .setSenderId(store.identityKeyPair.publicKey.toString()).setId(base32Id)
                 .setTs(sent)
-                .setMessage(msg.toByteString()).setDirection(Model.MessageDirection.OUT)
-                .setStatus(Model.ShortMessageRecord.DeliveryStatus.SENDING)
+                .setDirection(Model.MessageDirection.OUT)
+        var attachmentId = 0
+        attachments?.forEach {
+            shortMessageBuilder.putAttachments(attachmentId, it.attachment);
+            msgRecordBuilder.putAttachments(attachmentId, it)
+            msgRecordBuilder.putAttachmentStatus(attachmentId, Model.ShortMessageRecord.AttachmentStatus.PENDING)
+            attachmentId++
+        }
+        val msg = shortMessageBuilder.build()
+        msgRecordBuilder.setMessage(msg.toByteString())
         replyToSenderId?.let { msgRecordBuilder.setReplyToSenderId(it) }
         replyToId?.let { msgRecordBuilder.setReplyToId(it) }
         val msgRecord = msgRecordBuilder.build()
@@ -172,6 +181,37 @@ class Messaging(
             cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
         }
         return msgRecord
+    }
+
+    /**
+     * Creates a StoredAttachment from the data read from the given InputStream.
+     */
+    fun createAttachment(mimeType: String, input: InputStream): Model.StoredAttachment {
+        val guid = UUID.randomUUID().toString()
+        // break attachmentsDirectory into smaller subfolders to avoid having too many files in any one folder
+        val subDirectory = File(
+            arrayOf(
+                attachmentsDirectory.absolutePath,
+                guid.substring(0, 1),
+                guid.substring(1, 2),
+                guid.substring(2, 3)
+            ).joinToString(File.pathSeparator)
+        )
+        if (!subDirectory.mkdirs()) {
+            throw RuntimeException("Unable to make attachments sub-directory ${subDirectory}")
+        }
+
+        val keyMaterial = ByteArray(64)
+        SecureRandom().nextBytes(keyMaterial)
+        val file = File(subDirectory, guid)
+        val output = AttachmentCipherOutputStream(keyMaterial, FileOutputStream(file))
+        val plaintextLength = Util.copy(input, output)
+        val attachment = Model.Attachment.newBuilder().setMimeType(mimeType)
+            .setKeyMaterial(keyMaterial.byteString())
+            .setPlaintextLength(plaintextLength)
+            .setDigest(output.transmittedDigest.byteString()).build()
+        return Model.StoredAttachment.newBuilder().setGuid(guid).setAttachment(attachment)
+            .setFilePath(file.absolutePath).build()
     }
 
     internal fun updateDirectContactMetaData(
@@ -242,3 +282,10 @@ val randomMessageId: ByteString
 val nowUnixNano: Long
     get() = System.currentTimeMillis().millisToNanos
 
+val Model.StoredAttachment.inputStream: InputStream
+    get() = AttachmentCipherInputStream.createForAttachment(
+        File(this.filePath),
+        this.attachment.plaintextLength,
+        this.attachment.keyMaterial.toByteArray(),
+        this.attachment.digest.toByteArray()
+    )
