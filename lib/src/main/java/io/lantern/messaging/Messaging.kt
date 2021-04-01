@@ -44,8 +44,8 @@ class Messaging(
         // Need to register types before starting crypto worker or doing anything else that accesses
         // database
         db.registerType(21, Model.Contact::class.java)
-        db.registerType(22, Model.ShortMessageRecord::class.java)
-        db.registerType(23, Model.OutgoingShortMessage::class.java)
+        db.registerType(22, Model.StoredMessage::class.java)
+        db.registerType(23, Model.OutboundMessage::class.java)
         db.registerType(24, Model.InboundAttachment::class.java)
     }
 
@@ -129,42 +129,38 @@ class Messaging(
         replyToSenderId: String? = null,
         replyToId: String? = null,
         attachments: Array<Model.StoredAttachment>? = null,
-    ): Model.ShortMessageRecord {
+    ): Model.StoredMessage {
         if (text.isNullOrBlank() && attachments?.size == 0) {
             throw IllegalArgumentException("Please specify either text or at least one attachment")
         } else if ((!replyToSenderId.isNullOrBlank() || !replyToId.isNullOrBlank()) && (replyToSenderId.isNullOrBlank() || replyToId.isNullOrBlank())) {
             throw IllegalArgumentException("If specifying either replyToSenderId and replyToId, please specify both")
         }
-        val shortMessageBuilder = Model.ShortMessage.newBuilder().setId(randomMessageId)
-        replyToSenderId?.let { shortMessageBuilder.setReplyToSenderId(it.fromBase32.byteString()) }
-        replyToId?.let { shortMessageBuilder.setReplyToId(it.fromBase32.byteString()) }
-        shortMessageBuilder.text = text
+        val base32Id = randomMessageId.base32
         val sent = nowUnixNano
-        val base32Id = shortMessageBuilder.id.base32
+        val msgBuilder =
+            Model.StoredMessage.newBuilder()
+                .setSenderId(store.identityKeyPair.publicKey.toString()).setId(base32Id)
+                .setTs(sent)
+                .setText(text)
+                .setDirection(Model.MessageDirection.OUT)
+        replyToSenderId?.let { msgBuilder.setReplyToSenderId(it) }
+        replyToId?.let { msgBuilder.setReplyToId(it) }
         val out =
-            Model.OutgoingShortMessage.newBuilder().setId(base32Id)
+            Model.OutboundMessage.newBuilder().setId(base32Id)
                 .setSent(sent)
                 .setSenderId(store.identityKeyPair.publicKey.toString())
                 .setRecipientId(recipientId)
-        val msgRecordBuilder =
-            Model.ShortMessageRecord.newBuilder()
-                .setSenderId(store.identityKeyPair.publicKey.toString()).setId(base32Id)
-                .setTs(sent)
-                .setDirection(Model.MessageDirection.OUT)
         var attachmentId = 0
         attachments?.forEach {
-            shortMessageBuilder.putAttachments(attachmentId, it.attachment);
-            msgRecordBuilder.putAttachments(attachmentId, it)
+            msgBuilder.putAttachments(attachmentId, it)
             attachmentId++
         }
-        val msg = shortMessageBuilder.build()
-        msgRecordBuilder.setMessage(msg.toByteString())
-        replyToSenderId?.let { msgRecordBuilder.setReplyToSenderId(it) }
-        replyToId?.let { msgRecordBuilder.setReplyToId(it) }
-        val msgRecord = msgRecordBuilder.build()
+        replyToSenderId?.let { msgBuilder.setReplyToSenderId(it) }
+        replyToId?.let { msgBuilder.setReplyToId(it) }
+        val msg = msgBuilder.build()
         db.mutate { tx ->
             // save the message in a list of all messages
-            tx.put(msgRecord.dbPath, msgRecord)
+            tx.put(msg.dbPath, msg)
             // update the relevant contact
             val contact = updateDirectContactMetaData(
                 tx,
@@ -174,45 +170,51 @@ class Messaging(
                 msg.text
             )
             // save the message under the relevant contact messages
-            tx.put(msgRecord.contactMessagePath(contact), msgRecord.dbPath)
+            tx.put(msg.contactMessagePath(contact), msg.dbPath)
             // enqueue the outgoing message in the db for sending (actual send happens in the
             // message processing loop)
-            tx.put(msgRecord.outboundPath, out.build())
+            tx.put(msg.outboundPath, out.build())
             cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
         }
-        return msgRecord
+        return msg
     }
 
     /**
      * Creates a StoredAttachment from the data read from the given InputStream.
      */
     fun createAttachment(mimeType: String, input: InputStream): Model.StoredAttachment {
-        val guid = UUID.randomUUID().toString()
-        // break attachmentsDirectory into smaller subfolders to avoid having too many files in any one folder
-        val subDirectory = File(
-            arrayOf(
-                attachmentsDirectory.absolutePath,
-                guid.substring(0, 1),
-                guid.substring(1, 2),
-                guid.substring(2, 3)
-            ).joinToString(File.pathSeparator)
-        )
-        if (!subDirectory.mkdirs()) {
-            throw RuntimeException("Unable to make attachments sub-directory ${subDirectory}")
-        }
-
+        val storedAttachment = newStoredAttachment
         val keyMaterial = ByteArray(64)
         SecureRandom().nextBytes(keyMaterial)
-        val file = File(subDirectory, guid)
-        val output = AttachmentCipherOutputStream(keyMaterial, FileOutputStream(file))
+        val output =
+            AttachmentCipherOutputStream(keyMaterial, FileOutputStream(storedAttachment.filePath))
         val plaintextLength = Util.copy(input, output)
         val attachment = Model.Attachment.newBuilder().setMimeType(mimeType)
             .setKeyMaterial(keyMaterial.byteString())
             .setPlaintextLength(plaintextLength)
             .setDigest(output.transmittedDigest.byteString()).build()
-        return Model.StoredAttachment.newBuilder().setGuid(guid).setAttachment(attachment)
-            .setFilePath(file.absolutePath).build()
+        return storedAttachment.setAttachment(attachment).build()
     }
+
+    internal val newStoredAttachment: Model.StoredAttachment.Builder
+        get() {
+            val guid = UUID.randomUUID().toString()
+            // break attachmentsDirectory into smaller subfolders to avoid having too many files in any one folder
+            val subDirectory = File(
+                arrayOf(
+                    attachmentsDirectory.absolutePath,
+                    guid.substring(0, 1),
+                    guid.substring(1, 2),
+                    guid.substring(2, 3)
+                ).joinToString(File.pathSeparator)
+            )
+            if (!subDirectory.mkdirs()) {
+                throw RuntimeException("Unable to make attachments sub-directory ${subDirectory}")
+            }
+
+            return Model.StoredAttachment.newBuilder().setGuid(guid)
+                .setFilePath(File(subDirectory, guid).absolutePath)
+        }
 
     internal fun updateDirectContactMetaData(
         tx: Transaction,

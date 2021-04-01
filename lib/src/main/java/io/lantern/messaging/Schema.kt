@@ -17,14 +17,14 @@ object Schema {
     const val PATH_CONTACT_MESSAGES = "/cm"
 }
 
-fun Model.ShortMessage.inbound(senderId: String): Model.ShortMessageRecord {
-    val builder = Model.ShortMessageRecord.newBuilder().setSenderId(senderId).setId(id.base32)
+fun Model.Message.inbound(senderId: String): Model.StoredMessage.Builder {
+    val builder = Model.StoredMessage.newBuilder().setSenderId(senderId).setId(id.base32)
         .setTs(nowUnixNano)
         .setDirection(Model.MessageDirection.IN)
-        .setMessage(toByteString())
+        .setText(text)
     this.replyToSenderId?.let { builder.setReplyToSenderId(it.base32) }
     this.replyToId?.let { builder.setReplyToId(it.base32) }
-    return builder.build()
+    return builder
 }
 
 val String.directContactPath: String
@@ -33,23 +33,29 @@ val String.directContactPath: String
 val String.groupContactPath: String
     get() = Schema.PATH_CONTACTS.path(Schema.CONTACT_GROUP_PREFIX, this)
 
-val Model.ShortMessageRecord.dbPath: String
+val Model.StoredMessage.dbPath: String
     get() = Schema.PATH_MESSAGES.path(ts, senderId, id)
 
-val Model.ShortMessageRecord.timestampUnknownQuery: String
+val Model.StoredMessage.timestampUnknownQuery: String
     get() = Schema.PATH_MESSAGES.path("%", senderId, id)
 
-val Model.OutgoingShortMessage.Builder.shortMessagePath: String
+val Model.OutboundMessage.Builder.msgPath: String
     get() = Schema.PATH_MESSAGES.path(sent, senderId, id)
 
-val Model.OutgoingShortMessage.Builder.dbPath: String
+val Model.OutboundMessage.Builder.dbPath: String
     get() = Schema.PATH_OUTBOUND.path(sent, id)
 
-val Model.ShortMessageRecord.outboundPath: String
+val Model.StoredMessage.outboundPath: String
     get() = Schema.PATH_OUTBOUND.path(ts, id)
 
+fun Model.StoredMessage.inboundAttachmentPath(attachmentId: Int) =
+    Schema.PATH_INBOUND_ATTACHMENTS.path(ts, senderId, id, attachmentId)
+
 val Model.InboundAttachment.dbPath: String
-    get() = Schema.PATH_INBOUND_ATTACHMENTS.path(ts, senderId, messageId)
+    get() = Schema.PATH_INBOUND_ATTACHMENTS.path(ts, senderId, messageId, attachmentId)
+
+val Model.InboundAttachment.msgPath: String
+    get() = Schema.PATH_MESSAGES.path(ts, senderId, messageId)
 
 val Model.Contact.pathSegment: String
     get() = if (type == Model.Contact.Type.DIRECT) Schema.CONTACT_DIRECT_PREFIX.path(id) else Schema.CONTACT_GROUP_PREFIX.path(
@@ -59,7 +65,7 @@ val Model.Contact.pathSegment: String
 val Model.Contact.timestampedIdxPath: String
     get() = Schema.PATH_CONTACTS_BY_ACTIVITY.path(mostRecentMessageTs, pathSegment)
 
-fun Model.ShortMessageRecord.contactMessagePath(contact: Model.Contact): String =
+fun Model.StoredMessage.contactMessagePath(contact: Model.Contact): String =
     Schema.PATH_CONTACT_MESSAGES.path(
         contact.pathSegment,
         ts,

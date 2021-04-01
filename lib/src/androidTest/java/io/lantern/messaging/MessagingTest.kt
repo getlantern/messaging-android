@@ -17,6 +17,7 @@ import mu.KotlinLogging
 import org.junit.Test
 import org.whispersystems.libsignal.util.KeyHelper
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
+import org.whispersystems.signalservice.internal.util.Util
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.nio.charset.Charset
@@ -77,26 +78,21 @@ class MessagingTest : BaseMessagingTest() {
                             )
                         )
                     )
-                ) { msgRecord ->
+                ) { storedMsg ->
                     // wait for the message to attempt to send and fail, make sure the status is correct
                     // and that the message is still populated correctly
-                    var storedMsgRecord = dog.waitFor<Model.ShortMessageRecord>(msgRecord.dbPath) {
-                        it?.status == Model.ShortMessageRecord.DeliveryStatus.SENDING
+                    var storedMsgFromDb = dog.waitFor<Model.StoredMessage>(storedMsg.dbPath) {
+                        it?.status == Model.StoredMessage.DeliveryStatus.SENDING
                     }
-                    assertTrue(storedMsgRecord != null)
+                    assertTrue(storedMsgFromDb != null)
                     assertEquals(
-                        Model.ShortMessageRecord.DeliveryStatus.SENDING,
-                        storedMsgRecord.status,
+                        Model.StoredMessage.DeliveryStatus.SENDING,
+                        storedMsgFromDb.status,
                         "attempt to send to cat before cat has started registering preKeys should have resulted in a UserMessage with failing status"
                     )
-                    assertEquals(Model.MessageDirection.OUT, storedMsgRecord.direction)
-                    assertEquals(msgRecord.ts, storedMsgRecord.ts)
-                    assertEquals(
-                        "hello cat",
-                        runBlocking {
-                            Model.ShortMessage.parseFrom(storedMsgRecord!!.message).text
-                        }
-                    )
+                    assertEquals(Model.MessageDirection.OUT, storedMsgFromDb.direction)
+                    assertEquals(storedMsg.ts, storedMsgFromDb.ts)
+                    assertEquals("hello cat", storedMsgFromDb?.text)
 
                     logger.debug("close dog")
                     dog.close()
@@ -113,12 +109,12 @@ class MessagingTest : BaseMessagingTest() {
                     // start the Messaging system for cat, which will result in the registration of pre
                     // keys, allowing the message to send successfully
                     val cat = newMessaging("cat", store = catStore)
-                    storedMsgRecord =
-                        dog.waitFor(msgRecord.dbPath) { it?.status == Model.ShortMessageRecord.DeliveryStatus.COMPLETELY_SENT }
-                    assertTrue(storedMsgRecord != null)
+                    storedMsgFromDb =
+                        dog.waitFor(storedMsg.dbPath) { it?.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT }
+                    assertTrue(storedMsgFromDb != null)
                     assertEquals(
-                        Model.ShortMessageRecord.DeliveryStatus.COMPLETELY_SENT,
-                        storedMsgRecord.status,
+                        Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT,
+                        storedMsgFromDb.status,
                         "once cat has started registering preKeys, pending message should successfully send"
                     )
                     cat
@@ -150,7 +146,7 @@ class MessagingTest : BaseMessagingTest() {
                     )
 
                     // now reply from cat
-                    val mostRecentMsg = cat.db.list<Model.ShortMessageRecord>(
+                    val mostRecentMsg = cat.db.list<Model.StoredMessage>(
                         Schema.PATH_MESSAGES.path("%"),
                         count = 1,
                         reverseSort = true
@@ -161,6 +157,29 @@ class MessagingTest : BaseMessagingTest() {
                         dog,
                         "hi dog",
                         replyToId = mostRecentMsg.id
+                    )
+
+                    // make sure outbound and inbound queues are empty
+                    assertEquals(
+                        0,
+                        dog.db.list<Any>(Schema.PATH_OUTBOUND.path("%")).size,
+                        "dog should have no queued outbound messages"
+                    )
+                    assertEquals(
+                        0,
+                        dog.db.list<Any>(Schema.PATH_INBOUND_ATTACHMENTS.path("%")).size,
+                        "dog should have no queued inbound attachments"
+                    )
+
+                    assertEquals(
+                        0,
+                        dog.db.list<Any>(Schema.PATH_OUTBOUND.path("%")).size,
+                        "cat should have no queued outbound messages"
+                    )
+                    assertEquals(
+                        0,
+                        dog.db.list<Any>(Schema.PATH_INBOUND_ATTACHMENTS.path("%")).size,
+                        "cat should have no queued inbound attachments"
                     )
 
                     dog.unregister()
@@ -187,13 +206,13 @@ class MessagingTest : BaseMessagingTest() {
                     dog.addOrUpdateDirectContact(fakeId, "Fake")
 
                     val msg1 = dog.sendToDirectContact(catId, "hi cat")
-                    assertNotNull(dog.waitFor<Model.ShortMessageRecord>(msg1.dbPath) {
-                        it?.status == Model.ShortMessageRecord.DeliveryStatus.COMPLETELY_SENT
+                    assertNotNull(dog.waitFor<Model.StoredMessage>(msg1.dbPath) {
+                        it?.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
                     }, "sending to real recipient should have succeeded")
 
                     val msg2 = dog.sendToDirectContact(fakeId, "hi fake one")
-                    assertNotNull(dog.waitFor<Model.ShortMessageRecord>(msg2.dbPath) {
-                        it?.status == Model.ShortMessageRecord.DeliveryStatus.COMPLETELY_FAILED
+                    assertNotNull(dog.waitFor<Model.StoredMessage>(msg2.dbPath) {
+                        it?.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED
                     }, "sending to fake recipient should have failed")
 
                     assertEquals(
@@ -225,7 +244,7 @@ class MessagingTest : BaseMessagingTest() {
         text: String?,
         attachments: Array<Model.StoredAttachment>? = null,
         replyToId: String? = null,
-        afterSend: (suspend (msgRecord: Model.ShortMessageRecord) -> T)? = null
+        afterSend: (suspend (storedMsg: Model.StoredMessage) -> T)? = null
     ): T? {
         return sendAndVerifyReceived(
             testCase,
@@ -245,7 +264,7 @@ class MessagingTest : BaseMessagingTest() {
         text: String?,
         attachments: Array<Model.StoredAttachment>? = null,
         replyToId: String? = null,
-        afterSend: (suspend (msgRecord: Model.ShortMessageRecord) -> T)? = null
+        afterSend: (suspend (storedMsg: Model.StoredMessage) -> T)? = null
     ): T? {
         return doSendAndVerify(testCase, from, to, text, attachments, true, replyToId, afterSend)
     }
@@ -257,7 +276,7 @@ class MessagingTest : BaseMessagingTest() {
         text: String?,
         attachments: Array<Model.StoredAttachment>? = null,
         replyToId: String? = null,
-        afterSend: (suspend (msgRecord: Model.ShortMessageRecord) -> T)? = null
+        afterSend: (suspend (storedMsg: Model.StoredMessage) -> T)? = null
     ): T? {
         return doSendAndVerify(testCase, from, to, text, attachments, false, replyToId, afterSend)
     }
@@ -270,7 +289,7 @@ class MessagingTest : BaseMessagingTest() {
         attachments: Array<Model.StoredAttachment>? = null,
         expectDelivery: Boolean,
         replyToId: String? = null,
-        afterSend: (suspend (msgRecord: Model.ShortMessageRecord) -> T)? = null
+        afterSend: (suspend (storedMsg: Model.StoredMessage) -> T)? = null
     ): T? {
         logger.debug("running case $testCase")
         val fromId = from.store.identityKeyPair.publicKey.toString()
@@ -285,33 +304,31 @@ class MessagingTest : BaseMessagingTest() {
         }
 
         // send a message
-        val msgRecord = from.sendToDirectContact(
+        val storedMsg = from.sendToDirectContact(
             toId,
             text,
             attachments = attachments,
             replyToId = replyToId,
             replyToSenderId = replyToId?.let { toId })
-        assertFalse(msgRecord.id.isNullOrBlank())
-        assertEquals(Model.ShortMessageRecord.DeliveryStatus.SENDING, msgRecord.status, testCase)
-        assertEquals(Model.MessageDirection.OUT, msgRecord.direction, testCase)
-        assertEquals(fromId, msgRecord.senderId, testCase)
-        assertTrue(msgRecord.ts > 0, testCase)
-        assertTrue(msgRecord.ts < nowUnixNano, testCase)
+        assertFalse(storedMsg.id.isNullOrBlank())
+        assertEquals(Model.StoredMessage.DeliveryStatus.SENDING, storedMsg.status, testCase)
+        assertEquals(Model.MessageDirection.OUT, storedMsg.direction, testCase)
+        assertEquals(fromId, storedMsg.senderId, testCase)
+        assertTrue(storedMsg.ts > 0, testCase)
+        assertTrue(storedMsg.ts < nowUnixNano, testCase)
         if (replyToId != null) {
-            assertEquals(toId, msgRecord.replyToSenderId)
-            assertEquals(replyToId, msgRecord.replyToId)
+            assertEquals(toId, storedMsg.replyToSenderId)
+            assertEquals(replyToId, storedMsg.replyToId)
         }
-        assertEquals(text, runBlocking {
-            Model.ShortMessage.parseFrom(msgRecord.message).text
-        }, testCase)
+        assertEquals(text, storedMsg.text, testCase)
 
         // make sure the contact has been updated and that there's only one index entry
         var storedContact =
             from.db.get<Model.Contact>(toId.directContactPath)
         assertTrue(storedContact != null, testCase)
         assertEquals(toId, storedContact.id, testCase)
-        assertEquals(msgRecord.ts, storedContact.mostRecentMessageTs, testCase)
-        assertEquals(msgRecord.direction, storedContact.mostRecentMessageDirection, testCase)
+        assertEquals(storedMsg.ts, storedContact.mostRecentMessageTs, testCase)
+        assertEquals(storedMsg.direction, storedContact.mostRecentMessageDirection, testCase)
         assertEquals(text, storedContact.mostRecentMessageText, testCase)
         assertEquals(
             1,
@@ -326,55 +343,51 @@ class MessagingTest : BaseMessagingTest() {
 
         // make sure that there's a link to the message in sender's contact messages
         assertEquals(
-            msgRecord.dbPath,
-            from.db.get(msgRecord.contactMessagePath(storedContact)),
+            storedMsg.dbPath,
+            from.db.get(storedMsg.contactMessagePath(storedContact)),
             testCase
         )
 
         if (attachments != null) {
-            if (attachments.size > 0) {
-                assertEquals(attachments.size, msgRecord.attachmentsCount)
-                attachments.forEach { attachment ->
-                    assertNotNull(msgRecord.attachmentsMap.values.find { it.guid == attachment.guid })
-                    assertEquals(
-                        File(attachment.filePath).length(),
-                        AttachmentCipherOutputStream.getCiphertextLength(attachment.attachment.plaintextLength)
-                    )
-                }
+            assertEquals(attachments.size, storedMsg.attachmentsCount)
+            attachments.forEach { attachment ->
+                assertNotNull(storedMsg.attachmentsMap.values.find { it.guid == attachment.guid })
+                assertEquals(
+                    File(attachment.filePath).length(),
+                    AttachmentCipherOutputStream.getCiphertextLength(attachment.attachment.plaintextLength)
+                )
             }
         }
 
-        val result = afterSend?.let { it(msgRecord) }
+        val result = afterSend?.let { it(storedMsg) }
 
         // ensure that recipient has received the message
-        val storedMsgRecord =
-            to.waitFor<Model.ShortMessageRecord>(msgRecord.timestampUnknownQuery) { it != null }
+        val storedMsgFromDb =
+            to.waitFor<Model.StoredMessage>(storedMsg.timestampUnknownQuery) { it != null }
         if (!expectDelivery) {
-            assertNull(storedMsgRecord, testCase)
+            assertNull(storedMsgFromDb, testCase)
         } else {
-            assertTrue(storedMsgRecord != null, testCase)
-            assertEquals(msgRecord.id, storedMsgRecord.id)
-            assertEquals(Model.MessageDirection.IN, storedMsgRecord.direction, testCase)
-            assertEquals(fromId, storedMsgRecord.senderId, testCase)
-            assertTrue(msgRecord.ts < storedMsgRecord.ts, testCase)
-            assertEquals(Model.MessageDirection.IN, storedMsgRecord.direction)
+            assertTrue(storedMsgFromDb != null, testCase)
+            assertEquals(storedMsg.id, storedMsgFromDb.id)
+            assertEquals(Model.MessageDirection.IN, storedMsgFromDb.direction, testCase)
+            assertEquals(fromId, storedMsgFromDb.senderId, testCase)
+            assertTrue(storedMsg.ts < storedMsgFromDb.ts, testCase)
+            assertEquals(Model.MessageDirection.IN, storedMsgFromDb.direction)
             if (replyToId != null) {
-                assertEquals(toId, storedMsgRecord.replyToSenderId)
-                assertEquals(replyToId, storedMsgRecord.replyToId)
+                assertEquals(toId, storedMsgFromDb.replyToSenderId)
+                assertEquals(replyToId, storedMsgFromDb.replyToId)
             }
 
-            assertEquals(text, runBlocking {
-                Model.ShortMessage.parseFrom(storedMsgRecord.message).text
-            }, testCase)
+            assertEquals(text, storedMsgFromDb.text, testCase)
 
             // ensure that recipient has the conversation too
             storedContact =
                 to.db.get(fromId.directContactPath)
             assertTrue(storedContact != null, testCase)
             assertEquals(fromId, storedContact.id, testCase)
-            assertEquals(storedMsgRecord.ts, storedContact.mostRecentMessageTs, testCase)
+            assertEquals(storedMsgFromDb.ts, storedContact.mostRecentMessageTs, testCase)
             assertEquals(
-                storedMsgRecord.direction,
+                storedMsgFromDb.direction,
                 storedContact.mostRecentMessageDirection,
                 testCase
             )
@@ -390,13 +403,32 @@ class MessagingTest : BaseMessagingTest() {
                 testCase
             )
 
-
             // make sure that there's a link to the message in recipient's contact messages
             assertEquals(
-                storedMsgRecord.dbPath,
-                to.db.get(storedMsgRecord.contactMessagePath(storedContact)),
+                storedMsgFromDb.dbPath,
+                to.db.get(storedMsgFromDb.contactMessagePath(storedContact)),
                 testCase
             )
+
+            // make sure recipient got attachments
+            if (attachments != null) {
+                assertEquals(attachments.size, storedMsgFromDb.attachmentsCount, testCase)
+                // wait for all attachments to download
+                val storedMsgWithDownloadedAttachments =
+                    to.waitFor<Model.StoredMessage>(storedMsgFromDb.dbPath) {
+                        it?.attachmentsMap?.values?.count { it.status != Model.StoredAttachment.Status.DONE } == 0
+                    }
+                assertNotNull(storedMsgWithDownloadedAttachments, testCase)
+                storedMsgWithDownloadedAttachments.attachmentsMap.forEach { (id, attachment) ->
+                    // make sure decrypted content matches expected
+                    assertTrue(
+                        Util.streamsEqual(
+                            attachment.inputStream,
+                            attachments[id].inputStream,
+                        ), testCase
+                    )
+                }
+            }
         }
         return result
     }

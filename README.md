@@ -13,7 +13,7 @@ A group contact, identified by its group id
 An index of Contacts by most recent activity. A given Contact will appear only once in this index.
 
 ### /m/[timestamp]/[senderIdentityKey]/[messageId]
-The full content of all ShortMessages are stored here, including both sent and received messages.
+The full content of all Messages are stored here, including both sent and received messages.
 The timestamp is the sent time of the message. The messageId is an id that's unique for messages
 sent from the given senderIdentityKey (in practice it's a type 4 UUID).
 
@@ -25,7 +25,7 @@ A queue of outbound messages that are pending send. If sending to some recipient
 will be re-queued here for a limited period of time until they either send successfully or time
 runs out.
 
-### /ia/[timestamp]/[senderIdentityKey]/[messageId]
+### /ia/[timestamp]/[senderIdentityKey]/[messageId]/[attachmentId]
 A queue of inbound attachments that are pending download. If downloading fails, downloads will be
 re-queued here for a limited period of time until they either send successfully or time runs out.
 

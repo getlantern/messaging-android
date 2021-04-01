@@ -1,10 +1,8 @@
 package io.lantern.messaging
 
 import com.google.protobuf.ByteString
+import io.lantern.messaging.tassis.*
 import io.lantern.messaging.tassis.Callback
-import io.lantern.messaging.tassis.InboundMessage
-import io.lantern.messaging.tassis.Messages
-import io.lantern.messaging.tassis.Padding
 import io.lantern.messaging.time.millisToNanos
 import io.lantern.messaging.time.minutesToMillis
 import io.lantern.messaging.time.nanosToMillis
@@ -19,7 +17,9 @@ import org.whispersystems.libsignal.state.PreKeyBundle
 import org.whispersystems.libsignal.state.PreKeyRecord
 import org.whispersystems.libsignal.state.SignedPreKeyRecord
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
+import org.whispersystems.signalservice.internal.util.Util
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 
 internal class CryptoWorker(
@@ -34,30 +34,42 @@ internal class CryptoWorker(
     private val cipher = SealedSessionCipher(store, store.deviceId)
     private val uploadAuthorizations = ArrayDeque<Messages.UploadAuthorization>()
 
-    private val Model.OutgoingShortMessage.Builder.expired: Boolean get() = (nowUnixNano - sent).nanosToMillis > stopSendRetryAfterMillis
+    private val Model.OutboundMessage.Builder.expired: Boolean get() = (nowUnixNano - sent).nanosToMillis > stopSendRetryAfterMillis
 
-    private val Model.ShortMessageRecord.pendingAttachments: Map<Int, Model.StoredAttachment> get() = attachmentsMap.filter { it.value.status == Model.StoredAttachment.Status.PENDING }
+    private val Model.StoredMessage.pendingAttachments: Map<Int, Model.StoredAttachment> get() = attachmentsMap.filter { it.value.status == Model.StoredAttachment.Status.PENDING }
 
-    private val Model.ShortMessageRecord.allAttachmentsUploaded: Boolean get() = attachmentsMap.count { it.value.status == Model.StoredAttachment.Status.DONE } == attachmentsCount
+    private val Model.StoredMessage.allAttachmentsUploaded: Boolean get() = attachmentsMap.count { it.value.status == Model.StoredAttachment.Status.DONE } == attachmentsCount
 
-    private val Model.OutgoingShortMessage.Builder.knowsRecipientDevices: Boolean get() = subDeliveryStatusesCount > 0
+    private val Model.OutboundMessage.Builder.knowsRecipientDevices: Boolean get() = subDeliveryStatusesCount > 0
 
-    private val Model.OutgoingShortMessage.Builder.recipientIdentityKey: ECPublicKey
+    private val Model.OutboundMessage.Builder.recipientIdentityKey: ECPublicKey
         get() = ECPublicKey(
             this.recipientId
         )
 
-    private fun Model.OutgoingShortMessage.Builder.deleteFailed() {
+    private val Model.StoredMessage.message: Model.Message
+        get() {
+            val msgBuilder =
+                Model.Message.newBuilder().setId(id.fromBase32.byteString()).setText(text)
+            replyToSenderId?.let { msgBuilder.setReplyToSenderId(it.fromBase32.byteString()) }
+            replyToId?.let { msgBuilder.setReplyToId(it.fromBase32.byteString()) }
+            attachmentsMap.forEach { (id, attachment) ->
+                msgBuilder.putAttachments(id, attachment.attachment)
+            }
+            return msgBuilder.build()
+        }
+
+    private fun Model.OutboundMessage.Builder.deleteFailed() {
         logger.debug("deleting failed message")
         db.mutate { tx ->
             tx.delete(this.dbPath)
             val finalStatus =
-                if (this.subDeliveryStatusesMap.count { it.value == Model.OutgoingShortMessage.SubDeliveryStatus.SENT } > 0)
-                    Model.ShortMessageRecord.DeliveryStatus.PARTIALLY_FAILED else Model.ShortMessageRecord.DeliveryStatus.COMPLETELY_FAILED
-            val shortMessagePath = this.shortMessagePath
+                if (this.subDeliveryStatusesMap.count { it.value == Model.OutboundMessage.SubDeliveryStatus.SENT } > 0)
+                    Model.StoredMessage.DeliveryStatus.PARTIALLY_FAILED else Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED
+            val msgPath = this.msgPath
             tx.put(
-                shortMessagePath,
-                tx.get<Model.ShortMessageRecord>(shortMessagePath)?.toBuilder()
+                msgPath,
+                tx.get<Model.StoredMessage>(msgPath)?.toBuilder()
                     ?.setStatus(finalStatus)?.build()
             )
         }
@@ -67,18 +79,25 @@ internal class CryptoWorker(
         // immediately request some upload authorizations so that we're ready to upload attachments
         submit { getMoreUploadAuthorizationsIfNecessary() }
 
-        // on startup, read all pending OutgoingShortMessages to try reprocessing them
-        db.list<Model.OutgoingShortMessage>(Schema.PATH_OUTBOUND.path("%")).forEach {
+        // on startup, read all pending OutboundMessages to try reprocessing them
+        db.list<Model.OutboundMessage>(Schema.PATH_OUTBOUND.path("%")).forEach {
             submit { processOutgoing(it.value.toBuilder()) }
         }
 
         // on startup, read all pending InboundAttachments to try downloading them
         db.list<Model.InboundAttachment>(Schema.PATH_INBOUND_ATTACHMENTS.path("%")).forEach {
-//            downloadAttachment(it.value)
+            submit {
+                val inboundAttachment = it.value
+                val storedMsg = db.get<Model.StoredMessage>(inboundAttachment.msgPath)
+                downloadAttachment(
+                    inboundAttachment,
+                    storedMsg!!.getAttachmentsOrThrow(inboundAttachment.attachmentId)
+                )
+            }
         }
     }
 
-    fun processOutgoing(out: Model.OutgoingShortMessage.Builder) {
+    fun processOutgoing(out: Model.OutboundMessage.Builder) {
         if (out.expired) {
             out.deleteFailed()
             return
@@ -100,32 +119,32 @@ internal class CryptoWorker(
                 knownDeviceIds.forEach {
                     out.putSubDeliveryStatuses(
                         it.toString(),
-                        Model.OutgoingShortMessage.SubDeliveryStatus.SENDING
+                        Model.OutboundMessage.SubDeliveryStatus.SENDING
                     )
                 }
                 db.mutate { it.put(out.dbPath, out.build()) }
             }
         }
 
-        db.get<Model.ShortMessageRecord>(out.shortMessagePath)?.let { msgRecord ->
-            val pendingAttachments = msgRecord.pendingAttachments
+        db.get<Model.StoredMessage>(out.msgPath)?.let { msg ->
+            val pendingAttachments = msg.pendingAttachments
             if (pendingAttachments.isNotEmpty()) {
                 // handle pending attachments before sending message
                 pendingAttachments.forEach { (id, attachment) ->
-                    uploadAttachment(out, msgRecord, id, attachment)
+                    uploadAttachment(out, msg, id, attachment)
                 }
                 return
             }
 
             out.subDeliveryStatusesMap.forEach { (deviceId, status) ->
-                if (status == Model.OutgoingShortMessage.SubDeliveryStatus.SENDING) {
-                    submit { encryptAndSendTo(out, deviceId, msgRecord.message) }
+                if (status == Model.OutboundMessage.SubDeliveryStatus.SENDING) {
+                    submit { encryptAndSendTo(out, deviceId, msg.message.toByteString()) }
                 }
             }
         }
     }
 
-    private fun retrievePreKeys(out: Model.OutgoingShortMessage.Builder) {
+    private fun retrievePreKeys(out: Model.OutboundMessage.Builder) {
         logger.debug("retrieving pre keys")
         val recipientIdentityKey = out.recipientIdentityKey
         messaging.anonymousClientWorker.withClient { client ->
@@ -177,7 +196,7 @@ internal class CryptoWorker(
     }
 
     private fun encryptAndSendTo(
-        out: Model.OutgoingShortMessage.Builder,
+        out: Model.OutboundMessage.Builder,
         deviceId: String,
         msg: ByteString
     ) {
@@ -188,7 +207,7 @@ internal class CryptoWorker(
 
         val transferMsg =
             Model.TransferMessage.newBuilder()
-                .setShortMessage(msg).build()
+                .setMessage(msg).build()
         // TODO: we (mostly Signal) use ByteArray everywhere, but Protocol Buffers wants byte strings
         // which have to be copied from the ByteArray. That results in a lot of extra copies,
         // it would  sure be nice to avoid that.
@@ -208,9 +227,9 @@ internal class CryptoWorker(
                         logger.debug("successfully sent message")
                         db.mutate { tx ->
                             // re-read message to make sure we're updating the latest
-                            tx.get<Model.OutgoingShortMessage>(out.dbPath)?.let {
+                            tx.get<Model.OutboundMessage>(out.dbPath)?.let {
                                 val completelySent =
-                                    it.subDeliveryStatusesMap.count { (_, status) -> status != Model.OutgoingShortMessage.SubDeliveryStatus.SENT } == 1
+                                    it.subDeliveryStatusesMap.count { (_, status) -> status != Model.OutboundMessage.SubDeliveryStatus.SENT } == 1
                                 if (completelySent) {
                                     // we're done
                                     tx.delete(out.dbPath)
@@ -219,16 +238,16 @@ internal class CryptoWorker(
                                         out.dbPath,
                                         it.toBuilder().putSubDeliveryStatuses(
                                             deviceId,
-                                            Model.OutgoingShortMessage.SubDeliveryStatus.SENT
+                                            Model.OutboundMessage.SubDeliveryStatus.SENT
                                         ).build()
                                     )
                                 }
-                                val shortMessagePath = out.shortMessagePath
-                                tx.get<Model.ShortMessageRecord>(shortMessagePath)?.let { msg ->
+                                val msgPath = out.msgPath
+                                tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
                                     tx.put(
-                                        shortMessagePath,
+                                        msgPath,
                                         msg.toBuilder()
-                                            .setStatus(if (completelySent) Model.ShortMessageRecord.DeliveryStatus.COMPLETELY_SENT else Model.ShortMessageRecord.DeliveryStatus.PARTIALLY_SENT)
+                                            .setStatus(if (completelySent) Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT else Model.StoredMessage.DeliveryStatus.PARTIALLY_SENT)
                                             .build()
                                     )
                                 }
@@ -245,8 +264,8 @@ internal class CryptoWorker(
     }
 
     private fun uploadAttachment(
-        out: Model.OutgoingShortMessage.Builder,
-        msgRecord: Model.ShortMessageRecord,
+        out: Model.OutboundMessage.Builder,
+        msg: Model.StoredMessage,
         id: Int,
         attachment: Model.StoredAttachment
     ) {
@@ -262,7 +281,7 @@ internal class CryptoWorker(
             getMoreUploadAuthorizationsIfNecessary {
                 uploadAttachment(
                     out,
-                    msgRecord,
+                    msg,
                     id,
                     attachment
                 )
@@ -272,8 +291,8 @@ internal class CryptoWorker(
 
         val updateStatus: (Boolean) -> Unit = { success ->
             db.mutate { tx ->
-                val shortMessagePath = out.shortMessagePath
-                tx.get<Model.ShortMessageRecord>(shortMessagePath)?.let { msg ->
+                val msgPath = out.msgPath
+                tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
                     val msgBuilder = msg.toBuilder()
 
                     val attachmentBuilder = attachment.toBuilder()
@@ -288,17 +307,17 @@ internal class CryptoWorker(
                     } else {
                         attachmentBuilder.setStatus(Model.StoredAttachment.Status.FAILED)
                         // mark the message as failed
-                        msgBuilder.setStatus(Model.ShortMessageRecord.DeliveryStatus.COMPLETELY_FAILED)
+                        msgBuilder.setStatus(Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED)
                         // delete the outgoing short message
                         tx.delete(out.dbPath)
                         // TODO: would be nice to be able to cancel other in-flight attachment uploads to avoid wasting bandwidth here, but it's a very edge case
                     }
 
                     msgBuilder.putAttachments(id, attachmentBuilder.build())
-                    val updatedMsgRecord = msgBuilder.build()
-                    tx.put(shortMessagePath, updatedMsgRecord)
+                    val updatedMsg = msgBuilder.build()
+                    tx.put(msgPath, updatedMsg)
 
-                    if (updatedMsgRecord.allAttachmentsUploaded) {
+                    if (updatedMsg.allAttachmentsUploaded) {
                         logger.debug("all attachments uploaded, continue with processing outgoing message")
                         submit { processOutgoing(out) }
                     }
@@ -324,17 +343,21 @@ internal class CryptoWorker(
         httpClient.newCall(request).enqueue(object : okhttp3.Callback {
             override fun onResponse(call: Call, response: Response) {
                 submit {
-                    val success = response.code == 204
-                    if (success) {
-                        logger.error("upload failed with unretriable status ${response.code}: ${response.body?.string()}")
+                    try {
+                        val success = response.code == 204
+                        if (!success) {
+                            logger.error("upload failed with unretriable status ${response.code}: ${response.body?.string()}")
+                        }
+                        updateStatus(success)
+                    } finally {
+                        response.body?.close()
                     }
-                    updateStatus(success)
                 }
             }
 
             override fun onFailure(call: Call, e: IOException) {
                 logger.error("failed to upload attachment, will try again: ${e.message}")
-                retryFailed { uploadAttachment(out, msgRecord, id, attachment) }
+                retryFailed { uploadAttachment(out, msg, id, attachment) }
             }
         })
     }
@@ -397,35 +420,100 @@ internal class CryptoWorker(
             if (!tx.contains(senderId.directContactPath)) {
                 throw UnknownSenderException()
             }
-            val msg = Model.ShortMessage.parseFrom(transferMsg.shortMessage)
-            val msgRecord = msg.inbound(senderId)
-            // save the message record itself
-            tx.put(msgRecord.dbPath, msgRecord)
-            // save inbound attachment records and trigger downloads
-            msg.attachmentsMap.keys.forEach { id ->
+            val msg = Model.Message.parseFrom(transferMsg.message)
+            val storedMsgBuilder = msg.inbound(senderId)
+            // save inbound attachments and trigger downloads
+            msg.attachmentsMap.forEach { (id, attachment) ->
                 val inboundAttachment =
-                    Model.InboundAttachment.newBuilder().setSenderId(senderId).setTs(msgRecord.ts)
-                        .setMessageId(msgRecord.id).setAttachmentId(id).build()
+                    Model.InboundAttachment.newBuilder().setSenderId(senderId)
+                        .setTs(storedMsgBuilder.ts)
+                        .setMessageId(storedMsgBuilder.id).setAttachmentId(id).build()
                 tx.put(inboundAttachment.dbPath, inboundAttachment)
-//                download(inboundAttachment)
+                val storedAttachment =
+                    messaging.newStoredAttachment.setAttachment(attachment).build()
+                storedMsgBuilder.putAttachments(id, storedAttachment)
+                downloadAttachment(inboundAttachment, storedAttachment)
             }
+
+            // save the stored message
+            val storedMsg = storedMsgBuilder.build()
+            tx.put(storedMsg.dbPath, storedMsg)
+
             // update the Contact metadata
             val contact = messaging.updateDirectContactMetaData(
                 tx,
                 senderId,
-                msgRecord.ts,
+                storedMsg.ts,
                 Model.MessageDirection.IN,
                 msg.text
             )
             // save a pointer to the message under the contact message path
-            tx.put(msgRecord.contactMessagePath(contact), msgRecord.dbPath)
+            tx.put(storedMsg.contactMessagePath(contact), storedMsg.dbPath)
         }
     }
 
-//    internal fun downloadAttachment(attachment: Model.InboundAttachment) {
-//        // TODO: provide a mechanism for resumable downloads
-//        httpClient.newCall(Request.Builder().url()
-//    }
+    internal fun downloadAttachment(
+        inbound: Model.InboundAttachment,
+        attachment: Model.StoredAttachment
+    ) {
+        // TODO: provide a mechanism for resumable downloads
+        logger.debug("downloading attachment")
+        httpClient.newCall(Request.Builder().url(attachment.attachment.downloadUrl).get().build())
+            .enqueue(object : okhttp3.Callback {
+                override fun onResponse(call: Call, response: Response) {
+                    val success = response.code == 200
+                    try {
+                        if (!success) {
+                            logger.error("download failed with unretriable status ${response.code}: ${response.body?.string()}")
+                        } else {
+                            try {
+                                FileOutputStream(attachment.filePath).use { out ->
+                                    Util.copy(response.body!!.byteStream(), out)
+                                }
+                                logger.debug("successfully downloaded attachment")
+                            } catch (t: Throwable) {
+                                logger.error("error downloading attachment data, will try again: ${t.message}")
+                                retryFailed { downloadAttachment(inbound, attachment) }
+                                return
+
+                            }
+                        }
+                    } finally {
+                        response.body?.close()
+                    }
+
+                    submit {
+                        try {
+                            val msgPath = inbound.msgPath
+                            db.mutate { tx ->
+                                tx.get<Model.StoredMessage>(msgPath)?.let { storedMsg ->
+                                    val status =
+                                        if (!success) {
+                                            Model.StoredAttachment.Status.FAILED
+                                        } else {
+                                            Model.StoredAttachment.Status.DONE
+                                        }
+                                    val updatedStoredMsgBuilder = storedMsg.toBuilder()
+                                    updatedStoredMsgBuilder.putAttachments(
+                                        inbound.attachmentId,
+                                        attachment.toBuilder().setStatus(status).build()
+                                    )
+                                    tx.put(msgPath, updatedStoredMsgBuilder.build())
+                                    tx.delete(inbound.dbPath)
+                                }
+                            }
+                        } finally {
+                            response.body?.close()
+                        }
+                    }
+                }
+
+                override fun onFailure(call: Call, e: IOException) {
+                    logger.error("failed to download attachment, will try again: ${e.message}")
+                    retryFailed { downloadAttachment(inbound, attachment) }
+                }
+            })
+    }
 
     internal fun registerPreKeys(numPreKeys: Int) {
         logger.debug("requested to register pre keys")

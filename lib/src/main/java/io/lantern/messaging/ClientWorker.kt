@@ -113,6 +113,6 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
         if (!autoConnect) {
             return
         }
-        withClient { logger.debug("auto connected") }
+        withClient { logger.trace("auto connected") }
     }
 }
