@@ -32,7 +32,7 @@ open class WebSocketTransportFactory(
             val closedByHandler = AtomicBoolean()
             client.newWebSocket(request, buildListener(handler, closedByHandler))
         } catch (t: Throwable) {
-            handler.onConnectError(t)
+            handler.onFailure(t)
         }
     }
 
@@ -73,7 +73,7 @@ open class WSListener(
     }
 
     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-        handler.onConnectError(t)
+        handler.onFailure(t)
     }
 
     override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
@@ -89,10 +89,6 @@ open class WSListener(
     }
 
     protected fun doOnClose(code: Int, reason: String?) {
-        if (code != 1000) {
-            handler.onClose(AbnormalCloseException("websocket closed abnormally: $reason"))
-        } else {
-            handler.onClose(null)
-        }
+        handler.onClose()
     }
 }

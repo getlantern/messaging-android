@@ -50,9 +50,9 @@ interface MessageHandler {
     fun setTransport(transport: Transport)
 
     /**
-     * Called if there's an error connecting the Transport
+     * Called if there's an error connecting to or communicating with the Transport
      */
-    fun onConnectError(err: Throwable)
+    fun onFailure(err: Throwable)
 
     /**
      * Called whenever a new message arrives from the remote end
@@ -61,9 +61,9 @@ interface MessageHandler {
 
     /**
      * Called when the transport has been closed to let the MessageHandler know that it should close
-     * too. If the transport was closed due to an error condition, err will be populated.
+     * too.
      */
-    fun onClose(err: Throwable? = null)
+    fun onClose()
 }
 
 /**
@@ -193,10 +193,6 @@ abstract class Client<D : ClientDelegate>(
         this.transport = transport
     }
 
-    override fun onConnectError(err: Throwable) {
-        delegate.onConnectError(err)
-    }
-
     internal fun send(msg: Messages.Message, callback: Callback<*>? = null) {
         val msgSequence = msg.sequence
         if (callback != null) {
@@ -210,7 +206,7 @@ abstract class Client<D : ClientDelegate>(
                     val err = TimeoutException("request timed out")
                     it.onError(err)
                     transport.cancel()
-                    onClose(err)
+                    doClose(err)
                 }
             }, roundTripTimeoutMillis, TimeUnit.MILLISECONDS)
         }
@@ -245,7 +241,15 @@ abstract class Client<D : ClientDelegate>(
         transport.close()
     }
 
-    override fun onClose(err: Throwable?) {
+    override fun onFailure(err: Throwable) {
+        doClose(err)
+    }
+
+    override fun onClose() {
+        doClose()
+    }
+
+    private fun doClose(err: Throwable? = null) {
         err?.let { logger.debug("client closed with error: ${it.message}") }
         timeoutChecker.shutdown() // TODO: move timeoutChecker to a companion object
         val finalErr = err ?: ClientClosedException()
@@ -253,6 +257,7 @@ abstract class Client<D : ClientDelegate>(
             logger.debug("client closed while still connecting, treat like connect error")
             delegate.onConnectError(finalErr)
         } else {
+            transport.close()
             delegate.onClose(err)
         }
         pending.values.forEach {
@@ -330,12 +335,12 @@ class AuthenticatedClient(
                 override fun onError(err: Throwable) {
                     logger.debug("error during login ${err.message}")
                     close()
-                    onConnectError(err)
+                    this@AuthenticatedClient.onFailure(err)
                 }
             })
         } catch (err: Throwable) {
             close()
-            onConnectError(err)
+            onFailure(err)
         }
     }
 }
