@@ -13,6 +13,7 @@ internal class AuthenticatedClientWorker(
     transportFactory,
     messaging,
     "authenticated",
+    roundTripTimeoutMillis,
     redialBackoffMillis,
     maxRedialDelayMillis,
     autoConnect = true

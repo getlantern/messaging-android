@@ -316,13 +316,13 @@ class MessagingTest : BaseMessagingTest() {
         val toId = to.identityKeyPair.publicKey.toString()
 
         // TODO: the below test doesn't work now that we've switched to OkHttp for websockets, fix it
-//        logger.debug("ignore sends for a while to make sure client handles this well")
-//        BrokenTransportFactory.ignoreOps.set(true)
-//        GlobalScope.launch {
-//            delay(2000)
-//            logger.debug("start honoring sends again")
-//            BrokenTransportFactory.ignoreOps.set(false)
-//        }
+        logger.debug("ignore sends for a while to make sure client handles this well")
+        BrokenTransportFactory.ignoreOps.set(true)
+        GlobalScope.launch {
+            delay(2000)
+            logger.debug("start honoring sends again")
+            BrokenTransportFactory.ignoreOps.set(false)
+        }
 
         // send a message
         val storedMsg = from.sendToDirectContact(
@@ -576,6 +576,13 @@ internal class BrokenTransportFactory(url: String, connectTimeoutMillis: Long) :
                 wrapped.send(data)
             }
 
+            override fun forceClose() {
+                Thread {
+                    removeTransport(this)
+                }.start()
+                wrapped.forceClose()
+            }
+
             override fun close() {
                 Thread {
                     removeTransport(this)
@@ -602,7 +609,7 @@ internal class BrokenTransportFactory(url: String, connectTimeoutMillis: Long) :
 
         @Synchronized
         fun closeAll() {
-            transports.forEach { it.close(); }
+            transports.forEach { it.forceClose(); }
             transports.clear()
         }
     }

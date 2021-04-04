@@ -15,6 +15,7 @@ internal class AnonymousClientWorker(
     transportFactory,
     messaging,
     "anonymous",
+    roundTripTimeoutMillis,
     redialBackoffMillis,
     maxRedialDelayMillis
 ), AnonymousClientDelegate {

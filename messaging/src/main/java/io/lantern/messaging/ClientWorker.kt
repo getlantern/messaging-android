@@ -3,6 +3,9 @@ package io.lantern.messaging
 import io.lantern.messaging.tassis.Client
 import io.lantern.messaging.tassis.ClientDelegate
 import io.lantern.messaging.tassis.TransportFactory
+import java.util.concurrent.Future
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import kotlin.math.pow
 
 /**
@@ -16,14 +19,16 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
     private val transportFactory: TransportFactory,
     messaging: Messaging,
     name: String,
+    private val connectTimeoutMillis: Long,
     private val redialBackoffMillis: Long,
     private val maxRedialDelayMillis: Long,
     private val autoConnect: Boolean = false
 ) : Worker(messaging, "$name-client"), ClientDelegate {
     private var client: C? = null
-    private var currentlyConnecting = false
+    private var cancelConnecting: ScheduledFuture<*>? = null
     private val cbsAfterConnect = ArrayList<((C) -> Unit)>()
     private var consecutiveFailures = -1
+    private val currentlyConnecting get() = cancelConnecting != null
 
     init {
         autoConnectIfNecessary()
@@ -54,9 +59,12 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
         }
 
         logger.debug("connecting")
-        currentlyConnecting = true
         val newClient = buildClient()
         transportFactory.connect(newClient)
+        cancelConnecting = executor.schedule({
+            logger.debug("closing client that failed to connect within timeout")
+            newClient.close()
+        }, connectTimeoutMillis, TimeUnit.MILLISECONDS)
     }
 
     abstract fun buildClient(): C
@@ -64,9 +72,10 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
     fun onConnected(client: C) {
         submit {
             logger.debug("successfully connected")
-            this.client = client
             consecutiveFailures = -1
-            currentlyConnecting = false
+            cancelConnecting?.cancel(true)
+            cancelConnecting = null
+            this.client = client
             cbsAfterConnect.forEach { it(client) }
             cbsAfterConnect.clear()
         }
@@ -76,7 +85,8 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
         submit {
             logger.error("error connecting client: ${err.message}")
             consecutiveFailures++
-            currentlyConnecting = false
+            cancelConnecting?.cancel(false)
+            cancelConnecting = null
             // note - we leave the cbsAfterConnect in place so that they have a chance to be run
             withClient {
                 // this is simply invoked to force an attempt at reconnecting

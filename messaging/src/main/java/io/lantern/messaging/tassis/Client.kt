@@ -72,6 +72,8 @@ interface MessageHandler {
 interface Transport {
     fun send(data: ByteArray)
 
+    fun forceClose()
+
     fun close()
 }
 
@@ -200,7 +202,7 @@ abstract class Client<D : ClientDelegate>(
                 pending.remove(msgSequence)?.let {
                     // if any request times out, consider the whole connection bad and just close it
                     it.onError(TimeoutException("request timed out"))
-                    close()
+                    transport.forceClose()
                 }
             }, roundTripTimeoutMillis, TimeUnit.MILLISECONDS)
         }
@@ -236,6 +238,7 @@ abstract class Client<D : ClientDelegate>(
     }
 
     override fun onClose(err: Throwable?) {
+        err?.let { logger.debug("client closed with error: ${it.message}") }
         timeoutChecker.shutdown() // TODO: move timeoutChecker to a companion object
         val finalErr = err ?: ClientClosedException()
         if (isConnecting.compareAndSet(true, false)) {

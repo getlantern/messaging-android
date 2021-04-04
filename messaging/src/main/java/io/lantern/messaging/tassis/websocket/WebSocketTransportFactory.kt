@@ -16,11 +16,12 @@ class AbnormalCloseException(message: String) : RuntimeException(message)
 open class WebSocketTransportFactory(
     private val url: String,
     connectTimeoutMillis: Long = 15000,
-    pingIntervalMillis: Long = connectTimeoutMillis * 2
+    pingIntervalMillis: Long = connectTimeoutMillis,
 ) : TransportFactory {
     val client =
         OkHttpClient().newBuilder().connectTimeout(connectTimeoutMillis, TimeUnit.MILLISECONDS)
             .writeTimeout(connectTimeoutMillis, TimeUnit.MILLISECONDS)
+            .readTimeout(pingIntervalMillis * 2, TimeUnit.MILLISECONDS)
             .callTimeout(connectTimeoutMillis, TimeUnit.MILLISECONDS)
             .pingInterval(pingIntervalMillis, TimeUnit.MILLISECONDS).retryOnConnectionFailure(false)
             .build()
@@ -50,6 +51,10 @@ open class WebSocketTransportFactory(
             webSocket.send(ByteString.of(*data))
         }
 
+        override fun forceClose() {
+            webSocket.close(1001, null)
+        }
+
         override fun close() {
             closedByHandler.set(true)
             webSocket.close(1000, null)
@@ -74,7 +79,7 @@ open class WSListener(
         handler.onMessage(bytes.toByteArray())
     }
 
-    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
         if (closedByHandler.get()) {
             // the handler already knows we closed, don't bother reporting
             return
