@@ -100,6 +100,26 @@ class Messaging(
             )
         }
 
+        // immediately request some upload authorizations so that we're ready to upload attachments
+        cryptoWorker.submit { cryptoWorker.getMoreUploadAuthorizationsIfNecessary() }
+
+        // on startup, read all pending OutboundMessages to try reprocessing them
+        db.list<Model.OutboundMessage>(Schema.PATH_OUTBOUND.path("%")).forEach {
+            cryptoWorker.submit { cryptoWorker.processOutgoing(it.value.toBuilder()) }
+        }
+
+        // on startup, read all pending InboundAttachments to try downloading them
+        db.list<Model.InboundAttachment>(Schema.PATH_INBOUND_ATTACHMENTS.path("%")).forEach {
+            cryptoWorker.submit {
+                val inboundAttachment = it.value
+                val storedMsg = db.get<Model.StoredMessage>(inboundAttachment.msgPath)
+                cryptoWorker.downloadAttachment(
+                    inboundAttachment,
+                    storedMsg!!.getAttachmentsOrThrow(inboundAttachment.attachmentId)
+                )
+            }
+        }
+
         // on startup, register some pre keys
         // this also has the welcome side effect of starting an authenticated client, which we need
         // in order to receive messages

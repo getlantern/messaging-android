@@ -75,28 +75,6 @@ internal class CryptoWorker(
         }
     }
 
-    init {
-        // immediately request some upload authorizations so that we're ready to upload attachments
-        submit { getMoreUploadAuthorizationsIfNecessary() }
-
-        // on startup, read all pending OutboundMessages to try reprocessing them
-        db.list<Model.OutboundMessage>(Schema.PATH_OUTBOUND.path("%")).forEach {
-            submit { processOutgoing(it.value.toBuilder()) }
-        }
-
-        // on startup, read all pending InboundAttachments to try downloading them
-        db.list<Model.InboundAttachment>(Schema.PATH_INBOUND_ATTACHMENTS.path("%")).forEach {
-            submit {
-                val inboundAttachment = it.value
-                val storedMsg = db.get<Model.StoredMessage>(inboundAttachment.msgPath)
-                downloadAttachment(
-                    inboundAttachment,
-                    storedMsg!!.getAttachmentsOrThrow(inboundAttachment.attachmentId)
-                )
-            }
-        }
-    }
-
     fun processOutgoing(out: Model.OutboundMessage.Builder) {
         if (out.expired) {
             out.deleteFailed()
@@ -362,7 +340,7 @@ internal class CryptoWorker(
         })
     }
 
-    private fun getMoreUploadAuthorizationsIfNecessary(then: () -> Unit = {}) {
+    internal fun getMoreUploadAuthorizationsIfNecessary(then: () -> Unit = {}) {
         removeExpiredUploadAuthorizations()
         val numToRequest = 10 - uploadAuthorizations.size
         if (numToRequest < 0) {

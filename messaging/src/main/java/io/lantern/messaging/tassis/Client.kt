@@ -8,7 +8,6 @@ import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.SignalProtocolAddress
 import org.whispersystems.libsignal.ecc.ECPublicKey
-import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -58,7 +57,7 @@ interface MessageHandler {
     /**
      * Called whenever a new message arrives from the remote end
      */
-    fun onMessage(data: ByteBuffer?)
+    fun onMessage(data: ByteArray?)
 
     /**
      * Called when the transport has been closed to let the MessageHandler know that it should close
@@ -211,7 +210,7 @@ abstract class Client<D : ClientDelegate>(
         return Messages.Message.newBuilder().setSequence(msgSequence.incrementAndGet())
     }
 
-    override fun onMessage(data: ByteBuffer?) {
+    override fun onMessage(data: ByteArray?) {
         val msg = Messages.Message.parseFrom(data)
         onMessage(msg)
     }
@@ -275,7 +274,7 @@ class AuthenticatedClient(
         send(msg, AckCallback(cb))
     }
 
-    override fun onMessage(data: ByteBuffer?) {
+    override fun onMessage(data: ByteArray?) {
         val msg = Messages.Message.parseFrom(data)
         when (msg.payloadCase) {
             Messages.Message.PayloadCase.AUTHCHALLENGE -> processAuth(msg.authChallenge)
@@ -400,7 +399,7 @@ class AnonymousClient(
         send(msg, AckCallback(cb))
     }
 
-    override fun onMessage(data: ByteBuffer?) {
+    override fun onMessage(data: ByteArray?) {
         val msg = Messages.Message.parseFrom(data)
         when (msg.payloadCase) {
             Messages.Message.PayloadCase.AUTHCHALLENGE -> {
