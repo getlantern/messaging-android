@@ -576,11 +576,11 @@ internal class BrokenTransportFactory(url: String, connectTimeoutMillis: Long) :
                 wrapped.send(data)
             }
 
-            override fun forceClose() {
+            override fun cancel() {
                 Thread {
                     removeTransport(this)
                 }.start()
-                wrapped.forceClose()
+                wrapped.cancel()
             }
 
             override fun close() {
@@ -609,7 +609,7 @@ internal class BrokenTransportFactory(url: String, connectTimeoutMillis: Long) :
 
         @Synchronized
         fun closeAll() {
-            transports.forEach { it.forceClose(); }
+            transports.forEach { it.cancel(); }
             transports.clear()
         }
     }

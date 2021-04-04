@@ -72,8 +72,14 @@ interface MessageHandler {
 interface Transport {
     fun send(data: ByteArray)
 
-    fun forceClose()
+    /**
+     * Immediately closes the transport
+     */
+    fun cancel()
 
+    /**
+     * Initiates a graceful close of the transport
+     */
     fun close()
 }
 
@@ -201,8 +207,10 @@ abstract class Client<D : ClientDelegate>(
             timeoutChecker.schedule({
                 pending.remove(msgSequence)?.let {
                     // if any request times out, consider the whole connection bad and just close it
-                    it.onError(TimeoutException("request timed out"))
-                    transport.forceClose()
+                    val err = TimeoutException("request timed out")
+                    it.onError(err)
+                    transport.cancel()
+                    onClose(err)
                 }
             }, roundTripTimeoutMillis, TimeUnit.MILLISECONDS)
         }

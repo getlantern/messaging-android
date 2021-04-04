@@ -51,8 +51,9 @@ open class WebSocketTransportFactory(
             webSocket.send(ByteString.of(*data))
         }
 
-        override fun forceClose() {
-            webSocket.close(1001, null)
+        override fun cancel() {
+            closedByHandler.set(true)
+            webSocket.cancel()
         }
 
         override fun close() {
