@@ -17,6 +17,8 @@ import java.util.concurrent.atomic.AtomicInteger
 
 internal val logger = KotlinLogging.logger {}
 
+class CloseTimedOutException : Exception("Close timed out")
+
 /**
  * Callback interface for receiving asynchronous results.
  */
@@ -181,10 +183,11 @@ abstract class Client<D : ClientDelegate>(
     protected val delegate: D,
     private val roundTripTimeoutMillis: Long
 ) : MessageHandler {
-    private lateinit var transport: Transport
+    private var transport: Transport? = null
     private val msgSequence = AtomicInteger(1)
     protected val pending = ConcurrentHashMap<Int, Callback<Any?>>()
     protected val isConnecting = AtomicBoolean(true)
+    protected val closed = AtomicBoolean()
     private val timeoutChecker = Executors.newSingleThreadScheduledExecutor {
         Thread(it, "client-timeout-checker")
     }
@@ -198,15 +201,14 @@ abstract class Client<D : ClientDelegate>(
         if (callback != null) {
             pending[msgSequence] = callback as Callback<Any?>
         }
-        transport.send(msg.toByteArray())
+        transport?.send(msg.toByteArray())
         if (callback != null) {
             timeoutChecker.schedule({
                 pending.remove(msgSequence)?.let {
                     // if any request times out, consider the whole connection bad and just close it
                     val err = TimeoutException("request timed out")
                     it.onError(err)
-                    transport.cancel()
-                    doClose(err)
+                    close()
                 }
             }, roundTripTimeoutMillis, TimeUnit.MILLISECONDS)
         }
@@ -237,15 +239,33 @@ abstract class Client<D : ClientDelegate>(
         }
     }
 
+    /**
+     * Initiates a graceful close of this client
+     */
     fun close() {
-        transport.close()
+        transport?.close()
+        timeoutChecker.schedule({
+            if (closed.compareAndSet(false, true)) {
+                logger.debug("transport failed to close in time, cancel")
+                transport?.cancel()
+                doClose(CloseTimedOutException())
+            }
+        }, roundTripTimeoutMillis, TimeUnit.MILLISECONDS)
     }
 
     override fun onFailure(err: Throwable) {
+        if (!closed.compareAndSet(false, true)) {
+            // already closed
+            return
+        }
         doClose(err)
     }
 
     override fun onClose() {
+        if (!closed.compareAndSet(false, true)) {
+            // already closed
+            return
+        }
         doClose()
     }
 
@@ -257,7 +277,6 @@ abstract class Client<D : ClientDelegate>(
             logger.debug("client closed while still connecting, treat like connect error")
             delegate.onConnectError(finalErr)
         } else {
-            transport.close()
             delegate.onClose(err)
         }
         pending.values.forEach {
@@ -334,12 +353,10 @@ class AuthenticatedClient(
 
                 override fun onError(err: Throwable) {
                     logger.debug("error during login ${err.message}")
-                    close()
                     this@AuthenticatedClient.onFailure(err)
                 }
             })
         } catch (err: Throwable) {
-            close()
             onFailure(err)
         }
     }

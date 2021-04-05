@@ -7,30 +7,30 @@ import mu.KotlinLogging
 import okhttp3.*
 import okio.ByteString
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 
 private val logger = KotlinLogging.logger {}
 
-class AbnormalCloseException(message: String) : RuntimeException(message)
-
 open class WebSocketTransportFactory(
     private val url: String,
-    connectTimeoutMillis: Long = 15000,
+    connectTimeoutMillis: Long = 10000,
+    writeTimeoutMillis: Long = connectTimeoutMillis,
+    callTimeoutMillis: Long = writeTimeoutMillis,
     pingIntervalMillis: Long = connectTimeoutMillis,
+    readTimeoutMillis: Long = pingIntervalMillis * 2,
 ) : TransportFactory {
     val client =
         OkHttpClient().newBuilder().connectTimeout(connectTimeoutMillis, TimeUnit.MILLISECONDS)
-            .writeTimeout(connectTimeoutMillis, TimeUnit.MILLISECONDS)
-            .readTimeout(pingIntervalMillis * 2, TimeUnit.MILLISECONDS)
-            .callTimeout(connectTimeoutMillis, TimeUnit.MILLISECONDS)
-            .pingInterval(pingIntervalMillis, TimeUnit.MILLISECONDS).retryOnConnectionFailure(false)
+            .writeTimeout(writeTimeoutMillis, TimeUnit.MILLISECONDS)
+            .callTimeout(callTimeoutMillis, TimeUnit.MILLISECONDS)
+            .pingInterval(pingIntervalMillis, TimeUnit.MILLISECONDS)
+            .readTimeout(readTimeoutMillis, TimeUnit.MILLISECONDS)
+            .retryOnConnectionFailure(false) // don't retry on connect failures, we handle those failures at a higher level
             .build()
 
     override fun connect(handler: MessageHandler) {
         try {
             val request = Request.Builder().url(getUrl()).build()
-            val closedByHandler = AtomicBoolean()
-            client.newWebSocket(request, buildListener(handler, closedByHandler))
+            client.newWebSocket(request, buildListener(handler))
         } catch (t: Throwable) {
             handler.onFailure(t)
         }
@@ -39,40 +39,40 @@ open class WebSocketTransportFactory(
     protected open fun getUrl(): String = url
 
     protected open fun buildListener(
-        handler: MessageHandler,
-        closedByHandler: AtomicBoolean
-    ): WebSocketListener = WSListener(this, handler, closedByHandler)
+        handler: MessageHandler
+    ): WebSocketListener = WSListener(this, handler)
 
     internal open fun buildTransport(
-        webSocket: WebSocket,
-        closedByHandler: AtomicBoolean
-    ): Transport = object : Transport {
-        override fun send(data: ByteArray) {
-            webSocket.send(ByteString.of(*data))
-        }
+        webSocket: WebSocket
+    ): Transport = WSTransport(webSocket)
+}
 
-        override fun cancel() {
-            closedByHandler.set(true)
-            webSocket.cancel()
-        }
+internal open class WSTransport(
+    internal val webSocket: WebSocket
+) : Transport {
+    override fun send(data: ByteArray) {
+        webSocket.send(ByteString.of(*data))
+    }
 
-        override fun close() {
-            closedByHandler.set(true)
-            webSocket.close(1000, null)
-        }
+    override fun cancel() {
+        webSocket.cancel()
+    }
+
+    override fun close() {
+        webSocket.close(1000, null)
     }
 }
 
 open class WSListener(
     protected val factory: WebSocketTransportFactory,
     protected val handler: MessageHandler,
-    protected val closedByHandler: AtomicBoolean,
 ) : WebSocketListener() {
     override fun onOpen(webSocket: WebSocket, response: Response) {
-        handler.setTransport(factory.buildTransport(webSocket, closedByHandler))
+        handler.setTransport(factory.buildTransport(webSocket))
     }
 
     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+        logger.debug("onFailure ${t.message}")
         handler.onFailure(t)
     }
 
@@ -80,15 +80,7 @@ open class WSListener(
         handler.onMessage(bytes.toByteArray())
     }
 
-    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-        if (closedByHandler.get()) {
-            // the handler already knows we closed, don't bother reporting
-            return
-        }
-        doOnClose(code, reason)
-    }
-
-    protected fun doOnClose(code: Int, reason: String?) {
+    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
         handler.onClose()
     }
 }

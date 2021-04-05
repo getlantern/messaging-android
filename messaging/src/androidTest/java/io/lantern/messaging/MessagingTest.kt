@@ -554,9 +554,8 @@ internal class BrokenTransportFactory(url: String, connectTimeoutMillis: Long) :
         if (succeedDialing.get()) super.getUrl() else "wss://badtassis.lantern.io:9436"
 
     override fun buildListener(
-        handler: MessageHandler,
-        closedByHandler: AtomicBoolean
-    ): WebSocketListener = object : WSListener(this, handler, closedByHandler) {
+        handler: MessageHandler
+    ): WebSocketListener = object : WSListener(this, handler) {
         override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
             if (ignoreOps.get()) {
                 return
@@ -565,10 +564,10 @@ internal class BrokenTransportFactory(url: String, connectTimeoutMillis: Long) :
         }
     }
 
-    override fun buildTransport(webSocket: WebSocket, closedByHandler: AtomicBoolean): Transport {
-        val wrapped = super.buildTransport(webSocket, closedByHandler)
+    override fun buildTransport(webSocket: WebSocket): Transport {
+        val wrapped = super.buildTransport(webSocket)
 
-        return object : Transport {
+        val transport = object : Transport {
             override fun send(data: ByteArray) {
                 if (ignoreOps.get()) {
                     return
@@ -587,9 +586,14 @@ internal class BrokenTransportFactory(url: String, connectTimeoutMillis: Long) :
                 Thread {
                     removeTransport(this)
                 }.start()
+                if (ignoreOps.get()) {
+                    return
+                }
                 wrapped.close()
             }
         }
+        addTransport(transport)
+        return transport
     }
 
     companion object {
