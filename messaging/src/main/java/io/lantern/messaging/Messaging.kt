@@ -23,7 +23,8 @@ import java.util.*
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
-class UnknownSenderException : Exception("Unknown sender")
+class UnknownSenderException(internal val senderId: String, internal val messageId: String) :
+    Exception("Unknown sender")
 
 class AttachmentTooBigException(val maxAttachmentBytes: Long) : Exception("Attachment Too Big")
 
@@ -139,13 +140,22 @@ class Messaging(
     // Adds or updates the given direct Contact
     fun addOrUpdateDirectContact(identityKey: String, displayName: String) {
         val path = identityKey.directContactPath
-        db.mutate { tx ->
-            val contactBuilder =
-                tx.get<Model.Contact>(path)?.toBuilder() ?: Model.Contact.newBuilder()
-                    .setType(Model.Contact.Type.DIRECT)
-                    .setId(identityKey)
-            val contact = contactBuilder.setDisplayName(displayName).build()
-            tx.put(path, contact)
+        cryptoWorker.submitForValue {
+            db.mutate { tx ->
+                val contactBuilder =
+                    tx.get<Model.Contact>(path)?.toBuilder() ?: Model.Contact.newBuilder()
+                        .setType(Model.Contact.Type.DIRECT)
+                        .setId(identityKey)
+                val contact = contactBuilder.setDisplayName(displayName).build()
+                tx.put(path, contact)
+                // decrypt any "spam" we received from this Contact prior to adding them
+                db.list<ByteArray>(contact.spamQuery)
+                    .forEach { (spamPath, unidentifiedSenderMessage) ->
+                        cryptoWorker.doDecryptAndStore(unidentifiedSenderMessage)
+                        tx.delete(spamPath)
+                    }
+
+            }
         }
     }
 

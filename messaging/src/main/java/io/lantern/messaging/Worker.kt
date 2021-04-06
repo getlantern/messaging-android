@@ -2,9 +2,7 @@ package io.lantern.messaging
 
 import mu.KotlinLogging
 import java.io.Closeable
-import java.util.concurrent.Executors
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.*
 
 internal abstract class Worker(
     protected val messaging: Messaging,
@@ -42,6 +40,18 @@ internal abstract class Worker(
             }
         } catch (t: Throwable) {
             logger.error(t.message)
+        }
+    }
+
+    internal fun <T> submitForValue(cmd: () -> T): T {
+        try {
+            return executor.submit(object : Callable<T> {
+                override fun call(): T {
+                    return cmd()
+                }
+            }).get()
+        } catch (e: ExecutionException) {
+            throw e.cause ?: e
         }
     }
 

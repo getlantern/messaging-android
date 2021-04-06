@@ -142,41 +142,33 @@ class MessagingTest : BaseMessagingTest() {
                     // now have cat add dog as a contact
                     cat.addOrUpdateDirectContact(dogId, "Dog")
 
+                    // verify that cat now has message from dog
+                    val mostRecentMsg =
+                        cat.waitFor<Model.StoredMessage>(Schema.PATH_MESSAGES.path("%")) {
+                            it?.attachmentsMap?.filter { (_, attachment) -> attachment.status == Model.StoredAttachment.Status.DONE }
+                                ?.count() ?: 0 == 1
+                        }
+                    assertEquals(
+                        dogId,
+                        mostRecentMsg?.senderId,
+                        "most recent message should have come from dog"
+                    )
+                    assertEquals(
+                        "hello cat",
+                        mostRecentMsg?.text,
+                        "most recent message should have had correct text"
+                    )
+
                     // close connections to make sure reconnecting works okay
                     BrokenTransportFactory.closeAll()
 
-                    // now try sending again from dog
-                    sendAndVerifyReceived<Any>(
-                        "cat receives message after adding dog as contact",
-                        dog,
-                        cat,
-                        text = "hello again cat",
-                        attachments = arrayOf(
-                            dog.createAttachment(
-                                "text/plain",
-                                "new attachment for cat".length.toLong(),
-                                ByteArrayInputStream(
-                                    "new attachment for cat".toByteArray(
-                                        Charsets.UTF_8
-                                    )
-                                ),
-                                mapOf("mymetadata" to "metadatavalue")
-                            )
-                        )
-                    )
-
                     // now reply from cat
-                    val mostRecentMsg = cat.db.list<Model.StoredMessage>(
-                        Schema.PATH_MESSAGES.path("%"),
-                        count = 1,
-                        reverseSort = true
-                    ).first().value
                     sendAndVerifyReceived<Any>(
                         "cat can successfully respond to dog",
                         cat,
                         dog,
                         "hi dog",
-                        replyToId = mostRecentMsg.id
+                        replyToId = mostRecentMsg?.id
                     )
 
                     // make sure outbound and inbound queues are empty

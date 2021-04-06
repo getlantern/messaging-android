@@ -378,27 +378,38 @@ internal class CryptoWorker(
 
     internal fun decryptAndStore(inbound: InboundMessage) {
         submit {
-            try {
-                doDecryptAndStore(inbound)
-            } catch (e: Exception) {
-                logger.error("problem decrypting and storing message, dropping: ${e.message}")
-                // TODO: maybe add this to a failed folder and/or a spam folder
-            }
+            doDecryptAndStore(inbound.data.toByteArray())
             inbound.ack()
         }
     }
 
-    private fun doDecryptAndStore(inbound: InboundMessage) {
+    internal fun doDecryptAndStore(unidentifiedSenderMessage: ByteArray) {
+        try {
+            attemptDecryptAndStore(unidentifiedSenderMessage)
+        } catch (e: UnknownSenderException) {
+            logger.error("message from unknown sender, saving to spam")
+            db.mutate { tx ->
+                tx.put(
+                    spamPath(e.senderId, e.messageId, nowUnixNano),
+                    unidentifiedSenderMessage
+                )
+            }
+        } catch (e: Exception) {
+            logger.error("unexpected problem decrypting and storing message, dropping: ${e.message}")
+        }
+    }
+
+    private fun attemptDecryptAndStore(unidentifiedSenderMessage: ByteArray) {
         db.mutate { tx ->
-            val decryptionResult = cipher.decrypt(inbound.data.toByteArray())
+            val decryptionResult = cipher.decrypt(unidentifiedSenderMessage)
             val plainText = Padding.stripMessagePadding(decryptionResult.paddedMessage)
             val transferMsg = Model.TransferMessage.parseFrom(plainText)
             val senderAddress = decryptionResult.senderAddress
             val senderId = senderAddress.identityKey.toString()
-            if (!tx.contains(senderId.directContactPath)) {
-                throw UnknownSenderException()
-            }
             val msg = Model.Message.parseFrom(transferMsg.message)
+            if (!tx.contains(senderId.directContactPath)) {
+                throw UnknownSenderException(senderId, msg.id.base32)
+            }
             val storedMsgBuilder = msg.inbound(senderId)
             // save inbound attachments and trigger downloads
             msg.attachmentsMap.forEach { (id, attachment) ->
