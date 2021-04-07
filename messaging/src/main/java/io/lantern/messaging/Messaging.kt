@@ -192,7 +192,7 @@ class Messaging(
         replyToSenderId?.let { msgBuilder.setReplyToSenderId(it) }
         replyToId?.let { msgBuilder.setReplyToId(it) }
         val out =
-            Model.OutboundMessage.newBuilder().setId(base32Id)
+            Model.OutboundMessage.newBuilder().setMessageId(base32Id)
                 .setSent(sent)
                 .setSenderId(store.identityKeyPair.publicKey.toString())
                 .setRecipientId(recipientId)
@@ -213,7 +213,7 @@ class Messaging(
             tx.put(msg.contactMessagePath(contact), msg.dbPath)
             // enqueue the outgoing message in the db for sending (actual send happens in the
             // message processing loop)
-            tx.put(msg.outboundPath, out.build())
+            tx.put(out.dbPath, out.build())
             cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
         }
         return msg

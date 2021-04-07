@@ -535,7 +535,7 @@ private suspend fun <T> waitFor(maxWait: Long, get: suspend () -> T?): T? {
 internal fun DB.dump() {
     val dumpString = this.list<Any>("%").sortedBy { it.path }.map {
         "${it.path}: ${it.value}"
-    }
+    }.joinToString("\n")
     println("DB Dump for ${this.get<Model.Contact>(Schema.PATH_ME)?.displayName}\n===============================================\n\n${dumpString}\n\n======================================")
 }
 

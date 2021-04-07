@@ -74,11 +74,34 @@ message StoredMessage {
   string id = 2; // the id of the message (same as on Message), encoded in base32
   int64 ts = 3; // The unix timestamp in nanoseconds for when the message was sent (for OUT) or received (for IN)
   string replyToSenderId = 4; // if this message is a reply to another message, this contains the ID of the sender of that message
-  string replyToId = 5; // if this message is a reply to another message, this contains the ID of that messsage
+  string replyToId = 5; // if this message is a reply to another message, this contains the ID of that message
   string text = 6;
   map<int32, StoredAttachment> attachments = 7; // attachments keyed to unique IDs for each attachment within this message
   MessageDirection direction = 8; // direction in which the message is going/came
   DeliveryStatus status = 9; // for outgoing messages, the status of its sending and delivery
+}
+
+// A reaction to a message
+message Reaction {
+  bytes reactingToSenderId = 1; // the id of the sender of the message to which this is reacting
+  bytes reactingToMessageId = 2; // the id of the message to which this is reacting
+  string emoticon = 3; // a single character emoticon representing the reaction
+}
+
+// An instruction to set messages in a conversation to automatically delete after reaching a certain
+// age.
+message SetAutoDeleteAge {
+  int32 ageInSeconds = 1; // messages in the relevant conversation older than this age in seconds will be automatically deleted
+}
+
+// An envelope for messages to be transferred via the message broker
+message TransferMessage {
+  oneof content {
+    bytes message = 1; // serialized Message
+    bytes reaction = 2; // serialized Reaction
+    bytes deleteMessageId = 100; // the id of a message from this Sender to delete
+    bytes setAutoDeleteAge = 4; // serialized SetAutoDeleteAge
+  }
 }
 
 // An outbound Message
@@ -88,11 +111,17 @@ message OutboundMessage {
     SENT = 1; // message has been sent to specific deviceId
   }
 
-  string senderId = 1; // the id of who sent this message (same as on StoredMessage)
-  string id = 2; // the id of the message (same as on Message), encoded in base32
-  int64 sent = 3; // The unix timestamp in nanoseconds for when the message was sent
-  string recipientId = 4; // the id of the recipient
+  string id = 1; // a unique identifier for this
+  string senderId = 2; // the id of who sent this message (same as on StoredMessage)
+  string recipientId = 3; // the id of the recipient
+  int64 sent = 4; // The unix timestamp in nanoseconds for when the message was sent
   map<string, SubDeliveryStatus> subDeliveryStatuses = 5; // Statuses of subdeliveries to specific deviceIds
+  oneof content {
+    string messageId = 31; // the id of the message (same as on Message), encoded in base32
+    bytes reaction = 32; // serialized Reaction
+    bytes deleteMessageId = 33; // the id of a message from this Sender to delete
+    bytes setAutoDeleteAge = 34; // serialized SetAutoDeleteAge
+  }
 }
 
 // An inbound Attachment
@@ -101,10 +130,4 @@ message InboundAttachment {
   string messageId = 2; // the id of the StoredMessage, encoded in base32
   int64 ts = 3; // The unix timestamp in nanoseconds for when the message was received (has to match what's on the StoredMessage
   int32 attachmentId = 4; // The id of the attachment within the Message
-}
-
-message TransferMessage {
-  oneof content {
-    bytes Message = 1; // the serialized Message
-  }
 }

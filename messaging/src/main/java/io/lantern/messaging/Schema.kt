@@ -42,13 +42,10 @@ val Model.StoredMessage.timestampUnknownQuery: String
     get() = Schema.PATH_MESSAGES.path(senderId, "%", id)
 
 val Model.OutboundMessage.Builder.msgPath: String
-    get() = Schema.PATH_MESSAGES.path(senderId, sent, id)
+    get() = Schema.PATH_MESSAGES.path(senderId, sent, messageId)
 
 val Model.OutboundMessage.Builder.dbPath: String
     get() = Schema.PATH_OUTBOUND.path(sent, id)
-
-val Model.StoredMessage.outboundPath: String
-    get() = Schema.PATH_OUTBOUND.path(ts, id)
 
 fun Model.StoredMessage.inboundAttachmentPath(attachmentId: Int) =
     Schema.PATH_INBOUND_ATTACHMENTS.path(senderId, ts, id, attachmentId)
