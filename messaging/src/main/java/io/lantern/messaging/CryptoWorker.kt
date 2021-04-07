@@ -429,13 +429,7 @@ internal class CryptoWorker(
             tx.put(storedMsg.dbPath, storedMsg)
 
             // update the Contact metadata
-            val contact = messaging.updateDirectContactMetaData(
-                tx,
-                senderId,
-                storedMsg.ts,
-                Model.MessageDirection.IN,
-                msg.text
-            )
+            val contact = messaging.updateDirectContactMetaData(tx, senderId, storedMsg)
             // save a pointer to the message under the contact message path
             tx.put(storedMsg.contactMessagePath(contact), storedMsg.dbPath)
         }

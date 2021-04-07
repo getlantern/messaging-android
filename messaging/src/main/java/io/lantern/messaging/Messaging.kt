@@ -208,13 +208,7 @@ class Messaging(
             // save the message in a list of all messages
             tx.put(msg.dbPath, msg)
             // update the relevant contact
-            val contact = updateDirectContactMetaData(
-                tx,
-                recipientId,
-                sent,
-                Model.MessageDirection.OUT,
-                msg.text
-            )
+            val contact = updateDirectContactMetaData(tx, recipientId, msg)
             // save the message under the relevant contact messages
             tx.put(msg.contactMessagePath(contact), msg.dbPath)
             // enqueue the outgoing message in the db for sending (actual send happens in the
@@ -289,22 +283,24 @@ class Messaging(
     internal fun updateDirectContactMetaData(
         tx: Transaction,
         identityKey: String,
-        messageTs: Long = 0,
-        messageDirection: Model.MessageDirection,
-        messageText: String = ""
+        msg: Model.StoredMessage,
     ): Model.Contact {
         val contactPath = identityKey.directContactPath
         val contact = tx.get<Model.Contact>(contactPath)
             ?: throw IllegalArgumentException("unknown direct contact")
-        if (messageTs <= contact.mostRecentMessageTs) {
+        if (msg.ts <= contact.mostRecentMessageTs) {
             return contact
         }
         // delete existing index entry
         tx.delete(contact.timestampedIdxPath)
         // update the contact
-        val updatedContact = contact.toBuilder().setMostRecentMessageTs(messageTs)
-            .setMostRecentMessageDirection(messageDirection).setMostRecentMessageText(messageText)
-            .build()
+        val updatedContactBuilder = contact.toBuilder().setMostRecentMessageTs(msg.ts)
+            .setMostRecentMessageDirection(msg.direction).setMostRecentMessageText(msg.text)
+        if (msg.attachmentsCount > 0) {
+            updatedContactBuilder.mostRecentAttachmentMimeType =
+                msg.attachmentsMap[0]!!.attachment.mimeType
+        }
+        val updatedContact = updatedContactBuilder.build()
         tx.put(contactPath, updatedContact)
         // create a new index entry
         tx.put(updatedContact.timestampedIdxPath, contactPath)

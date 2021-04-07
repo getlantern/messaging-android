@@ -24,6 +24,7 @@ message Contact {
   int64 mostRecentMessageTs = 7; // the unix timestamp of the most recent message with this contact
   MessageDirection mostRecentMessageDirection = 8; // direction of the most recent message with this contact
   string mostRecentMessageText = 9; // the text of the most recent message with this contact
+  string mostRecentAttachmentMimeType = 10; // the mime type of the most recent attachment with this contact
 }
 
 // An attachment to a Message
@@ -54,7 +55,7 @@ message StoredAttachment {
 message Message {
   bytes id = 1; // the id of the message, unique under the given sender
   bytes replyToSenderId = 2; // if this message is a reply to another message, this contains the ID of the sender of that message
-  bytes replyToId = 3; // if this message is a reply to another message, this contains the ID of that messsage
+  bytes replyToId = 3; // if this message is a reply to another message, this contains the ID of that message
   string text = 4;
   map<int32, Attachment> attachments = 5; // attachments keyed to unique IDs for each attachment within this message
 }

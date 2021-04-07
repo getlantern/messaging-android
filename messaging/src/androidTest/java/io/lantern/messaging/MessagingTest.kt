@@ -362,18 +362,25 @@ class MessagingTest : BaseMessagingTest() {
         )
 
         if (attachments != null) {
-            assertEquals(attachments.size, storedMsg.attachmentsCount)
+            assertEquals(attachments.size, storedMsg.attachmentsCount, testCase)
+            assertEquals(
+                storedMsg.attachmentsMap[0]!!.attachment.mimeType,
+                storedContact.mostRecentAttachmentMimeType,
+                testCase
+            )
             attachments.forEach { attachment ->
                 val storedAttachment =
                     storedMsg.attachmentsMap.values.find { it.guid == attachment.guid }
-                assertNotNull(storedAttachment)
+                assertNotNull(storedAttachment, testCase)
                 assertEquals(
                     attachment.attachment.metadataMap,
-                    storedAttachment.attachment.metadataMap
+                    storedAttachment.attachment.metadataMap,
+                    testCase
                 )
                 assertEquals(
                     File(attachment.filePath).length(),
-                    AttachmentCipherOutputStream.getCiphertextLength(attachment.attachment.plaintextLength)
+                    AttachmentCipherOutputStream.getCiphertextLength(attachment.attachment.plaintextLength),
+                    testCase
                 )
             }
         }
@@ -432,6 +439,11 @@ class MessagingTest : BaseMessagingTest() {
             // make sure recipient got attachments
             if (attachments != null) {
                 assertEquals(attachments.size, storedMsgFromDb.attachmentsCount, testCase)
+                assertEquals(
+                    storedMsgFromDb.attachmentsMap[0]!!.attachment.mimeType,
+                    storedContact.mostRecentAttachmentMimeType,
+                    testCase
+                )
                 // wait for all attachments to download
                 val storedMsgWithDownloadedAttachments =
                     to.waitFor<Model.StoredMessage>(storedMsgFromDb.dbPath) {
