@@ -1,6 +1,6 @@
 package io.lantern.messaging
 
-import com.google.protobuf.ByteString
+import io.lantern.db.Transaction
 import io.lantern.messaging.tassis.*
 import io.lantern.messaging.tassis.Callback
 import io.lantern.messaging.time.millisToNanos
@@ -104,19 +104,56 @@ internal class CryptoWorker(
             }
         }
 
-        db.get<Model.StoredMessage>(out.msgPath)?.let { msg ->
-            val pendingAttachments = msg.pendingAttachments
-            if (pendingAttachments.isNotEmpty()) {
-                // handle pending attachments before sending message
-                pendingAttachments.forEach { (id, attachment) ->
-                    uploadAttachment(out, msg, id, attachment)
+        when (out.contentCase) {
+            Model.OutboundMessage.ContentCase.MESSAGEID -> {
+                db.get<Model.StoredMessage>(out.msgPath)?.let { msg ->
+                    val pendingAttachments = msg.pendingAttachments
+                    if (pendingAttachments.isNotEmpty()) {
+                        // handle pending attachments before sending message
+                        pendingAttachments.forEach { (id, attachment) ->
+                            uploadAttachment(out, msg, id, attachment)
+                        }
+                        return
+                    }
+
+                    encryptAndSendToAll(out, afterSuccess = { tx, completelySent ->
+                        val msgPath = out.msgPath
+                        tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
+                            tx.put(
+                                msgPath,
+                                msg.toBuilder()
+                                    .setStatus(if (completelySent) Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT else Model.StoredMessage.DeliveryStatus.PARTIALLY_SENT)
+                                    .build()
+                            )
+                        }
+                    }) {
+                        Model.TransferMessage.newBuilder()
+                            .setMessage(msg.message.toByteString()).build()
+                            .toByteArray()
+                    }
                 }
-                return
             }
 
-            out.subDeliveryStatusesMap.forEach { (deviceId, status) ->
-                if (status == Model.OutboundMessage.SubDeliveryStatus.SENDING) {
-                    submit { encryptAndSendTo(out, deviceId, msg.message.toByteString()) }
+            Model.OutboundMessage.ContentCase.REACTION -> {
+                encryptAndSendToAll(out) {
+                    Model.TransferMessage.newBuilder().setReaction(out.reaction).build()
+                        .toByteArray()
+                }
+            }
+
+            Model.OutboundMessage.ContentCase.DELETEMESSAGEID -> {
+                encryptAndSendToAll(out) {
+                    Model.TransferMessage.newBuilder().setDeleteMessageId(out.deleteMessageId)
+                        .build()
+                        .toByteArray()
+                }
+            }
+
+            Model.OutboundMessage.ContentCase.SETAUTODELETEAGE -> {
+                encryptAndSendToAll(out) {
+                    Model.TransferMessage.newBuilder().setSetAutoDeleteAge(out.setAutoDeleteAge)
+                        .build()
+                        .toByteArray()
                 }
             }
         }
@@ -173,23 +210,35 @@ internal class CryptoWorker(
         }
     }
 
+    private fun encryptAndSendToAll(
+        out: Model.OutboundMessage.Builder,
+        afterSuccess: ((Transaction, Boolean) -> Unit)? = null,
+        build: () -> ByteArray
+    ) {
+        out.subDeliveryStatusesMap.forEach { (deviceId, status) ->
+            if (status == Model.OutboundMessage.SubDeliveryStatus.SENDING) {
+                submit {
+                    encryptAndSendTo(out, deviceId, afterSuccess, build)
+                }
+            }
+        }
+    }
+
     private fun encryptAndSendTo(
         out: Model.OutboundMessage.Builder,
         deviceId: String,
-        msg: ByteString
+        afterSuccess: ((Transaction, Boolean) -> Unit)? = null,
+        build: () -> ByteArray
     ) {
         if (out.expired) {
             out.deleteFailed()
             return
         }
 
-        val transferMsg =
-            Model.TransferMessage.newBuilder()
-                .setMessage(msg).build()
         // TODO: we (mostly Signal) use ByteArray everywhere, but Protocol Buffers wants byte strings
         // which have to be copied from the ByteArray. That results in a lot of extra copies,
         // it would  sure be nice to avoid that.
-        val plainText = transferMsg.toByteArray()
+        val plainText = build()
         val paddedPlainText = Padding.padMessage(plainText)
         val to =
             SignalProtocolAddress(out.recipientIdentityKey, DeviceId(deviceId))
@@ -220,22 +269,14 @@ internal class CryptoWorker(
                                         ).build()
                                     )
                                 }
-                                val msgPath = out.msgPath
-                                tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
-                                    tx.put(
-                                        msgPath,
-                                        msg.toBuilder()
-                                            .setStatus(if (completelySent) Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT else Model.StoredMessage.DeliveryStatus.PARTIALLY_SENT)
-                                            .build()
-                                    )
-                                }
+                                afterSuccess?.let { it(tx, completelySent) }
                             }
                         }
                     }
 
                     override fun onError(err: Throwable) {
                         logger.error("failed to send: ${err.message}")
-                        retryFailed { encryptAndSendTo(out, deviceId, msg) }
+                        retryFailed { encryptAndSendTo(out, deviceId, afterSuccess, build) }
                     }
                 })
         }
@@ -406,32 +447,37 @@ internal class CryptoWorker(
             val transferMsg = Model.TransferMessage.parseFrom(plainText)
             val senderAddress = decryptionResult.senderAddress
             val senderId = senderAddress.identityKey.toString()
-            val msg = Model.Message.parseFrom(transferMsg.message)
-            if (!tx.contains(senderId.directContactPath)) {
-                throw UnknownSenderException(senderId, msg.id.base32)
-            }
-            val storedMsgBuilder = msg.inbound(senderId)
-            // save inbound attachments and trigger downloads
-            msg.attachmentsMap.forEach { (id, attachment) ->
-                val inboundAttachment =
-                    Model.InboundAttachment.newBuilder().setSenderId(senderId)
-                        .setTs(storedMsgBuilder.ts)
-                        .setMessageId(storedMsgBuilder.id).setAttachmentId(id).build()
-                tx.put(inboundAttachment.dbPath, inboundAttachment)
-                val storedAttachment =
-                    messaging.newStoredAttachment.setAttachment(attachment).build()
-                storedMsgBuilder.putAttachments(id, storedAttachment)
-                downloadAttachment(inboundAttachment, storedAttachment)
+            when (transferMsg.contentCase) {
+                Model.TransferMessage.ContentCase.MESSAGE -> {
+                    val msg = Model.Message.parseFrom(transferMsg.message)
+                    if (!tx.contains(senderId.directContactPath)) {
+                        throw UnknownSenderException(senderId, msg.id.base32)
+                    }
+                    val storedMsgBuilder = msg.inbound(senderId)
+                    // save inbound attachments and trigger downloads
+                    msg.attachmentsMap.forEach { (id, attachment) ->
+                        val inboundAttachment =
+                            Model.InboundAttachment.newBuilder().setSenderId(senderId)
+                                .setTs(storedMsgBuilder.ts)
+                                .setMessageId(storedMsgBuilder.id).setAttachmentId(id).build()
+                        tx.put(inboundAttachment.dbPath, inboundAttachment)
+                        val storedAttachment =
+                            messaging.newStoredAttachment.setAttachment(attachment).build()
+                        storedMsgBuilder.putAttachments(id, storedAttachment)
+                        downloadAttachment(inboundAttachment, storedAttachment)
+                    }
+
+                    // save the stored message
+                    val storedMsg = storedMsgBuilder.build()
+                    tx.put(storedMsg.dbPath, storedMsg)
+
+                    // update the Contact metadata
+                    val contact = messaging.updateDirectContactMetaData(tx, senderId, storedMsg)
+                    // save a pointer to the message under the contact message path
+                    tx.put(storedMsg.contactMessagePath(contact), storedMsg.dbPath)
+                }
             }
 
-            // save the stored message
-            val storedMsg = storedMsgBuilder.build()
-            tx.put(storedMsg.dbPath, storedMsg)
-
-            // update the Contact metadata
-            val contact = messaging.updateDirectContactMetaData(tx, senderId, storedMsg)
-            // save a pointer to the message under the contact message path
-            tx.put(storedMsg.contactMessagePath(contact), storedMsg.dbPath)
         }
     }
 
