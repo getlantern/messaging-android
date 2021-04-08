@@ -114,7 +114,10 @@ class MessagingTest : BaseMessagingTest() {
                 newMessaging("cat", store = catStore).with { cat ->
                     val sentMsgFromDB =
                         dog.waitFor<Model.StoredMessage>(sentMsg.dbPath) { it?.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT }
-                    assertNotNull(sentMsgFromDB, "message from dog to cat should have successfully sent once Cat registered pre keys")
+                    assertNotNull(
+                        sentMsgFromDB,
+                        "message from dog to cat should have successfully sent once Cat registered pre keys"
+                    )
                     assertEquals(
                         Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT,
                         sentMsgFromDB.status,
@@ -154,56 +157,6 @@ class MessagingTest : BaseMessagingTest() {
                         replyToId = mostRecentMsg.id
                     )
 
-                    // locally delete most recent message that cat received from dog
-                    cat.deleteLocally(mostRecentMsg.dbPath)
-                    assertNull(
-                        cat.db.get<Model.StoredMessage>(mostRecentMsg.dbPath),
-                        "message should have been deleted"
-                    )
-                    mostRecentMsg.attachmentsMap.values.forEach { storedAttachment ->
-                        assertFalse(
-                            File(storedAttachment.filePath).exists(),
-                            "attachment file should have been deleted"
-                        )
-                    }
-
-                    // globally delete most recent message that cat sent to dog
-                    cat.db.list<Model.StoredMessage>(
-                        Schema.PATH_MESSAGES.path("%"),
-                        count = 1,
-                        reverseSort = true
-                    ).first().let { responseMsg ->
-                        cat.deleteGlobally(responseMsg.path)
-                        assertNull(
-                            cat.db.get<Model.StoredMessage>(responseMsg.path),
-                            "message should have been deleted locally"
-                        )
-                        val dogContact =
-                            cat.db.get<Model.Contact>(responseMsg.value.contactId.contactPath)
-                        assertNotNull(dogContact, "cat should still have a contact for dog")
-                        assertEquals(
-                            0L,
-                            dogContact.mostRecentMessageTs,
-                            "dog contact should have no most recent message timestamp"
-                        )
-                        assertEquals(
-                            "",
-                            dogContact.mostRecentMessageText,
-                            "dog contact should have no most recent message text"
-                        )
-                        assertEquals(
-                            "",
-                            dogContact.mostRecentAttachmentMimeType,
-                            "dog contact should have no most recent message attachment mime type"
-                        )
-                        val dogMsg =
-                            dog.waitFor<Model.StoredMessage>(catId.storedMessageQuery(responseMsg.value.id)) {
-                                it == null
-                            }
-                        assertNull(dogMsg, "message should have been deleted for dog too")
-                    }
-
-
                     // make sure outbound and inbound queues are empty
                     assertEquals(
                         0,
@@ -238,7 +191,148 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
-    public fun testReactions() {
+    fun testDeletions() {
+        testInCoroutine {
+            newMessaging("dog").with { dog ->
+                newMessaging("cat").with { cat ->
+                    val catId = cat.identityKeyPair.publicKey.toString()
+                    val dogId = dog.store.identityKeyPair.publicKey.toString()
+
+                    dog.addOrUpdateContact(Model.ContactType.DIRECT, catId, "Cat")
+                    cat.addOrUpdateContact(Model.ContactType.DIRECT, dogId, "Dog")
+
+                    val initialMsgs = sendAndVerify(
+                        "dog sends to cat", dog, cat, "hi cat", attachments = arrayOf(
+                            dog.createAttachment(
+                                "text/plain",
+                                "attachment for cat".length.toLong(),
+                                ByteArrayInputStream(
+                                    "attachment for cat".toByteArray(
+                                        Charsets.UTF_8
+                                    )
+                                )
+                            )
+                        )
+                    )
+                    assertNotNull(initialMsgs.received)
+
+                    // respond from cat
+                    val replyMsgs = sendAndVerify(
+                        "cat responds to dog",
+                        cat,
+                        dog,
+                        "howdie",
+                        replyToId = initialMsgs.sent.id, attachments = arrayOf(
+                            dog.createAttachment(
+                                "text/plain",
+                                "attachment for dog".length.toLong(),
+                                ByteArrayInputStream(
+                                    "attachment for dog".toByteArray(
+                                        Charsets.UTF_8
+                                    )
+                                )
+                            )
+                        )
+                    )
+
+                    // globally delete cat's reply
+                    cat.deleteGlobally(replyMsgs.sent.dbPath)
+                    assertNull(
+                        cat.db.get<Model.StoredMessage>(replyMsgs.sent.dbPath),
+                        "message should have been deleted"
+                    )
+                    replyMsgs.sent.attachmentsMap.values.forEach { storedAttachment ->
+                        assertFalse(
+                            File(storedAttachment.filePath).exists(),
+                            "attachment file should have been deleted"
+                        )
+                    }
+                    cat.db.get<Model.Contact>(replyMsgs.sent.contactId.contactPath)!!
+                        .let { dogContact ->
+                            assertEquals(
+                                initialMsgs.received.ts,
+                                dogContact.mostRecentMessageTs,
+                                "mostRecentMessageTs for dog should have reverted to prior message"
+                            )
+                            assertEquals(
+                                initialMsgs.received.text,
+                                dogContact.mostRecentMessageText,
+                                "mostRecentMessageText for dog should have reverted to prior message"
+                            )
+                            assertEquals(
+                                initialMsgs.received.attachmentsMap.values.first().attachment.mimeType,
+                                dogContact.mostRecentAttachmentMimeType,
+                                "mostRecentAttachmentMimeType for dog should be blank"
+                            )
+                        }
+
+                    val dogMsg =
+                        dog.waitFor<Model.StoredMessage>(replyMsgs.received.dbPath) {
+                            it == null
+                        }
+                    assertNull(dogMsg, "message should have been deleted for dog too")
+                    replyMsgs.received.attachmentsMap.values.forEach { storedAttachment ->
+                        assertFalse(
+                            File(storedAttachment.filePath).exists(),
+                            "attachment file should have been deleted for dog too"
+                        )
+                    }
+                    dog.db.get<Model.Contact>(replyMsgs.received.contactId.contactPath)!!
+                        .let { catContact ->
+                            assertEquals(
+                                initialMsgs.sent.ts,
+                                catContact.mostRecentMessageTs,
+                                "mostRecentMessageTs for cat should have reverted to prior message"
+                            )
+                            assertEquals(
+                                initialMsgs.sent.text,
+                                catContact.mostRecentMessageText,
+                                "mostRecentMessageText for cat should have reverted to prior message"
+                            )
+                            assertEquals(
+                                initialMsgs.sent.attachmentsMap.values.first().attachment.mimeType,
+                                catContact.mostRecentAttachmentMimeType,
+                                "mostRecentAttachmentMimeType for cat should have reverted to prior message"
+                            )
+                        }
+
+// locally delete dog's message
+                    dog.deleteLocally(initialMsgs.sent.dbPath)
+                    assertNull(
+                        cat.db.get<Model.StoredMessage>(initialMsgs.sent.dbPath),
+                        "message should have been deleted"
+                    )
+                    initialMsgs.sent.attachmentsMap.values.forEach { storedAttachment ->
+                        assertFalse(
+                            File(storedAttachment.filePath).exists(),
+                            "attachment file should have been deleted"
+                        )
+                    }
+                    dog.db.get<Model.Contact>(initialMsgs.sent.contactId.contactPath)!!
+                        .let { catContact ->
+                            assertEquals(
+                                0L,
+                                catContact.mostRecentMessageTs,
+                                "cat contact should have no most recent message timestamp"
+                            )
+                            assertEquals(
+                                "",
+                                catContact.mostRecentMessageText,
+                                "cat contact should have no most recent message text"
+                            )
+                            assertEquals(
+                                "",
+                                catContact.mostRecentAttachmentMimeType,
+                                "cat contact should have no most recent message attachment mime type"
+                            )
+                        }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun testReactions() {
         testInCoroutine {
             newMessaging("dog").with { dog ->
                 newMessaging("cat").with { cat ->
@@ -524,11 +618,16 @@ class MessagingTest : BaseMessagingTest() {
         stopSendRetryAfterMillis: Long = 5L.minutesToMillis,
         store: MessagingStore? = null
     ): Messaging {
+        val tempFile = File.createTempFile(
+            "messaging_temp_file",
+            "suffix",
+            InstrumentationRegistry.getInstrumentation().targetContext.filesDir
+        )
+        tempFile.delete()
+        val tempDir = tempFile.parentFile
+
         return Messaging(
-            File(
-                InstrumentationRegistry.getInstrumentation().targetContext.filesDir,
-                "attachments"
-            ),
+            File(tempDir, "attachments"),
             store ?: newStore(name = name),
             BrokenTransportFactory(
                 "wss://tassis.lantern.io/api",
