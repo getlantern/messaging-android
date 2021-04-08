@@ -30,6 +30,7 @@ message Contact {
   MessageDirection mostRecentMessageDirection = 6; // direction of the most recent message with this contact
   string mostRecentMessageText = 7; // the text of the most recent message with this contact
   string mostRecentAttachmentMimeType = 8; // the mime type of the most recent attachment with this contact
+  int64 messagesDisappearAfterSeconds = 9; // the number of seconds after which new messages will automatically disappear. <=0 means they won't disappear.
 }
 
 // An attachment to a Message
@@ -95,12 +96,18 @@ message Reaction {
   string emoticon = 3; // a single character emoticon representing the reaction
 }
 
+// An update to disappearing message settings
+message DisappearSettings {
+  int64 messagesDisappearAfterSeconds = 1; // the number of seconds after which new messages will automatically disappear. <=0 means they won't disappear.
+}
+
 // An envelope for messages to be transferred via the message broker
 message TransferMessage {
   oneof content {
     bytes message = 1; // serialized Message
     bytes reaction = 2; // serialized Reaction
     bytes deleteMessageId = 3; // the id of a message from this Sender to delete
+    bytes disappearSettings = 4; // serialized DisappearSettings
   }
 }
 
@@ -120,6 +127,7 @@ message OutboundMessage {
     string messageId = 31; // the id of the message (same as on Message), encoded in base32
     bytes reaction = 32; // serialized Reaction
     bytes deleteMessageId = 33; // the id of a message from this Sender to delete
+    bytes disappearSettings = 34; // serialized DisappearSettings
   }
 }
 

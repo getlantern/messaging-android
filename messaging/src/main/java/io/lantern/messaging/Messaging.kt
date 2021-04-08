@@ -141,10 +141,10 @@ class Messaging(
     }
 
     // Adds or updates the given direct Contact
-    fun addOrUpdateDirectContact(identityKey: String, displayName: String) {
+    fun addOrUpdateContact(type: Model.ContactType, id: String, displayName: String) {
         val contactId = Model.ContactId.newBuilder()
-            .setType(Model.ContactType.DIRECT)
-            .setId(identityKey).build()
+            .setType(type)
+            .setId(id).build()
         val path = contactId.contactPath
         cryptoWorker.submitForValue {
             db.mutate { tx ->
