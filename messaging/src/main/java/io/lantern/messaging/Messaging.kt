@@ -229,20 +229,56 @@ class Messaging(
 
     fun deleteGlobally(msgPath: String) {
         db.mutate { tx ->
-            val storedMsg = deleteLocally(msgPath)
-                ?: // message was already deleted locally, can't delete globally
-                return@mutate
+            deleteLocally(msgPath)?.let { storedMsg ->
+                val senderId = store.identityKeyPair.publicKey.toString()
+                val out =
+                    Model.OutboundMessage.newBuilder()
+                        .setDeleteMessageId(storedMsg.id.fromBase32.byteString())
+                        .setSent(nowUnixNano)
+                        .setSenderId(senderId)
+                        .setRecipientId(storedMsg.contactId.id) // TODO: this will need to change for groups
+                tx.put(out.dbPath, out.build())
+                cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
+            }
+        }
+    }
 
-            val sent = nowUnixNano
-            val senderId = store.identityKeyPair.publicKey.toString()
-            val out =
-                Model.OutboundMessage.newBuilder()
-                    .setDeleteMessageId(storedMsg.id.fromBase32.byteString())
-                    .setSent(sent)
-                    .setSenderId(senderId)
-                    .setRecipientId(storedMsg.contactId.id) // TODO: this will need to change for groups
-            tx.put(out.dbPath, out.build())
-            cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
+    fun react(msgPath: String, emoticon: String) {
+        if (emoticon.length > 1) {
+            throw IllegalArgumentException("emoticon must be 0 or 1 characters in length")
+        }
+
+        db.mutate { tx ->
+            db.get<Model.StoredMessage>(msgPath)?.let { storedMsg ->
+                val reactingToSenderId = storedMsg.senderId
+                val senderId = store.identityKeyPair.publicKey.toString()
+                if (senderId == reactingToSenderId) {
+                    throw IllegalArgumentException("can't react to your own message")
+                }
+
+                val reaction = Model.Reaction.newBuilder()
+                    .setReactingToSenderId(reactingToSenderId.fromBase32.byteString())
+                    .setReactingToMessageId(storedMsg.id.fromBase32.byteString())
+                    .setEmoticon(emoticon).build()
+                // store our own reaction locally
+                val builder = storedMsg.toBuilder()
+                // TODO: dry violation, this is repeated on receiving and sending ends
+                if (reaction.emoticon == "") {
+                    builder.removeReactions(senderId)
+                } else {
+                    builder.putReactions(senderId, reaction)
+                }
+                tx.put(storedMsg.dbPath, builder.build())
+                // send the reaction to other participants
+                val out =
+                    Model.OutboundMessage.newBuilder()
+                        .setReaction(reaction.toByteString())
+                        .setSent(nowUnixNano)
+                        .setSenderId(senderId)
+                        .setRecipientId(storedMsg.contactId.id) // TODO: this will need to change for groups
+                tx.put(out.dbPath, out.build())
+                cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
+            }
         }
     }
 

@@ -453,10 +453,15 @@ internal class CryptoWorker(
             val senderAddress = decryptionResult.senderAddress
             val senderId = senderAddress.identityKey.toString()
             when (transferMsg.contentCase) {
-                Model.TransferMessage.ContentCase.MESSAGE -> decryptAndStoreMessage(
+                Model.TransferMessage.ContentCase.MESSAGE -> storeMessage(
                     tx,
                     senderId,
                     Model.Message.parseFrom(transferMsg.message)
+                )
+                Model.TransferMessage.ContentCase.REACTION -> storeReaction(
+                    tx,
+                    senderId,
+                    Model.Reaction.parseFrom(transferMsg.reaction)
                 )
                 Model.TransferMessage.ContentCase.DELETEMESSAGEID -> db.listPaths(
                     senderId.storedMessageQuery(transferMsg.deleteMessageId.base32)
@@ -468,7 +473,7 @@ internal class CryptoWorker(
         }
     }
 
-    private fun decryptAndStoreMessage(tx: Transaction, senderId: String, msg: Model.Message) {
+    private fun storeMessage(tx: Transaction, senderId: String, msg: Model.Message) {
         if (!tx.contains(senderId.directContactPath)) {
             throw UnknownSenderException(senderId, msg.id.base32)
         }
@@ -494,6 +499,25 @@ internal class CryptoWorker(
         messaging.updateContactMetaData(tx, storedMsg)
         // save a pointer to the message under the contact message path
         tx.put(storedMsg.contactMessagePath, storedMsg.dbPath)
+    }
+
+    private fun storeReaction(tx: Transaction, senderId: String, reaction: Model.Reaction) {
+        if (!tx.contains(senderId.directContactPath)) {
+            throw UnknownSenderException(senderId, reaction.reactingToMessageId.base32)
+        }
+        tx.findOne<Model.StoredMessage>(
+            reaction.reactingToSenderId.base32.storedMessageQuery(
+                reaction.reactingToMessageId.base32
+            )
+        )?.let { storedMsg ->
+            val builder = storedMsg.toBuilder()
+            if (reaction.emoticon.isBlank()) {
+                builder.removeReactions(senderId)
+            } else {
+                builder.putReactions(senderId, reaction)
+            }
+            tx.put(storedMsg.dbPath, builder.build())
+        }
     }
 
     internal fun downloadAttachment(

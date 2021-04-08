@@ -163,6 +163,50 @@ class MessagingTest : BaseMessagingTest() {
                     // close connections to make sure reconnecting works okay
                     BrokenTransportFactory.closeAll()
 
+                    // add reaction from cat
+                    cat.react(
+                        mostRecentMsg.dbPath,
+                        "g"
+                    ) // no, 'g' is not an emoticon, but it's just a test
+                    val updatedMostRecentMsg = cat.db.get<Model.StoredMessage>(mostRecentMsg.dbPath)
+                    assertNotNull(updatedMostRecentMsg)
+                    assertEquals(
+                        "g",
+                        updatedMostRecentMsg.getReactionsOrThrow(catId).emoticon,
+                        "cat's reaction should have been recorded locally"
+                    )
+
+                    val dogMsg =
+                        dog.waitFor<Model.StoredMessage>(dogId.storedMessageQuery(mostRecentMsg.id)) {
+                            it?.reactionsCount ?: 0 > 0
+                        }
+                    assertNotNull(dogMsg, "dog should have gotten reaction")
+                    assertEquals(
+                        "g",
+                        dogMsg.getReactionsOrThrow(catId).emoticon,
+                        "cat's reaction should have been recorded for dog too"
+                    )
+
+                    // clear reaction from cat
+                    cat.react(
+                        mostRecentMsg.dbPath,
+                        ""
+                    )
+                    val moreUpdatedMostRecentMsg =
+                        cat.db.get<Model.StoredMessage>(mostRecentMsg.dbPath)
+                    assertNotNull(moreUpdatedMostRecentMsg)
+                    assertEquals(
+                        0,
+                        moreUpdatedMostRecentMsg.reactionsCount,
+                        "cat's reaction should have been cleared"
+                    )
+
+                    val newerDogMsg =
+                        dog.waitFor<Model.StoredMessage>(dogId.storedMessageQuery(mostRecentMsg.id)) {
+                            it?.reactionsCount ?: 0 == 0
+                        }
+                    assertNotNull(newerDogMsg, "dog should have cleared reaction")
+
                     // now reply from cat
                     sendAndVerifyReceived<Any>(
                         "cat can successfully respond to dog",
