@@ -252,25 +252,30 @@ internal class CryptoWorker(
                 object : Callback<Unit> {
                     override fun onSuccess(result: Unit) {
                         logger.debug("successfully sent message")
-                        db.mutate { tx ->
-                            // re-read message to make sure we're updating the latest
-                            tx.get<Model.OutboundMessage>(out.dbPath)?.let {
-                                val completelySent =
-                                    it.subDeliveryStatusesMap.count { (_, status) -> status != Model.OutboundMessage.SubDeliveryStatus.SENT } == 1
-                                if (completelySent) {
-                                    // we're done
-                                    tx.delete(out.dbPath)
-                                } else {
-                                    tx.put(
-                                        out.dbPath,
-                                        it.toBuilder().putSubDeliveryStatuses(
-                                            deviceId,
-                                            Model.OutboundMessage.SubDeliveryStatus.SENT
-                                        ).build()
-                                    )
+                        try {
+                            db.mutate { tx ->
+                                // re-read message to make sure we're updating the latest
+                                tx.get<Model.OutboundMessage>(out.dbPath)?.let {
+                                    val completelySent =
+                                        it.subDeliveryStatusesMap.count { (_, status) -> status != Model.OutboundMessage.SubDeliveryStatus.SENT } == 1
+                                    if (completelySent) {
+                                        // we're done
+                                        tx.delete(out.dbPath)
+                                    } else {
+                                        tx.put(
+                                            out.dbPath,
+                                            it.toBuilder().putSubDeliveryStatuses(
+                                                deviceId,
+                                                Model.OutboundMessage.SubDeliveryStatus.SENT
+                                            ).build()
+                                        )
+                                    }
+                                    afterSuccess?.let { it(tx, completelySent) }
                                 }
-                                afterSuccess?.let { it(tx, completelySent) }
                             }
+                        } catch (t: Throwable) {
+                            logger.error("unexpected error marking successful send: ${t.message}")
+                            retryFailed { encryptAndSendTo(out, deviceId, afterSuccess, build) }
                         }
                     }
 
@@ -453,6 +458,12 @@ internal class CryptoWorker(
                     senderId,
                     Model.Message.parseFrom(transferMsg.message)
                 )
+                Model.TransferMessage.ContentCase.DELETEMESSAGEID -> db.listPaths(
+                    senderId.storedMessageQuery(transferMsg.deleteMessageId.base32)
+                ).forEach { messaging.deleteLocally(it) }
+                else -> {
+                    logger.debug("received currently unsupported message type")
+                }
             }
         }
     }

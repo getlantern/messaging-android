@@ -204,7 +204,7 @@ class Messaging(
         val out =
             Model.OutboundMessage.newBuilder().setMessageId(base32Id)
                 .setSent(sent)
-                .setSenderId(store.identityKeyPair.publicKey.toString())
+                .setSenderId(senderId)
                 .setRecipientId(recipientId)
         var attachmentId = 0
         attachments?.forEach {
@@ -221,17 +221,37 @@ class Messaging(
             updateContactMetaData(tx, msg)
             // save the message under the relevant contact messages
             tx.put(msg.contactMessagePath, msg.dbPath)
-            // enqueue the outgoing message in the db for sending (actual send happens in the
-            // message processing loop)
             tx.put(out.dbPath, out.build())
             cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
         }
         return msg
     }
 
-    fun deleteLocally(msgPath: String) {
+    fun deleteGlobally(msgPath: String) {
         db.mutate { tx ->
+            val storedMsg = deleteLocally(msgPath)
+                ?: // message was already deleted locally, can't delete globally
+                return@mutate
+
+            val sent = nowUnixNano
+            val senderId = store.identityKeyPair.publicKey.toString()
+            val out =
+                Model.OutboundMessage.newBuilder()
+                    .setDeleteMessageId(storedMsg.id.fromBase32.byteString())
+                    .setSent(sent)
+                    .setSenderId(senderId)
+                    .setRecipientId(storedMsg.contactId.id) // TODO: this will need to change for groups
+            tx.put(out.dbPath, out.build())
+            cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
+        }
+    }
+
+    fun deleteLocally(msgPath: String): Model.StoredMessage? {
+        return db.mutate { tx ->
             db.get<Model.StoredMessage>(msgPath)?.let { storedMsg ->
+                tx.delete(msgPath)
+
+                // Delete attachments on disk
                 // Note - we only delete attachments locally, not in the cloud, because clients
                 // aren't authorized to modify files. They will naturally be deleted once they hit
                 // the server-side retention limit.
@@ -240,14 +260,27 @@ class Messaging(
                         logger.error("failed to delete attachment on disk, continuing")
                     }
                 }
+
+                // Delete index entries for messages under this Contact's conversation
                 tx.delete(storedMsg.contactMessagePath)
 
+                // Update the Contact metadata based on the most recent remaining message
+                tx.listDetails<Model.StoredMessage>(
+                    storedMsg.contactMessagesQuery,
+                    count = 1,
+                    reverseSort = true
+                ).let { storedMessages ->
+                    val mostRecentMsg = storedMessages.firstOrNull()
+                    if (mostRecentMsg != null) {
+                        updateContactMetaData(tx, mostRecentMsg.value, force = true)
+                    } else {
+                        clearContactMetaData(tx, storedMsg.contactId)
+                    }
+                }
+
+                return@let storedMsg
             }
         }
-    }
-
-    fun deleteGlobally(messageId: String) {
-
     }
 
     // Creates a StoredAttachment from the given File
@@ -306,7 +339,6 @@ class Messaging(
             if (!subDirectory.mkdirs()) {
                 throw RuntimeException("Unable to make attachments sub-directory ${subDirectory}")
             }
-
             return Model.StoredAttachment.newBuilder().setGuid(guid)
                 .setFilePath(File(subDirectory, guid).absolutePath)
         }
@@ -319,7 +351,7 @@ class Messaging(
         val contactPath = msg.contactId.contactPath
         val contact = tx.get<Model.Contact>(contactPath)
             ?: throw IllegalArgumentException("unknown contact")
-        if (msg.ts <= contact.mostRecentMessageTs) {
+        if (!force && msg.ts <= contact.mostRecentMessageTs) {
             return
         }
         // delete existing index entry
@@ -335,6 +367,25 @@ class Messaging(
         tx.put(contactPath, updatedContact)
         // create a new index entry
         tx.put(updatedContact.timestampedIdxPath, contactPath)
+    }
+
+    internal fun clearContactMetaData(
+        tx: Transaction,
+        contactId: Model.ContactId
+    ) {
+        val contactPath = contactId.contactPath
+        tx.get<Model.Contact>(contactPath)?.let { contact ->
+            // delete existing index entry
+            tx.delete(contact.timestampedIdxPath)
+            // update the contact
+            val updatedContact =
+                contact.toBuilder()
+                    .clearMostRecentMessageTs()
+                    .clearMostRecentMessageDirection()
+                    .clearMostRecentMessageText()
+                    .clearMostRecentAttachmentMimeType().build()
+            tx.put(contactPath, updatedContact)
+        }
     }
 
     // unregisters the current identity from tassis

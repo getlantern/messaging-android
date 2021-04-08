@@ -38,6 +38,9 @@ val Model.StoredMessage.dbPath: String
 fun String.storedMessagePath(ts: Long, messageId: String) =
     Schema.PATH_MESSAGES.path(this, ts, messageId)
 
+fun String.storedMessageQuery(messageId: String) =
+    Schema.PATH_MESSAGES.path(this, "%", messageId)
+
 val Model.StoredMessage.timestampUnknownQuery: String
     get() = Schema.PATH_MESSAGES.path(senderId, "%", id)
 

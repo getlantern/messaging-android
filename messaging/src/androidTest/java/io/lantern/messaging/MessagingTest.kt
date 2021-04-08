@@ -148,14 +148,15 @@ class MessagingTest : BaseMessagingTest() {
                             it?.attachmentsMap?.filter { (_, attachment) -> attachment.status == Model.StoredAttachment.Status.DONE }
                                 ?.count() ?: 0 == 1
                         }
+                    assertNotNull(mostRecentMsg, "cat should have recent message")
                     assertEquals(
                         dogId,
-                        mostRecentMsg?.senderId,
+                        mostRecentMsg.senderId,
                         "most recent message should have come from dog"
                     )
                     assertEquals(
                         "hello cat",
-                        mostRecentMsg?.text,
+                        mostRecentMsg.text,
                         "most recent message should have had correct text"
                     )
 
@@ -168,8 +169,58 @@ class MessagingTest : BaseMessagingTest() {
                         cat,
                         dog,
                         "hi dog",
-                        replyToId = mostRecentMsg?.id
+                        replyToId = mostRecentMsg.id
                     )
+
+                    // locally delete most recent message that cat received from dog
+                    cat.deleteLocally(mostRecentMsg.dbPath)
+                    assertNull(
+                        cat.db.get<Model.StoredMessage>(mostRecentMsg.dbPath),
+                        "message should have been deleted"
+                    )
+                    mostRecentMsg.attachmentsMap.values.forEach { storedAttachment ->
+                        assertFalse(
+                            File(storedAttachment.filePath).exists(),
+                            "attachment file should have been deleted"
+                        )
+                    }
+
+                    // globally delete most recent message that cat sent to dog
+                    cat.db.list<Model.StoredMessage>(
+                        Schema.PATH_MESSAGES.path("%"),
+                        count = 1,
+                        reverseSort = true
+                    ).first().let { responseMsg ->
+                        cat.deleteGlobally(responseMsg.path)
+                        assertNull(
+                            cat.db.get<Model.StoredMessage>(responseMsg.path),
+                            "message should have been deleted locally"
+                        )
+                        val dogContact =
+                            cat.db.get<Model.Contact>(responseMsg.value.contactId.contactPath)
+                        assertNotNull(dogContact, "cat should still have a contact for dog")
+                        assertEquals(
+                            0L,
+                            dogContact.mostRecentMessageTs,
+                            "dog contact should have no most recent message timestamp"
+                        )
+                        assertEquals(
+                            "",
+                            dogContact.mostRecentMessageText,
+                            "dog contact should have no most recent message text"
+                        )
+                        assertEquals(
+                            "",
+                            dogContact.mostRecentAttachmentMimeType,
+                            "dog contact should have no most recent message attachment mime type"
+                        )
+                        val dogMsg =
+                            dog.waitFor<Model.StoredMessage>(catId.storedMessageQuery(responseMsg.value.id)) {
+                                it == null
+                            }
+                        assertNull(dogMsg, "message should have been deleted for dog too")
+                    }
+
 
                     // make sure outbound and inbound queues are empty
                     assertEquals(
@@ -499,7 +550,7 @@ class MessagingTest : BaseMessagingTest() {
 @ExperimentalTime
 internal suspend fun <T : Any> Messaging.waitFor(
     path: String,
-    duration: Duration = 30.seconds,
+    duration: Duration = 10.seconds,
     check: (T?) -> Boolean
 ): T? {
     return this.store.waitFor(path, duration, check)
@@ -508,7 +559,7 @@ internal suspend fun <T : Any> Messaging.waitFor(
 @ExperimentalTime
 internal suspend fun <T : Any> MessagingStore.waitFor(
     path: String,
-    duration: Duration = 30.seconds,
+    duration: Duration = 10.seconds,
     check: (T?) -> Boolean
 ): T? {
     return waitFor(duration.toLongMilliseconds()) {
