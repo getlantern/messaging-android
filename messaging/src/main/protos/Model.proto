@@ -95,19 +95,12 @@ message Reaction {
   string emoticon = 3; // a single character emoticon representing the reaction
 }
 
-// An instruction to set messages in a conversation to automatically delete after reaching a certain
-// age.
-message SetAutoDeleteAge {
-  int32 ageInSeconds = 1; // messages in the relevant conversation older than this age in seconds will be automatically deleted
-}
-
 // An envelope for messages to be transferred via the message broker
 message TransferMessage {
   oneof content {
     bytes message = 1; // serialized Message
     bytes reaction = 2; // serialized Reaction
-    bytes deleteMessageId = 100; // the id of a message from this Sender to delete
-    bytes setAutoDeleteAge = 4; // serialized SetAutoDeleteAge
+    bytes deleteMessageId = 3; // the id of a message from this Sender to delete
   }
 }
 
@@ -127,7 +120,6 @@ message OutboundMessage {
     string messageId = 31; // the id of the message (same as on Message), encoded in base32
     bytes reaction = 32; // serialized Reaction
     bytes deleteMessageId = 33; // the id of a message from this Sender to delete
-    bytes setAutoDeleteAge = 34; // serialized SetAutoDeleteAge
   }
 }
 

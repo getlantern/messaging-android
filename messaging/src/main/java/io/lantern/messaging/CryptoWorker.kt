@@ -149,13 +149,7 @@ internal class CryptoWorker(
                 }
             }
 
-            Model.OutboundMessage.ContentCase.SETAUTODELETEAGE -> {
-                encryptAndSendToAll(out) {
-                    Model.TransferMessage.newBuilder().setSetAutoDeleteAge(out.setAutoDeleteAge)
-                        .build()
-                        .toByteArray()
-                }
-            }
+            else -> logger.error("unknown outbound message content type")
         }
     }
 
