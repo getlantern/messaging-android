@@ -142,17 +142,17 @@ class Messaging(
 
     // Adds or updates the given direct Contact
     fun addOrUpdateDirectContact(identityKey: String, displayName: String) {
-        val path = identityKey.directContactPath
+        val contactId = Model.ContactId.newBuilder()
+            .setType(Model.ContactType.DIRECT)
+            .setId(identityKey).build()
+        val path = contactId.contactPath
         cryptoWorker.submitForValue {
             db.mutate { tx ->
                 val contactBuilder =
                     tx.get<Model.Contact>(path)?.toBuilder() ?: Model.Contact.newBuilder()
-                        .setContactId(
-                            Model.ContactId.newBuilder()
-                                .setType(Model.ContactType.DIRECT)
-                                .setId(identityKey).build()
-                        )
-                val contact = contactBuilder.setDisplayName(displayName).build()
+                        .setContactId(contactId)
+                val contact =
+                    contactBuilder.setContactId(contactId).setDisplayName(displayName).build()
                 tx.put(path, contact)
                 // decrypt any "spam" we received from this Contact prior to adding them
                 db.list<ByteArray>(contact.spamQuery)
@@ -160,7 +160,6 @@ class Messaging(
                         cryptoWorker.doDecryptAndStore(unidentifiedSenderMessage)
                         tx.delete(spamPath)
                     }
-
             }
         }
     }
@@ -194,7 +193,7 @@ class Messaging(
             Model.StoredMessage.newBuilder().setId(base32Id)
                 .setContactId(
                     Model.ContactId.newBuilder().setType(Model.ContactType.DIRECT)
-                        .setId(senderId).build()
+                        .setId(recipientId).build()
                 )
                 .setSenderId(senderId)
                 .setTs(sent)
@@ -219,9 +218,9 @@ class Messaging(
             // save the message in a list of all messages
             tx.put(msg.dbPath, msg)
             // update the relevant contact
-            val contact = updateDirectContactMetaData(tx, recipientId, msg)
+            updateContactMetaData(tx, msg)
             // save the message under the relevant contact messages
-            tx.put(msg.contactMessagePath(contact), msg.dbPath)
+            tx.put(msg.contactMessagePath, msg.dbPath)
             // enqueue the outgoing message in the db for sending (actual send happens in the
             // message processing loop)
             tx.put(out.dbPath, out.build())
@@ -241,6 +240,8 @@ class Messaging(
                         logger.error("failed to delete attachment on disk, continuing")
                     }
                 }
+                tx.delete(storedMsg.contactMessagePath)
+
             }
         }
     }
@@ -310,16 +311,16 @@ class Messaging(
                 .setFilePath(File(subDirectory, guid).absolutePath)
         }
 
-    internal fun updateDirectContactMetaData(
+    internal fun updateContactMetaData(
         tx: Transaction,
-        identityKey: String,
         msg: Model.StoredMessage,
-    ): Model.Contact {
-        val contactPath = identityKey.directContactPath
+        force: Boolean = false,
+    ) {
+        val contactPath = msg.contactId.contactPath
         val contact = tx.get<Model.Contact>(contactPath)
-            ?: throw IllegalArgumentException("unknown direct contact")
+            ?: throw IllegalArgumentException("unknown contact")
         if (msg.ts <= contact.mostRecentMessageTs) {
-            return contact
+            return
         }
         // delete existing index entry
         tx.delete(contact.timestampedIdxPath)
@@ -334,7 +335,6 @@ class Messaging(
         tx.put(contactPath, updatedContact)
         // create a new index entry
         tx.put(updatedContact.timestampedIdxPath, contactPath)
-        return updatedContact
     }
 
     // unregisters the current identity from tassis

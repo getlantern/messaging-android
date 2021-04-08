@@ -357,7 +357,7 @@ class MessagingTest : BaseMessagingTest() {
         // make sure that there's a link to the message in sender's contact messages
         assertEquals(
             storedMsg.dbPath,
-            from.db.get(storedMsg.contactMessagePath(storedContact)),
+            from.db.get(storedMsg.contactMessagePath),
             testCase
         )
 
@@ -432,7 +432,7 @@ class MessagingTest : BaseMessagingTest() {
             // make sure that there's a link to the message in recipient's contact messages
             assertEquals(
                 storedMsgFromDb.dbPath,
-                to.db.get(storedMsgFromDb.contactMessagePath(storedContact)),
+                to.db.get(storedMsgFromDb.contactMessagePath),
                 testCase
             )
 

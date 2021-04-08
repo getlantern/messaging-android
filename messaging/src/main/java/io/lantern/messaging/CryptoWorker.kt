@@ -480,9 +480,9 @@ internal class CryptoWorker(
         tx.put(storedMsg.dbPath, storedMsg)
 
         // update the Contact metadata
-        val contact = messaging.updateDirectContactMetaData(tx, senderId, storedMsg)
+        messaging.updateContactMetaData(tx, storedMsg)
         // save a pointer to the message under the contact message path
-        tx.put(storedMsg.contactMessagePath(contact), storedMsg.dbPath)
+        tx.put(storedMsg.contactMessagePath, storedMsg.dbPath)
     }
 
     internal fun downloadAttachment(

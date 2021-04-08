@@ -32,12 +32,6 @@ fun Model.Message.inbound(senderId: String): Model.StoredMessage.Builder {
     return builder
 }
 
-val String.directContactPath: String
-    get() = Schema.PATH_CONTACTS.path(Schema.CONTACT_DIRECT_PREFIX, this)
-
-val String.groupContactPath: String
-    get() = Schema.PATH_CONTACTS.path(Schema.CONTACT_GROUP_PREFIX, this)
-
 val Model.StoredMessage.dbPath: String
     get() = senderId.storedMessagePath(ts, id)
 
@@ -70,6 +64,14 @@ val Model.ContactId.pathSegment: String
         id
     )
 
+val Model.Contact.dbPath: String get() = contactId.contactPath
+
+val Model.ContactId.contactPath: String
+    get() = Schema.PATH_CONTACTS.path(pathSegment)
+
+val String.directContactPath: String
+    get() = Schema.PATH_CONTACTS.path(Schema.CONTACT_DIRECT_PREFIX, this)
+
 val Model.Contact.timestampedIdxPath: String
     get() = Schema.PATH_CONTACTS_BY_ACTIVITY.path(mostRecentMessageTs, pathSegment)
 
@@ -78,13 +80,18 @@ val Model.Contact.spamQuery: String get() = Schema.PATH_SPAM.path(contactId.id, 
 fun spamPath(senderId: String, messageId: String, ts: Long) =
     Schema.PATH_SPAM.path(senderId, ts, messageId)
 
-fun Model.StoredMessage.contactMessagePath(contact: Model.Contact): String =
-    Schema.PATH_CONTACT_MESSAGES.path(
-        contact.pathSegment,
-        ts,
-        senderId,
-        id
-    )
+val Model.StoredMessage.contactMessagePath: String
+    get() =
+        Schema.PATH_CONTACT_MESSAGES.path(
+            contactId.pathSegment,
+            ts,
+            senderId,
+            id
+        )
+
+val Model.StoredMessage.contactMessagesQuery: String
+    get() =
+        Schema.PATH_CONTACT_MESSAGES.path(contactId.pathSegment, "%")
 
 val ByteArray.base32: String get() = Base32.humanFriendly.encodeToString(this)
 
