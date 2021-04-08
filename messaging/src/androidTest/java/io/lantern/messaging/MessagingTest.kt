@@ -296,7 +296,7 @@ class MessagingTest : BaseMessagingTest() {
                             )
                         }
 
-// locally delete dog's message
+                    // locally delete dog's message
                     dog.deleteLocally(initialMsgs.sent.dbPath)
                     assertNull(
                         cat.db.get<Model.StoredMessage>(initialMsgs.sent.dbPath),
@@ -618,16 +618,11 @@ class MessagingTest : BaseMessagingTest() {
         stopSendRetryAfterMillis: Long = 5L.minutesToMillis,
         store: MessagingStore? = null
     ): Messaging {
-        val tempFile = File.createTempFile(
-            "messaging_temp_file",
-            "suffix",
-            InstrumentationRegistry.getInstrumentation().targetContext.filesDir
-        )
-        tempFile.delete()
-        val tempDir = tempFile.parentFile
-
         return Messaging(
-            File(tempDir, "attachments"),
+            File(
+                InstrumentationRegistry.getInstrumentation().targetContext.filesDir,
+                "attachments"
+            ),
             store ?: newStore(name = name),
             BrokenTransportFactory(
                 "wss://tassis.lantern.io/api",

@@ -370,7 +370,7 @@ class Messaging(
                     guid.substring(0, 1),
                     guid.substring(1, 2),
                     guid.substring(2, 3)
-                ).joinToString(File.pathSeparator)
+                ).joinToString(File.separator)
             )
             if (!subDirectory.mkdirs()) {
                 throw RuntimeException("Unable to make attachments sub-directory ${subDirectory}")
