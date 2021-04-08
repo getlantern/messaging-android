@@ -97,7 +97,10 @@ class Messaging(
         db.mutate { tx ->
             tx.get<Model.Contact>(Schema.PATH_ME) ?: tx.put(
                 Schema.PATH_ME,
-                Model.Contact.newBuilder().setId(identityKeyPair.publicKey.toString()).build()
+                Model.Contact.newBuilder().setContactId(
+                    Model.ContactId.newBuilder().setType(Model.ContactType.DIRECT)
+                        .setId(identityKeyPair.publicKey.toString()).build()
+                ).build()
             )
         }
 
@@ -144,8 +147,11 @@ class Messaging(
             db.mutate { tx ->
                 val contactBuilder =
                     tx.get<Model.Contact>(path)?.toBuilder() ?: Model.Contact.newBuilder()
-                        .setType(Model.Contact.Type.DIRECT)
-                        .setId(identityKey)
+                        .setContactId(
+                            Model.ContactId.newBuilder()
+                                .setType(Model.ContactType.DIRECT)
+                                .setId(identityKey).build()
+                        )
                 val contact = contactBuilder.setDisplayName(displayName).build()
                 tx.put(path, contact)
                 // decrypt any "spam" we received from this Contact prior to adding them
@@ -183,9 +189,14 @@ class Messaging(
         }
         val base32Id = randomMessageId.base32
         val sent = nowUnixNano
+        val senderId = store.identityKeyPair.publicKey.toString()
         val msgBuilder =
-            Model.StoredMessage.newBuilder()
-                .setSenderId(store.identityKeyPair.publicKey.toString()).setId(base32Id)
+            Model.StoredMessage.newBuilder().setId(base32Id)
+                .setContactId(
+                    Model.ContactId.newBuilder().setType(Model.ContactType.DIRECT)
+                        .setId(senderId).build()
+                )
+                .setSenderId(senderId)
                 .setTs(sent)
                 .setText(text)
                 .setDirection(Model.MessageDirection.OUT)
@@ -217,6 +228,25 @@ class Messaging(
             cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
         }
         return msg
+    }
+
+    fun deleteLocally(msgPath: String) {
+        db.mutate { tx ->
+            db.get<Model.StoredMessage>(msgPath)?.let { storedMsg ->
+                // Note - we only delete attachments locally, not in the cloud, because clients
+                // aren't authorized to modify files. They will naturally be deleted once they hit
+                // the server-side retention limit.
+                storedMsg.attachmentsMap.values.forEach { storedAttachment ->
+                    if (!File(storedAttachment.filePath).delete()) {
+                        logger.error("failed to delete attachment on disk, continuing")
+                    }
+                }
+            }
+        }
+    }
+
+    fun deleteGlobally(messageId: String) {
+
     }
 
     // Creates a StoredAttachment from the given File

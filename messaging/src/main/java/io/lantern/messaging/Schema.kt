@@ -20,7 +20,10 @@ object Schema {
 }
 
 fun Model.Message.inbound(senderId: String): Model.StoredMessage.Builder {
-    val builder = Model.StoredMessage.newBuilder().setSenderId(senderId).setId(id.base32)
+    val builder = Model.StoredMessage.newBuilder().setContactId(
+        Model.ContactId.newBuilder().setType(Model.ContactType.DIRECT).setId(senderId).build()
+    ).setSenderId(senderId)
+        .setId(id.base32)
         .setTs(nowUnixNano)
         .setDirection(Model.MessageDirection.IN)
         .setText(text)
@@ -36,13 +39,16 @@ val String.groupContactPath: String
     get() = Schema.PATH_CONTACTS.path(Schema.CONTACT_GROUP_PREFIX, this)
 
 val Model.StoredMessage.dbPath: String
-    get() = Schema.PATH_MESSAGES.path(senderId, ts, id)
+    get() = senderId.storedMessagePath(ts, id)
+
+fun String.storedMessagePath(ts: Long, messageId: String) =
+    Schema.PATH_MESSAGES.path(this, ts, messageId)
 
 val Model.StoredMessage.timestampUnknownQuery: String
     get() = Schema.PATH_MESSAGES.path(senderId, "%", id)
 
 val Model.OutboundMessage.Builder.msgPath: String
-    get() = Schema.PATH_MESSAGES.path(senderId, sent, messageId)
+    get() = senderId.storedMessagePath(sent, messageId)
 
 val Model.OutboundMessage.Builder.dbPath: String
     get() = Schema.PATH_OUTBOUND.path(sent, id)
@@ -57,14 +63,17 @@ val Model.InboundAttachment.msgPath: String
     get() = Schema.PATH_MESSAGES.path(senderId, ts, messageId)
 
 val Model.Contact.pathSegment: String
-    get() = if (type == Model.Contact.Type.DIRECT) Schema.CONTACT_DIRECT_PREFIX.path(id) else Schema.CONTACT_GROUP_PREFIX.path(
+    get() = contactId.pathSegment
+
+val Model.ContactId.pathSegment: String
+    get() = if (type == Model.ContactType.DIRECT) Schema.CONTACT_DIRECT_PREFIX.path(id) else Schema.CONTACT_GROUP_PREFIX.path(
         id
     )
 
 val Model.Contact.timestampedIdxPath: String
     get() = Schema.PATH_CONTACTS_BY_ACTIVITY.path(mostRecentMessageTs, pathSegment)
 
-val Model.Contact.spamQuery: String get() = Schema.PATH_SPAM.path(id, "%")
+val Model.Contact.spamQuery: String get() = Schema.PATH_SPAM.path(contactId.id, "%")
 
 fun spamPath(senderId: String, messageId: String, ts: Long) =
     Schema.PATH_SPAM.path(senderId, ts, messageId)

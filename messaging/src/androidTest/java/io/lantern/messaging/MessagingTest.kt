@@ -73,7 +73,7 @@ class MessagingTest : BaseMessagingTest() {
                 // ensure that we immediately have a Contact
                 val storedContact = dog.db.get<Model.Contact>(catId.directContactPath)
                 assertTrue(storedContact != null)
-                assertEquals(catId, storedContact.id)
+                assertEquals(catId, storedContact.contactId.id)
                 assertEquals("Cat", storedContact.displayName)
 
                 // now send a message from dog->cat before cat has come online
@@ -339,7 +339,7 @@ class MessagingTest : BaseMessagingTest() {
         var storedContact =
             from.db.get<Model.Contact>(toId.directContactPath)
         assertTrue(storedContact != null, testCase)
-        assertEquals(toId, storedContact.id, testCase)
+        assertEquals(toId, storedContact.contactId.id, testCase)
         assertEquals(storedMsg.ts, storedContact.mostRecentMessageTs, testCase)
         assertEquals(storedMsg.direction, storedContact.mostRecentMessageDirection, testCase)
         assertEquals(text, storedContact.mostRecentMessageText, testCase)
@@ -410,7 +410,7 @@ class MessagingTest : BaseMessagingTest() {
             storedContact =
                 to.db.get(fromId.directContactPath)
             assertTrue(storedContact != null, testCase)
-            assertEquals(fromId, storedContact.id, testCase)
+            assertEquals(fromId, storedContact.contactId.id, testCase)
             assertEquals(storedMsgFromDb.ts, storedContact.mostRecentMessageTs, testCase)
             assertEquals(
                 storedMsgFromDb.direction,

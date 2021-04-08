@@ -448,37 +448,41 @@ internal class CryptoWorker(
             val senderAddress = decryptionResult.senderAddress
             val senderId = senderAddress.identityKey.toString()
             when (transferMsg.contentCase) {
-                Model.TransferMessage.ContentCase.MESSAGE -> {
-                    val msg = Model.Message.parseFrom(transferMsg.message)
-                    if (!tx.contains(senderId.directContactPath)) {
-                        throw UnknownSenderException(senderId, msg.id.base32)
-                    }
-                    val storedMsgBuilder = msg.inbound(senderId)
-                    // save inbound attachments and trigger downloads
-                    msg.attachmentsMap.forEach { (id, attachment) ->
-                        val inboundAttachment =
-                            Model.InboundAttachment.newBuilder().setSenderId(senderId)
-                                .setTs(storedMsgBuilder.ts)
-                                .setMessageId(storedMsgBuilder.id).setAttachmentId(id).build()
-                        tx.put(inboundAttachment.dbPath, inboundAttachment)
-                        val storedAttachment =
-                            messaging.newStoredAttachment.setAttachment(attachment).build()
-                        storedMsgBuilder.putAttachments(id, storedAttachment)
-                        downloadAttachment(inboundAttachment, storedAttachment)
-                    }
-
-                    // save the stored message
-                    val storedMsg = storedMsgBuilder.build()
-                    tx.put(storedMsg.dbPath, storedMsg)
-
-                    // update the Contact metadata
-                    val contact = messaging.updateDirectContactMetaData(tx, senderId, storedMsg)
-                    // save a pointer to the message under the contact message path
-                    tx.put(storedMsg.contactMessagePath(contact), storedMsg.dbPath)
-                }
+                Model.TransferMessage.ContentCase.MESSAGE -> decryptAndStoreMessage(
+                    tx,
+                    senderId,
+                    Model.Message.parseFrom(transferMsg.message)
+                )
             }
-
         }
+    }
+
+    private fun decryptAndStoreMessage(tx: Transaction, senderId: String, msg: Model.Message) {
+        if (!tx.contains(senderId.directContactPath)) {
+            throw UnknownSenderException(senderId, msg.id.base32)
+        }
+        val storedMsgBuilder = msg.inbound(senderId)
+        // save inbound attachments and trigger downloads
+        msg.attachmentsMap.forEach { (id, attachment) ->
+            val inboundAttachment =
+                Model.InboundAttachment.newBuilder().setSenderId(senderId)
+                    .setTs(storedMsgBuilder.ts)
+                    .setMessageId(storedMsgBuilder.id).setAttachmentId(id).build()
+            tx.put(inboundAttachment.dbPath, inboundAttachment)
+            val storedAttachment =
+                messaging.newStoredAttachment.setAttachment(attachment).build()
+            storedMsgBuilder.putAttachments(id, storedAttachment)
+            downloadAttachment(inboundAttachment, storedAttachment)
+        }
+
+        // save the stored message
+        val storedMsg = storedMsgBuilder.build()
+        tx.put(storedMsg.dbPath, storedMsg)
+
+        // update the Contact metadata
+        val contact = messaging.updateDirectContactMetaData(tx, senderId, storedMsg)
+        // save a pointer to the message under the contact message path
+        tx.put(storedMsg.contactMessagePath(contact), storedMsg.dbPath)
     }
 
     internal fun downloadAttachment(
