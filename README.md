@@ -18,7 +18,10 @@ The timestamp is the sent time of the message. The messageId is an id that's uni
 sent from the given senderIdentityKey (in practice it's a type 4 UUID).
 
 ### /cm/[d/[identityKey]|g/[groupId]]/[timestamp]/[senderIdentityKey]/[messageId]
-A record of all messages for a given Contact, by the sent timestamp of the message.
+An index of all messages for a given Contact, by the sent timestamp of the message.
+
+### /dm/[disappearAt]/[senderIdentityKey]/[messageId]
+An index of all messages that are supposed to auto disappear by some time (in unix nanos)
 
 ### /spam/[senderIdentityKey]/[timestamp]/[messageId]
 Messages that aren't worth showing to the user for one reason or another.

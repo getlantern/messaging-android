@@ -116,11 +116,12 @@ class Messaging(
         db.list<Model.InboundAttachment>(Schema.PATH_INBOUND_ATTACHMENTS.path("%")).forEach {
             cryptoWorker.submit {
                 val inboundAttachment = it.value
-                val storedMsg = db.get<Model.StoredMessage>(inboundAttachment.msgPath)
-                cryptoWorker.downloadAttachment(
-                    inboundAttachment,
-                    storedMsg!!.getAttachmentsOrThrow(inboundAttachment.attachmentId)
-                )
+                db.get<Model.StoredMessage>(inboundAttachment.msgPath)?.let { msg ->
+                    cryptoWorker.downloadAttachment(
+                        inboundAttachment,
+                        msg.getAttachmentsOrThrow(inboundAttachment.attachmentId)
+                    )
+                }
             }
         }
 
@@ -141,16 +142,24 @@ class Messaging(
     }
 
     // Adds or updates the given direct Contact
-    fun addOrUpdateContact(type: Model.ContactType, id: String, displayName: String) {
+    fun addOrUpdateContact(
+        type: Model.ContactType,
+        id: String,
+        displayName: String
+    ): Model.Contact {
         val contactId = Model.ContactId.newBuilder()
             .setType(type)
             .setId(id).build()
         val path = contactId.contactPath
-        cryptoWorker.submitForValue {
+        return cryptoWorker.submitForValue {
             db.mutate { tx ->
-                val contactBuilder =
-                    tx.get<Model.Contact>(path)?.toBuilder() ?: Model.Contact.newBuilder()
-                        .setContactId(contactId)
+                val existingContact = tx.get<Model.Contact>(path)
+                val contactBuilder = existingContact?.toBuilder() ?: Model.Contact.newBuilder()
+                    .setContactId(contactId)
+                if (existingContact == null) {
+                    contactBuilder.messagesDisappearAfterSeconds =
+                        86400 // 1 day, TODO: make this configurable
+                }
                 val contact =
                     contactBuilder.setContactId(contactId).setDisplayName(displayName).build()
                 tx.put(path, contact)
@@ -160,6 +169,7 @@ class Messaging(
                         cryptoWorker.doDecryptAndStore(unidentifiedSenderMessage)
                         tx.delete(spamPath)
                     }
+                contact
             }
         }
     }
@@ -186,6 +196,11 @@ class Messaging(
         } else if ((!replyToSenderId.isNullOrBlank() || !replyToId.isNullOrBlank()) && (replyToSenderId.isNullOrBlank() || replyToId.isNullOrBlank())) {
             throw IllegalArgumentException("If specifying either replyToSenderId and replyToId, please specify both")
         }
+        val recipient = db.get<Model.Contact>(recipientId.directContactPath)
+        if (recipient == null) {
+            throw IllegalArgumentException("Unknown recipient")
+        }
+
         val base32Id = randomMessageId.base32
         val sent = nowUnixNano
         val senderId = store.identityKeyPair.publicKey.toString()
@@ -201,6 +216,9 @@ class Messaging(
                 .setDirection(Model.MessageDirection.OUT)
         replyToSenderId?.let { msgBuilder.setReplyToSenderId(it) }
         replyToId?.let { msgBuilder.setReplyToId(it) }
+        if (recipient.messagesDisappearAfterSeconds > 0) {
+            msgBuilder.disappearAfterSeconds = recipient.messagesDisappearAfterSeconds
+        }
         val out =
             Model.OutboundMessage.newBuilder().setMessageId(base32Id)
                 .setSent(sent)
@@ -222,23 +240,32 @@ class Messaging(
             // save the message under the relevant contact messages
             tx.put(msg.contactMessagePath, msg.dbPath)
             tx.put(out.dbPath, out.build())
+            if (msg.disappearAfterSeconds > 0) {
+                // immediately set message to disappear
+                tx.put(
+                    msg.disappearingMessagePath(nowUnixNano + msg.disappearAfterSeconds.toLong().secondsToMillis.millisToNanos),
+                    msg.dbPath
+                )
+            }
             cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
         }
         return msg
     }
 
-    fun deleteGlobally(msgPath: String) {
+    fun markViewed(msgPath: String) {
         db.mutate { tx ->
-            deleteLocally(msgPath)?.let { storedMsg ->
-                val senderId = store.identityKeyPair.publicKey.toString()
-                val out =
-                    Model.OutboundMessage.newBuilder()
-                        .setDeleteMessageId(storedMsg.id.fromBase32.byteString())
-                        .setSent(nowUnixNano)
-                        .setSenderId(senderId)
-                        .setRecipientId(storedMsg.contactId.id) // TODO: this will need to change for groups
-                tx.put(out.dbPath, out.build())
-                cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
+            tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
+                if (msg.firstViewedTs == 0L) {
+                    // only update if we haven't marked it yet
+                    tx.put(msgPath, msg.toBuilder().setFirstViewedTs(nowUnixNano).build())
+                    if (msg.disappearAfterSeconds > 0) {
+                        // set message to disappear now that it's been viewed
+                        tx.put(
+                            msg.disappearingMessagePath(nowUnixNano + msg.disappearAfterSeconds.toLong().secondsToMillis.millisToNanos),
+                            msg.dbPath
+                        )
+                    }
+                }
             }
         }
     }
@@ -249,8 +276,8 @@ class Messaging(
         }
 
         db.mutate { tx ->
-            db.get<Model.StoredMessage>(msgPath)?.let { storedMsg ->
-                val reactingToSenderId = storedMsg.senderId
+            db.get<Model.StoredMessage>(msgPath)?.let { msg ->
+                val reactingToSenderId = msg.senderId
                 val senderId = store.identityKeyPair.publicKey.toString()
                 if (senderId == reactingToSenderId) {
                     throw IllegalArgumentException("can't react to your own message")
@@ -258,24 +285,66 @@ class Messaging(
 
                 val reaction = Model.Reaction.newBuilder()
                     .setReactingToSenderId(reactingToSenderId.fromBase32.byteString())
-                    .setReactingToMessageId(storedMsg.id.fromBase32.byteString())
+                    .setReactingToMessageId(msg.id.fromBase32.byteString())
                     .setEmoticon(emoticon).build()
                 // store our own reaction locally
-                val builder = storedMsg.toBuilder()
+                val builder = msg.toBuilder()
                 // TODO: dry violation, this is repeated on receiving and sending ends
                 if (reaction.emoticon == "") {
                     builder.removeReactions(senderId)
                 } else {
                     builder.putReactions(senderId, reaction)
                 }
-                tx.put(storedMsg.dbPath, builder.build())
+                tx.put(msg.dbPath, builder.build())
                 // send the reaction to other participants
                 val out =
                     Model.OutboundMessage.newBuilder()
                         .setReaction(reaction.toByteString())
                         .setSent(nowUnixNano)
                         .setSenderId(senderId)
-                        .setRecipientId(storedMsg.contactId.id) // TODO: this will need to change for groups
+                        .setRecipientId(msg.contactId.id) // TODO: this will need to change for groups
+                tx.put(out.dbPath, out.build())
+                cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
+            }
+        }
+    }
+
+    fun setDisappearSettings(contactId: String, disappearAfterSeconds: Int) {
+        // TODO: support group contacts
+        val contactPath = contactId.directContactPath
+        db.mutate { tx ->
+            db.get<Model.Contact>(contactPath)?.let { contact ->
+                tx.put(
+                    contactPath,
+                    contact.toBuilder()
+                        .setMessagesDisappearAfterSeconds(disappearAfterSeconds)
+                        .build()
+                )
+                val disappearSettings = Model.DisappearSettings.newBuilder()
+                    .setMessagesDisappearAfterSeconds(disappearAfterSeconds).build()
+                val senderId = store.identityKeyPair.publicKey.toString()
+                val out =
+                    Model.OutboundMessage.newBuilder()
+                        .setDisappearSettings(disappearSettings.toByteString())
+                        .setSent(nowUnixNano)
+                        .setSenderId(senderId)
+                        .setRecipientId(contactId) // TODO: this will need to change for groups
+                tx.put(out.dbPath, out.build())
+                cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
+            }
+        }
+    }
+
+    fun deleteGlobally(msgPath: String) {
+        db.mutate { tx ->
+            deleteLocally(msgPath)?.let { msg ->
+                val senderId = store.identityKeyPair.publicKey.toString()
+                val out =
+                    Model.OutboundMessage.newBuilder()
+                        .setDeleteMessageId(msg.id.fromBase32.byteString())
+                        .setSent(nowUnixNano)
+                        .setSenderId(senderId)
+                        .setRecipientId(msg.contactId.id) // TODO: this will need to change for groups
                 tx.put(out.dbPath, out.build())
                 cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
             }
@@ -284,25 +353,25 @@ class Messaging(
 
     fun deleteLocally(msgPath: String): Model.StoredMessage? {
         return db.mutate { tx ->
-            db.get<Model.StoredMessage>(msgPath)?.let { storedMsg ->
+            db.get<Model.StoredMessage>(msgPath)?.let { msg ->
                 tx.delete(msgPath)
 
                 // Delete attachments on disk
                 // Note - we only delete attachments locally, not in the cloud, because clients
                 // aren't authorized to modify files. They will naturally be deleted once they hit
                 // the server-side retention limit.
-                storedMsg.attachmentsMap.values.forEach { storedAttachment ->
+                msg.attachmentsMap.values.forEach { storedAttachment ->
                     if (!File(storedAttachment.filePath).delete()) {
                         logger.error("failed to delete attachment on disk, continuing")
                     }
                 }
 
                 // Delete index entries for messages under this Contact's conversation
-                tx.delete(storedMsg.contactMessagePath)
+                tx.delete(msg.contactMessagePath)
 
                 // Update the Contact metadata based on the most recent remaining message
                 tx.listDetails<Model.StoredMessage>(
-                    storedMsg.contactMessagesQuery,
+                    msg.contactMessagesQuery,
                     count = 1,
                     reverseSort = true
                 ).let { storedMessages ->
@@ -310,11 +379,11 @@ class Messaging(
                     if (mostRecentMsg != null) {
                         updateContactMetaData(tx, mostRecentMsg.value, force = true)
                     } else {
-                        clearContactMetaData(tx, storedMsg.contactId)
+                        clearContactMetaData(tx, msg.contactId)
                     }
                 }
 
-                return@let storedMsg
+                return@let msg
             }
         }
     }

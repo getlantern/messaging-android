@@ -16,6 +16,7 @@ object Schema {
     const val PATH_MESSAGES = "/m"
     const val PATH_CONTACTS_BY_ACTIVITY = "/cba"
     const val PATH_CONTACT_MESSAGES = "/cm"
+    const val PATH_DISAPPEARING_MESSAGES = "/dm"
     const val PATH_SPAM = "/spam"
 }
 
@@ -27,8 +28,9 @@ fun Model.Message.inbound(senderId: String): Model.StoredMessage.Builder {
         .setTs(nowUnixNano)
         .setDirection(Model.MessageDirection.IN)
         .setText(text)
-    this.replyToSenderId?.let { builder.setReplyToSenderId(it.base32) }
-    this.replyToId?.let { builder.setReplyToId(it.base32) }
+        .setDisappearAfterSeconds(disappearAfterSeconds)
+    replyToSenderId?.let { builder.setReplyToSenderId(it.base32) }
+    replyToId?.let { builder.setReplyToId(it.base32) }
     return builder
 }
 
@@ -95,6 +97,13 @@ val Model.StoredMessage.contactMessagePath: String
 val Model.StoredMessage.contactMessagesQuery: String
     get() =
         Schema.PATH_CONTACT_MESSAGES.path(contactId.pathSegment, "%")
+
+fun Model.StoredMessage.disappearingMessagePath(disappearAt: Long): String =
+    Schema.PATH_DISAPPEARING_MESSAGES.path(
+        disappearAt,
+        senderId,
+        id
+    )
 
 val ByteArray.base32: String get() = Base32.humanFriendly.encodeToString(this)
 

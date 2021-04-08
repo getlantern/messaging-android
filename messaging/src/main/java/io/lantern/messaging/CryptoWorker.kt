@@ -1,5 +1,7 @@
 package io.lantern.messaging
 
+import io.lantern.db.ChangeSet
+import io.lantern.db.Subscriber
 import io.lantern.db.Transaction
 import io.lantern.messaging.tassis.*
 import io.lantern.messaging.tassis.Callback
@@ -21,6 +23,7 @@ import org.whispersystems.signalservice.internal.util.Util
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 internal class CryptoWorker(
     messaging: Messaging,
@@ -33,6 +36,32 @@ internal class CryptoWorker(
     private val httpClient = OkHttpClient() // TODO: configure support for proxying and stuff
     private val cipher = SealedSessionCipher(store, store.deviceId)
     private val uploadAuthorizations = ArrayDeque<Messages.UploadAuthorization>()
+
+    init {
+        // find out about all disappearing messages (including previously saved ones) and schedule
+        // them for deletion
+        db.subscribe(object : Subscriber<String>(
+            "disappearingMessagesSubscriber",
+            Schema.PATH_DISAPPEARING_MESSAGES.path('%')
+        ) {
+            override fun onChanges(changes: ChangeSet<String>) {
+                changes.updates.forEach { (path, msgPath) ->
+                    val scheduledTimeNanos = path.split("/")[2].toLong()
+                    val delayNanos = scheduledTimeNanos - nowUnixNano
+                    executor.schedule({
+                        try {
+                            db.mutate { tx ->
+                                messaging.deleteLocally(msgPath)
+                                tx.delete(path)
+                            }
+                        } catch (t: Throwable) {
+                            logger.error("failed to delete disappearing message: ${t.message}")
+                        }
+                    }, delayNanos, TimeUnit.NANOSECONDS)
+                }
+            }
+        }, true)
+    }
 
     private val Model.OutboundMessage.Builder.expired: Boolean get() = (nowUnixNano - sent).nanosToMillis > stopSendRetryAfterMillis
 
@@ -144,6 +173,14 @@ internal class CryptoWorker(
             Model.OutboundMessage.ContentCase.DELETEMESSAGEID -> {
                 encryptAndSendToAll(out) {
                     Model.TransferMessage.newBuilder().setDeleteMessageId(out.deleteMessageId)
+                        .build()
+                        .toByteArray()
+                }
+            }
+
+            Model.OutboundMessage.ContentCase.DISAPPEARSETTINGS -> {
+                encryptAndSendToAll(out) {
+                    Model.TransferMessage.newBuilder().setDisappearSettings(out.disappearSettings)
                         .build()
                         .toByteArray()
                 }
@@ -460,6 +497,11 @@ internal class CryptoWorker(
                 Model.TransferMessage.ContentCase.DELETEMESSAGEID -> db.listPaths(
                     senderId.storedMessageQuery(transferMsg.deleteMessageId.base32)
                 ).forEach { messaging.deleteLocally(it) }
+                Model.TransferMessage.ContentCase.DISAPPEARSETTINGS -> storeDisappearSettings(
+                    tx,
+                    senderId,
+                    Model.DisappearSettings.parseFrom(transferMsg.disappearSettings)
+                )
                 else -> {
                     logger.debug("received currently unsupported message type")
                 }
@@ -471,28 +513,28 @@ internal class CryptoWorker(
         if (!tx.contains(senderId.directContactPath)) {
             throw UnknownSenderException(senderId, msg.id.base32)
         }
-        val storedMsgBuilder = msg.inbound(senderId)
+        val msgBuilder = msg.inbound(senderId)
         // save inbound attachments and trigger downloads
         msg.attachmentsMap.forEach { (id, attachment) ->
             val inboundAttachment =
                 Model.InboundAttachment.newBuilder().setSenderId(senderId)
-                    .setTs(storedMsgBuilder.ts)
-                    .setMessageId(storedMsgBuilder.id).setAttachmentId(id).build()
+                    .setTs(msgBuilder.ts)
+                    .setMessageId(msgBuilder.id).setAttachmentId(id).build()
             tx.put(inboundAttachment.dbPath, inboundAttachment)
             val storedAttachment =
                 messaging.newStoredAttachment.setAttachment(attachment).build()
-            storedMsgBuilder.putAttachments(id, storedAttachment)
+            msgBuilder.putAttachments(id, storedAttachment)
             downloadAttachment(inboundAttachment, storedAttachment)
         }
 
         // save the stored message
-        val storedMsg = storedMsgBuilder.build()
-        tx.put(storedMsg.dbPath, storedMsg)
+        val msg = msgBuilder.build()
+        tx.put(msg.dbPath, msg)
 
         // update the Contact metadata
-        messaging.updateContactMetaData(tx, storedMsg)
+        messaging.updateContactMetaData(tx, msg)
         // save a pointer to the message under the contact message path
-        tx.put(storedMsg.contactMessagePath, storedMsg.dbPath)
+        tx.put(msg.contactMessagePath, msg.dbPath)
     }
 
     private fun storeReaction(tx: Transaction, senderId: String, reaction: Model.Reaction) {
@@ -503,14 +545,30 @@ internal class CryptoWorker(
             reaction.reactingToSenderId.base32.storedMessageQuery(
                 reaction.reactingToMessageId.base32
             )
-        )?.let { storedMsg ->
-            val builder = storedMsg.toBuilder()
+        )?.let { msg ->
+            val builder = msg.toBuilder()
             if (reaction.emoticon.isBlank()) {
                 builder.removeReactions(senderId)
             } else {
                 builder.putReactions(senderId, reaction)
             }
-            tx.put(storedMsg.dbPath, builder.build())
+            tx.put(msg.dbPath, builder.build())
+        }
+    }
+
+    private fun storeDisappearSettings(
+        tx: Transaction,
+        senderId: String,
+        disappearSettings: Model.DisappearSettings
+    ) {
+        val contactPath = senderId.directContactPath
+        tx.get<Model.Contact>(contactPath)?.let { contact ->
+            tx.put(
+                contactPath,
+                contact.toBuilder()
+                    .setMessagesDisappearAfterSeconds(disappearSettings.messagesDisappearAfterSeconds)
+                    .build()
+            )
         }
     }
 
@@ -526,7 +584,7 @@ internal class CryptoWorker(
                     val success = response.code == 200
                     try {
                         if (!success) {
-                            logger.error("download failed with unretriable status ${response.code}: ${response.body?.string()}")
+                            logger.error("download failed with un-retriable status ${response.code}: ${response.body?.string()}")
                         } else {
                             try {
                                 FileOutputStream(attachment.filePath).use { out ->
@@ -548,19 +606,19 @@ internal class CryptoWorker(
                         try {
                             val msgPath = inbound.msgPath
                             db.mutate { tx ->
-                                tx.get<Model.StoredMessage>(msgPath)?.let { storedMsg ->
+                                tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
                                     val status =
                                         if (!success) {
                                             Model.StoredAttachment.Status.FAILED
                                         } else {
                                             Model.StoredAttachment.Status.DONE
                                         }
-                                    val updatedStoredMsgBuilder = storedMsg.toBuilder()
-                                    updatedStoredMsgBuilder.putAttachments(
+                                    val updatedMsgBuilder = msg.toBuilder()
+                                    updatedMsgBuilder.putAttachments(
                                         inbound.attachmentId,
                                         attachment.toBuilder().setStatus(status).build()
                                     )
-                                    tx.put(msgPath, updatedStoredMsgBuilder.build())
+                                    tx.put(msgPath, updatedMsgBuilder.build())
                                     tx.delete(inbound.dbPath)
                                 }
                             }

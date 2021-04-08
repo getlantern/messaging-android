@@ -191,6 +191,39 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
+    fun testDeliveryStatus() {
+        testInCoroutine {
+            newMessaging("cat").with { cat ->
+                newMessaging("dog", stopSendRetryAfterMillis = 5000).with { dog ->
+                    val catId = cat.store.identityKeyPair.publicKey.toString()
+                    val dogId = dog.store.identityKeyPair.publicKey.toString()
+                    val fakeId = KeyHelper.generateIdentityKeyPair().publicKey.toString()
+
+                    cat.addOrUpdateContact(Model.ContactType.DIRECT, dogId, "Dog")
+                    dog.addOrUpdateContact(Model.ContactType.DIRECT, catId, "Cat")
+                    dog.addOrUpdateContact(Model.ContactType.DIRECT, fakeId, "Fake")
+
+                    val msg1 = dog.sendToDirectContact(catId, "hi cat")
+                    assertNotNull(dog.waitFor<Model.StoredMessage>(msg1.dbPath) {
+                        it?.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
+                    }, "sending to real recipient should have succeeded")
+
+                    val msg2 = dog.sendToDirectContact(fakeId, "hi fake one")
+                    assertNotNull(dog.waitFor<Model.StoredMessage>(msg2.dbPath) {
+                        it?.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED
+                    }, "sending to fake recipient should have failed")
+
+                    assertEquals(
+                        0,
+                        dog.db.list<Any>(Schema.PATH_OUTBOUND.path("%")).size,
+                        "there should be no queued outbound messages once deliveries have succeeded and failed"
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
     fun testDeletions() {
         testInCoroutine {
             newMessaging("dog").with { dog ->
@@ -394,32 +427,60 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
-    fun testDeliveryStatus() {
+    fun testDisappearingMessages() {
         testInCoroutine {
-            newMessaging("cat").with { cat ->
-                newMessaging("dog", stopSendRetryAfterMillis = 5000).with { dog ->
-                    val catId = cat.store.identityKeyPair.publicKey.toString()
+            newMessaging("dog").with { dog ->
+                newMessaging("cat").with { cat ->
+                    val catId = cat.identityKeyPair.publicKey.toString()
                     val dogId = dog.store.identityKeyPair.publicKey.toString()
-                    val fakeId = KeyHelper.generateIdentityKeyPair().publicKey.toString()
 
-                    cat.addOrUpdateContact(Model.ContactType.DIRECT, dogId, "Dog")
-                    dog.addOrUpdateContact(Model.ContactType.DIRECT, catId, "Cat")
-                    dog.addOrUpdateContact(Model.ContactType.DIRECT, fakeId, "Fake")
+                    val catContact = dog.addOrUpdateContact(Model.ContactType.DIRECT, catId, "Cat")
+                    val dogContact = cat.addOrUpdateContact(Model.ContactType.DIRECT, dogId, "Dog")
+                    assertEquals(
+                        86400,
+                        catContact.messagesDisappearAfterSeconds,
+                        "messagesDisappearAfterSeconds should have defaulted to 1 day"
+                    )
 
-                    val msg1 = dog.sendToDirectContact(catId, "hi cat")
-                    assertNotNull(dog.waitFor<Model.StoredMessage>(msg1.dbPath) {
-                        it?.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
-                    }, "sending to real recipient should have succeeded")
+                    val disappearAfter = 20
+                    dog.setDisappearSettings(catId, disappearAfter)
+                    assertEquals(
+                        disappearAfter,
+                        dog.db.get<Model.Contact>(catContact.dbPath)?.messagesDisappearAfterSeconds,
+                        "messagesDisappearAfterSeconds should have changed locally"
+                    )
 
-                    val msg2 = dog.sendToDirectContact(fakeId, "hi fake one")
-                    assertNotNull(dog.waitFor<Model.StoredMessage>(msg2.dbPath) {
-                        it?.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED
-                    }, "sending to fake recipient should have failed")
+                    val updatedDogContact = cat.waitFor<Model.Contact>(dogContact.dbPath) {
+                        it?.messagesDisappearAfterSeconds == disappearAfter
+                    }
+                    assertNotNull(
+                        updatedDogContact,
+                        "cat should have gotten updated messagesDisappearAfterSeconds for dog contact"
+                    )
+
+                    val msgs = sendAndVerify("send disappearing message", dog, cat, "hi cat")
+                    val localMsg = dog.waitFor<Model.StoredMessage>(msgs.sent.dbPath) {
+                        it == null
+                    }
+                    assertNull(localMsg, "message should have disappeared locally")
+                    var remoteMsg = cat.db.get<Model.StoredMessage>(msgs.received.dbPath)
+                    assertNotNull(remoteMsg, "message should not yet have disappeared remotely")
+
+                    cat.markViewed(msgs.received.dbPath)
+                    remoteMsg = cat.waitFor(msgs.received.dbPath) {
+                        it != null
+                    }
+                    assertNull(remoteMsg, "message should have disappeared remotely")
 
                     assertEquals(
                         0,
-                        dog.db.list<Any>(Schema.PATH_OUTBOUND.path("%")).size,
-                        "there should be no queued outbound messages once deliveries have succeeded and failed"
+                        dog.db.listPaths(Schema.PATH_DISAPPEARING_MESSAGES.path("%")),
+                        "disappearing message entry should be gone locally"
+                    )
+                    assertEquals(
+                        0,
+                        cat.db.listPaths(Schema.PATH_DISAPPEARING_MESSAGES.path("%")),
+                        "disappearing message entry should be gone remotely"
                     )
                 }
             }
