@@ -272,8 +272,8 @@ class Messaging(
     }
 
     fun react(msgPath: String, emoticon: String) {
-        if (emoticon.length != 0 && emoticon.length != 2) {
-            throw IllegalArgumentException("emoticon must be 0 or 2 characters in length")
+        if (emoticon.length > 2) {
+            throw IllegalArgumentException("emoticon must no more than 2 characters in length")
         }
 
         db.mutate { tx ->
