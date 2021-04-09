@@ -231,9 +231,8 @@ class Messaging(
         }
         replyToSenderId?.let { msgBuilder.setReplyToSenderId(it) }
         replyToId?.let { msgBuilder.setReplyToId(it) }
+        val msg = msgBuilder.build()
         return db.mutate { tx ->
-            markViewed(tx, msgBuilder)
-            val msg = msgBuilder.build()
             // save the message in a list of all messages
             tx.put(msg.dbPath, msg)
             // update the relevant contact
@@ -255,7 +254,7 @@ class Messaging(
         }
     }
 
-    private fun markViewed(tx: Transaction, builder: Model.StoredMessage.Builder) {
+    internal fun markViewed(tx: Transaction, builder: Model.StoredMessage.Builder) {
         val msgPath = builder.dbPath
         if (builder.firstViewedAt == 0L) {
             builder.setFirstViewedAt(nowUnixNano)

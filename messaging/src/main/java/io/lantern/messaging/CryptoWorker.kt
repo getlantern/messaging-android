@@ -79,7 +79,10 @@ internal class CryptoWorker(
     private val Model.StoredMessage.message: Model.Message
         get() {
             val msgBuilder =
-                Model.Message.newBuilder().setId(id.fromBase32.byteString()).setText(text)
+                Model.Message.newBuilder()
+                    .setId(id.fromBase32.byteString())
+                    .setText(text)
+                    .setDisappearAfterSeconds(disappearAfterSeconds)
             replyToSenderId?.let { msgBuilder.setReplyToSenderId(it.fromBase32.byteString()) }
             replyToId?.let { msgBuilder.setReplyToId(it.fromBase32.byteString()) }
             attachmentsMap.forEach { (id, attachment) ->
@@ -92,15 +95,18 @@ internal class CryptoWorker(
         logger.debug("deleting failed message")
         db.mutate { tx ->
             tx.delete(this.dbPath)
-            val finalStatus =
-                if (this.subDeliveryStatusesMap.count { it.value == Model.OutboundMessage.SubDeliveryStatus.SENT } > 0)
-                    Model.StoredMessage.DeliveryStatus.PARTIALLY_FAILED else Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED
             val msgPath = this.msgPath
-            tx.put(
-                msgPath,
-                tx.get<Model.StoredMessage>(msgPath)?.toBuilder()
-                    ?.setStatus(finalStatus)?.build()
-            )
+            // update message (if it still exists)
+            tx.get<Model.StoredMessage>(msgPath)?.let {
+                val finalStatus =
+                    if (this.subDeliveryStatusesMap.count { it.value == Model.OutboundMessage.SubDeliveryStatus.SENT } > 0)
+                        Model.StoredMessage.DeliveryStatus.PARTIALLY_FAILED else Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED
+                tx.put(
+                    msgPath,
+                    tx.get<Model.StoredMessage>(msgPath)?.toBuilder()
+                        ?.setStatus(finalStatus)?.build()
+                )
+            }
         }
     }
 
@@ -135,31 +141,40 @@ internal class CryptoWorker(
 
         when (out.contentCase) {
             Model.OutboundMessage.ContentCase.MESSAGEID -> {
-                db.get<Model.StoredMessage>(out.msgPath)?.let { msg ->
-                    val pendingAttachments = msg.pendingAttachments
-                    if (pendingAttachments.isNotEmpty()) {
-                        // handle pending attachments before sending message
-                        pendingAttachments.forEach { (id, attachment) ->
-                            uploadAttachment(out, msg, id, attachment)
-                        }
-                        return
-                    }
+                val msg = db.get<Model.StoredMessage>(out.msgPath)
+                if (msg == null) {
+                    out.deleteFailed()
+                    return
+                }
 
-                    encryptAndSendToAll(out, afterSuccess = { tx, completelySent ->
-                        val msgPath = out.msgPath
-                        tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
-                            tx.put(
-                                msgPath,
-                                msg.toBuilder()
-                                    .setStatus(if (completelySent) Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT else Model.StoredMessage.DeliveryStatus.PARTIALLY_SENT)
-                                    .build()
-                            )
-                        }
-                    }) {
-                        Model.TransferMessage.newBuilder()
-                            .setMessage(msg.message.toByteString()).build()
-                            .toByteArray()
+                val pendingAttachments = msg.pendingAttachments
+                if (pendingAttachments.isNotEmpty()) {
+                    // handle pending attachments before sending message
+                    pendingAttachments.forEach { (id, attachment) ->
+                        uploadAttachment(out, msg, id, attachment)
                     }
+                    return
+                }
+
+                encryptAndSendToAll(out, afterSuccess = { tx, completelySent ->
+                    val msgPath = out.msgPath
+                    tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
+                        val msgBuilder = msg.toBuilder()
+                        if (completelySent) {
+                            // mark the outbound message as "viewed" only once it's been completely sent
+                            messaging.markViewed(tx, msgBuilder)
+                        }
+                        tx.put(
+                            msgPath,
+                            msgBuilder
+                                .setStatus(if (completelySent) Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT else Model.StoredMessage.DeliveryStatus.PARTIALLY_SENT)
+                                .build()
+                        )
+                    }
+                }) {
+                    Model.TransferMessage.newBuilder()
+                        .setMessage(msg.message.toByteString()).build()
+                        .toByteArray()
                 }
             }
 

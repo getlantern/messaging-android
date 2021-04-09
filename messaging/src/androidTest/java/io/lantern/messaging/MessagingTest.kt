@@ -92,10 +92,12 @@ class MessagingTest : BaseMessagingTest() {
                         )
                     )
                 )
-                var sentMsgFromDB = dog.waitFor<Model.StoredMessage>(sentMsg.dbPath) {
-                    it?.status == Model.StoredMessage.DeliveryStatus.SENDING
+                var sentMsgFromDB = dog.waitFor<Model.StoredMessage>(
+                    sentMsg.dbPath,
+                    "message should still be in SENDING status"
+                ) {
+                    it.status == Model.StoredMessage.DeliveryStatus.SENDING
                 }
-                assertTrue(sentMsgFromDB != null, "message should still be in SENDING status")
 
                 logger.debug("close dog")
                 dog.close()
@@ -113,11 +115,10 @@ class MessagingTest : BaseMessagingTest() {
                 // keys, allowing the message to send successfully
                 newMessaging("cat", store = catStore).with { cat ->
                     val sentMsgFromDB =
-                        dog.waitFor<Model.StoredMessage>(sentMsg.dbPath) { it?.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT }
-                    assertNotNull(
-                        sentMsgFromDB,
-                        "message from dog to cat should have successfully sent once Cat registered pre keys"
-                    )
+                        dog.waitFor<Model.StoredMessage>(
+                            sentMsg.dbPath,
+                            "message from dog to cat should have successfully sent once Cat registered pre keys"
+                        ) { it.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT }
                     assertEquals(
                         Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT,
                         sentMsgFromDB.status,
@@ -129,11 +130,13 @@ class MessagingTest : BaseMessagingTest() {
 
                     // verify that cat now has message from dog
                     val mostRecentMsg =
-                        cat.waitFor<Model.StoredMessage>(Schema.PATH_MESSAGES.path("%")) {
-                            it?.attachmentsMap?.filter { (_, attachment) -> attachment.status == Model.StoredAttachment.Status.DONE }
-                                ?.count() ?: 0 == 1
+                        cat.waitFor<Model.StoredMessage>(
+                            Schema.PATH_MESSAGES.path("%"),
+                            "cat should have recent message"
+                        ) {
+                            it.attachmentsMap.filter { (_, attachment) -> attachment.status == Model.StoredAttachment.Status.DONE }
+                                .count() == 1
                         }
-                    assertNotNull(mostRecentMsg, "cat should have recent message")
                     assertEquals(
                         dogId,
                         mostRecentMsg.senderId,
@@ -154,7 +157,8 @@ class MessagingTest : BaseMessagingTest() {
                         cat,
                         dog,
                         "hi dog",
-                        replyToId = mostRecentMsg.id
+                        replyToId = mostRecentMsg.id,
+                        ignoreSendsForMillis = 2000
                     )
 
                     // make sure outbound and inbound queues are empty
@@ -204,14 +208,20 @@ class MessagingTest : BaseMessagingTest() {
                     dog.addOrUpdateContact(Model.ContactType.DIRECT, fakeId, "Fake")
 
                     val msg1 = dog.sendToDirectContact(catId, "hi cat")
-                    assertNotNull(dog.waitFor<Model.StoredMessage>(msg1.dbPath) {
+                    dog.waitFor<Model.StoredMessage>(
+                        msg1.dbPath,
+                        "sending to real recipient should have succeeded"
+                    ) {
                         it?.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
-                    }, "sending to real recipient should have succeeded")
+                    }
 
                     val msg2 = dog.sendToDirectContact(fakeId, "hi fake one")
-                    assertNotNull(dog.waitFor<Model.StoredMessage>(msg2.dbPath) {
+                    dog.waitFor<Model.StoredMessage>(
+                        msg2.dbPath,
+                        "sending to fake recipient should have failed"
+                    ) {
                         it?.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED
-                    }, "sending to fake recipient should have failed")
+                    }
 
                     assertEquals(
                         0,
@@ -299,11 +309,10 @@ class MessagingTest : BaseMessagingTest() {
                             )
                         }
 
-                    val dogMsg =
-                        dog.waitFor<Model.StoredMessage>(replyMsgs.received.dbPath) {
-                            it == null
-                        }
-                    assertNull(dogMsg, "message should have been deleted for dog too")
+                    dog.waitForNull(
+                        replyMsgs.received.dbPath,
+                        "message should have been deleted for dog too"
+                    )
                     replyMsgs.received.attachmentsMap.values.forEach { storedAttachment ->
                         assertFalse(
                             File(storedAttachment.filePath).exists(),
@@ -391,11 +400,12 @@ class MessagingTest : BaseMessagingTest() {
                         "cat's reaction should have been recorded locally"
                     )
 
-                    val dogMsg =
-                        dog.waitFor<Model.StoredMessage>(msgs.sent.dbPath) {
-                            it?.reactionsCount ?: 0 > 0
-                        }
-                    assertNotNull(dogMsg, "dog should have gotten reaction")
+                    val dogMsg = dog.waitFor<Model.StoredMessage>(
+                        msgs.sent.dbPath,
+                        "dog should have gotten reaction"
+                    ) {
+                        it.reactionsCount ?: 0 > 0
+                    }
                     assertEquals(
                         "g",
                         dogMsg.getReactionsOrThrow(catId).emoticon,
@@ -416,11 +426,12 @@ class MessagingTest : BaseMessagingTest() {
                         "cat's reaction should have been cleared"
                     )
 
-                    val newerDogMsg =
-                        dog.waitFor<Model.StoredMessage>(msgs.sent.dbPath) {
-                            it?.reactionsCount ?: 0 == 0
-                        }
-                    assertNotNull(newerDogMsg, "dog should have cleared reaction")
+                    dog.waitFor<Model.StoredMessage>(
+                        msgs.sent.dbPath,
+                        "dog should have cleared reaction"
+                    ) {
+                        it?.reactionsCount ?: 0 == 0
+                    }
                 }
             }
         }
@@ -442,7 +453,8 @@ class MessagingTest : BaseMessagingTest() {
                         "messagesDisappearAfterSeconds should have defaulted to 1 day"
                     )
 
-                    val disappearAfter = 5
+                    val disappearAfter =
+                        1 // this is a very short value to allow us to test that messages don't disappear before they're sent
                     dog.setDisappearSettings(catId, disappearAfter)
                     assertEquals(
                         disappearAfter,
@@ -450,19 +462,24 @@ class MessagingTest : BaseMessagingTest() {
                         "messagesDisappearAfterSeconds should have changed locally"
                     )
 
-                    val updatedDogContact = cat.waitFor<Model.Contact>(dogContact.dbPath) {
-                        it?.messagesDisappearAfterSeconds == disappearAfter
-                    }
-                    assertNotNull(
-                        updatedDogContact,
+                    cat.waitFor<Model.Contact>(
+                        dogContact.dbPath,
                         "cat should have gotten updated messagesDisappearAfterSeconds for dog contact"
-                    )
-
-                    val msgs = sendAndVerify("send disappearing message", dog, cat, "hi cat")
-                    val localMsg = dog.waitFor<Model.StoredMessage>(msgs.sent.dbPath) {
-                        it == null
+                    ) {
+                        it.messagesDisappearAfterSeconds == disappearAfter
                     }
-                    assertNull(localMsg, "message should have disappeared locally")
+
+                    val msgs = sendAndVerify(
+                        "send disappearing message",
+                        dog,
+                        cat,
+                        "hi cat",
+                        ignoreSendsForMillis = 2000
+                    )
+                    dog.waitForNull(
+                        msgs.sent.dbPath,
+                        "message should have disappeared locally"
+                    )
                     var remoteMsg = cat.db.get<Model.StoredMessage>(msgs.received.dbPath)
                     assertNotNull(remoteMsg, "message should not yet have disappeared remotely")
 
@@ -470,17 +487,20 @@ class MessagingTest : BaseMessagingTest() {
                     // close and reopen cat to make sure disappearing messages work after startup
                     cat.close()
                     newMessaging("cat").with { cat ->
-                        remoteMsg = cat.db.get<Model.StoredMessage>(msgs.received.dbPath)
+                        remoteMsg = cat.db.get(msgs.received.dbPath)
                         assertNotNull(
                             remoteMsg,
                             "message should still not have disappeared remotely after reopening messaging"
                         )
-                        assertTrue(remoteMsg!!.firstViewedAt > 0, "remoteMsg should be marked viewed")
+                        assertTrue(
+                            remoteMsg!!.firstViewedAt > 0,
+                            "remoteMsg should be marked viewed"
+                        )
 
-                        remoteMsg = cat.waitFor(msgs.received.dbPath) {
-                            it == null
-                        }
-                        assertNull(remoteMsg, "message should have disappeared remotely")
+                        cat.waitForNull(
+                            msgs.received.dbPath,
+                            "message should have disappeared remotely"
+                        )
 
                         assertTrue(
                             dog.db.listPaths(Schema.PATH_DISAPPEARING_MESSAGES.path("%")).isEmpty(),
@@ -517,17 +537,17 @@ class MessagingTest : BaseMessagingTest() {
         text: String?,
         attachments: Array<Model.StoredAttachment>? = null,
         replyToId: String? = null,
-        ignoreSendsForAWhile: Boolean = false
+        ignoreSendsForMillis: Long = 0
     ): MessagePair {
         logger.debug("running case $testCase")
         val fromId = from.store.identityKeyPair.publicKey.toString()
         val toId = to.identityKeyPair.publicKey.toString()
 
-        if (ignoreSendsForAWhile) {
+        if (ignoreSendsForMillis > 0) {
             logger.debug("ignore sends for a while to make sure client handles this well")
             BrokenTransportFactory.ignoreOps.set(true)
             GlobalScope.launch {
-                delay(2000)
+                delay(ignoreSendsForMillis)
                 logger.debug("start honoring sends again")
                 BrokenTransportFactory.ignoreOps.set(false)
             }
@@ -604,8 +624,7 @@ class MessagingTest : BaseMessagingTest() {
 
         // ensure that recipient has received the message
         var recipientStoredMsg =
-            to.waitFor<Model.StoredMessage>(senderStoredMsg.timestampUnknownQuery) { it != null }
-        assertTrue(recipientStoredMsg != null, testCase)
+            to.waitFor<Model.StoredMessage>(senderStoredMsg.timestampUnknownQuery, testCase)
         assertEquals(senderStoredMsg.id, recipientStoredMsg.id)
         assertEquals(Model.MessageDirection.IN, recipientStoredMsg.direction, testCase)
         assertEquals(fromId, recipientStoredMsg.senderId, testCase)
@@ -658,10 +677,9 @@ class MessagingTest : BaseMessagingTest() {
             )
             // wait for all attachments to download
             recipientStoredMsg =
-                to.waitFor<Model.StoredMessage>(recipientStoredMsg.dbPath) {
-                    it?.attachmentsMap?.values?.count { it.status != Model.StoredAttachment.Status.DONE } == 0
+                to.waitFor(recipientStoredMsg.dbPath, testCase) {
+                    it.attachmentsMap.values.count { it.status != Model.StoredAttachment.Status.DONE } == 0
                 }
-            assertNotNull(recipientStoredMsg, testCase)
             recipientStoredMsg.attachmentsMap.forEach { (id, attachment) ->
                 // make sure metadata matches expected
                 assertEquals(
@@ -711,37 +729,44 @@ class MessagingTest : BaseMessagingTest() {
 @ExperimentalTime
 internal suspend fun <T : Any> Messaging.waitFor(
     path: String,
+    testCase: String,
     duration: Duration = 10.seconds,
-    check: (T?) -> Boolean
-): T? {
-    return this.store.waitFor(path, duration, check)
-}
-
-@ExperimentalTime
-internal suspend fun <T : Any> MessagingStore.waitFor(
-    path: String,
-    duration: Duration = 10.seconds,
-    check: (T?) -> Boolean
-): T? {
-    return waitFor(duration.toLongMilliseconds()) {
-        val result: T? = this.db.findOne(path)
-        if (check(result)) result else null
-    }
-}
-
-private suspend fun <T> waitFor(maxWait: Long, get: suspend () -> T?): T? {
+    check: ((T) -> Boolean)? = null
+): T {
+    val maxWait = duration.toLongMilliseconds()
     var elapsed = 0
     while (elapsed < maxWait) {
-        val result = get()
-        if (result != null) {
-            logger.debug("waited ${elapsed}ms to find result")
-            return result
+        val value = this.db.findOne<T>(path)
+        if (value != null) {
+            if (check == null || check(value)) {
+                logger.debug("waited ${elapsed}ms to find match")
+                return value
+            }
         }
         delay(25)
         elapsed += 25
     }
-    logger.debug("waited ${elapsed}ms without finding result")
-    return null
+    fail("waited ${elapsed}ms without finding match for '${testCase}'")
+}
+
+@ExperimentalTime
+internal suspend fun Messaging.waitForNull(
+    path: String,
+    testCase: String,
+    duration: Duration = 10.seconds
+) {
+    val maxWait = duration.toLongMilliseconds()
+    var elapsed = 0
+    while (elapsed < maxWait) {
+        val value = this.db.findOne<Any>(path)
+        if (value == null) {
+            logger.debug("waited ${elapsed}ms for value to be null")
+            return
+        }
+        delay(25)
+        elapsed += 25
+    }
+    throw AssertionError("waited ${elapsed}ms without value turning null for '${testCase}'")
 }
 
 internal fun DB.dump() {
