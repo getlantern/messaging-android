@@ -255,16 +255,15 @@ class Messaging(
     fun markViewed(msgPath: String) {
         db.mutate { tx ->
             tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
-                if (msg.firstViewedTs == 0L) {
-                    // only update if we haven't marked it yet
-                    tx.put(msgPath, msg.toBuilder().setFirstViewedTs(nowUnixNano).build())
-                    if (msg.disappearAfterSeconds > 0) {
-                        // set message to disappear now that it's been viewed
-                        tx.put(
-                            msg.disappearingMessagePath(nowUnixNano + msg.disappearAfterSeconds.toLong().secondsToMillis.millisToNanos),
-                            msg.dbPath
-                        )
-                    }
+                if (msg.disappearAfterSeconds > 0 && msg.disappearAt == 0L) {
+                    // set message to disappear now that it's been viewed
+                    val disappearAt =
+                        nowUnixNano + msg.disappearAfterSeconds.toLong().secondsToMillis.millisToNanos
+                    tx.put(msg.dbPath, msg.toBuilder().setDisappearAt(disappearAt).build())
+                    tx.put(
+                        msg.disappearingMessagePath(disappearAt),
+                        msg.dbPath
+                    )
                 }
             }
         }

@@ -442,7 +442,7 @@ class MessagingTest : BaseMessagingTest() {
                         "messagesDisappearAfterSeconds should have defaulted to 1 day"
                     )
 
-                    val disappearAfter = 20
+                    val disappearAfter = 5
                     dog.setDisappearSettings(catId, disappearAfter)
                     assertEquals(
                         disappearAfter,
@@ -467,21 +467,29 @@ class MessagingTest : BaseMessagingTest() {
                     assertNotNull(remoteMsg, "message should not yet have disappeared remotely")
 
                     cat.markViewed(msgs.received.dbPath)
-                    remoteMsg = cat.waitFor(msgs.received.dbPath) {
-                        it != null
-                    }
-                    assertNull(remoteMsg, "message should have disappeared remotely")
+                    // close and reopen cat to make sure disappearing messages work after startup
+                    cat.close()
+                    newMessaging("cat").with { cat ->
+                        remoteMsg = cat.db.get<Model.StoredMessage>(msgs.received.dbPath)
+                        assertNotNull(
+                            remoteMsg,
+                            "message should still not have disappeared remotely after reopening messaging"
+                        )
 
-                    assertEquals(
-                        0,
-                        dog.db.listPaths(Schema.PATH_DISAPPEARING_MESSAGES.path("%")),
-                        "disappearing message entry should be gone locally"
-                    )
-                    assertEquals(
-                        0,
-                        cat.db.listPaths(Schema.PATH_DISAPPEARING_MESSAGES.path("%")),
-                        "disappearing message entry should be gone remotely"
-                    )
+                        remoteMsg = cat.waitFor(msgs.received.dbPath) {
+                            it == null
+                        }
+                        assertNull(remoteMsg, "message should have disappeared remotely")
+
+                        assertTrue(
+                            dog.db.listPaths(Schema.PATH_DISAPPEARING_MESSAGES.path("%")).isEmpty(),
+                            "disappearing message entry should be gone locally"
+                        )
+                        assertTrue(
+                            cat.db.listPaths(Schema.PATH_DISAPPEARING_MESSAGES.path("%")).isEmpty(),
+                            "disappearing message entry should be gone remotely"
+                        )
+                    }
                 }
             }
         }

@@ -89,7 +89,7 @@ message StoredMessage {
   MessageDirection direction = 10; // direction in which the message is going/came
   map<string, Reaction> reactions = 11; // reactions by the id of the reacter
   DeliveryStatus status = 12; // for outgoing messages, the status of its sending and delivery
-  int64 firstViewedTs = 13; // the unix timestamp in nanoseconds of when this message was first viewed on the local device
+  int64 disappearAt = 13; // the unix timestamp in nanoseconds of when this message will automatically disappear
 }
 
 // A reaction to a message
