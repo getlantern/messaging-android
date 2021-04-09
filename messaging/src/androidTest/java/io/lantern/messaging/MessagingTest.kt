@@ -35,6 +35,46 @@ private val logger = KotlinLogging.logger {}
 class MessagingTest : BaseMessagingTest() {
 
     @Test
+    fun testAddOrUpdateDirectContact() {
+        testInCoroutine {
+            newMessaging("dog").with { dog ->
+                newMessaging("cat").with { cat ->
+                    val catId = cat.identityKeyPair.publicKey.toString()
+
+                    val now = nowUnixNano
+                    var catContact =
+                        dog.addOrUpdateContact(Model.ContactType.DIRECT, catId, "Cat")
+                    val createdTs = catContact.createdTs
+                    assertEquals(
+                        Model.ContactType.DIRECT,
+                        catContact.contactId.type,
+                        "cat should have right contact type"
+                    )
+                    assertEquals(
+                        catId,
+                        catContact.contactId.id,
+                        "cat id should have been set correctly"
+                    )
+                    assertEquals("Cat", catContact.displayName, "displayName should have been set")
+                    assertTrue(createdTs >= now, "createdTime should have been set")
+
+                    catContact = dog.addOrUpdateContact(Model.ContactType.DIRECT, catId, "New Cat")
+                    assertEquals(
+                        "New Cat",
+                        catContact.displayName,
+                        "displayName should have been changed"
+                    )
+                    assertEquals(
+                        createdTs,
+                        catContact.createdTs,
+                        "createdTime should have been left alone"
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
     fun testBasicFlowWithConnectivityIssues() {
         val catStore = newStore()
         val theDog = newMessaging("dog")
@@ -389,7 +429,10 @@ class MessagingTest : BaseMessagingTest() {
                     assertNotNull(msgs.received)
 
                     // add reaction from cat
-                    cat.react(msgs.received.dbPath, smileyFace) // no, 'g' is not an emoticon, but it's just a test
+                    cat.react(
+                        msgs.received.dbPath,
+                        smileyFace
+                    ) // no, 'g' is not an emoticon, but it's just a test
                     var updatedMostRecentMsg = cat.db.get<Model.StoredMessage>(msgs.received.dbPath)
                     assertNotNull(updatedMostRecentMsg)
                     assertEquals(

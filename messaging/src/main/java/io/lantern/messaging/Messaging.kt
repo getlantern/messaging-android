@@ -157,6 +157,7 @@ class Messaging(
                 val contactBuilder = existingContact?.toBuilder() ?: Model.Contact.newBuilder()
                     .setContactId(contactId)
                 if (existingContact == null) {
+                    contactBuilder.createdTs = nowUnixNano
                     contactBuilder.messagesDisappearAfterSeconds =
                         86400 // 1 day, TODO: make this configurable
                 }
