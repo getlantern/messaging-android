@@ -375,6 +375,7 @@ class MessagingTest : BaseMessagingTest() {
 
     @Test
     fun testReactions() {
+        val smileyFace = "\uD83D\uDE04"
         testInCoroutine {
             newMessaging("dog").with { dog ->
                 newMessaging("cat").with { cat ->
@@ -388,14 +389,11 @@ class MessagingTest : BaseMessagingTest() {
                     assertNotNull(msgs.received)
 
                     // add reaction from cat
-                    cat.react(
-                        msgs.received.dbPath,
-                        "g"
-                    ) // no, 'g' is not an emoticon, but it's just a test
+                    cat.react(msgs.received.dbPath, smileyFace) // no, 'g' is not an emoticon, but it's just a test
                     var updatedMostRecentMsg = cat.db.get<Model.StoredMessage>(msgs.received.dbPath)
                     assertNotNull(updatedMostRecentMsg)
                     assertEquals(
-                        "g",
+                        smileyFace,
                         updatedMostRecentMsg.getReactionsOrThrow(catId).emoticon,
                         "cat's reaction should have been recorded locally"
                     )
@@ -407,7 +405,7 @@ class MessagingTest : BaseMessagingTest() {
                         it.reactionsCount ?: 0 > 0
                     }
                     assertEquals(
-                        "g",
+                        smileyFace,
                         dogMsg.getReactionsOrThrow(catId).emoticon,
                         "cat's reaction should have been recorded for dog too"
                     )
