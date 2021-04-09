@@ -475,6 +475,7 @@ class MessagingTest : BaseMessagingTest() {
                             remoteMsg,
                             "message should still not have disappeared remotely after reopening messaging"
                         )
+                        assertTrue(remoteMsg!!.firstViewedAt > 0, "remoteMsg should be marked viewed")
 
                         remoteMsg = cat.waitFor(msgs.received.dbPath) {
                             it == null

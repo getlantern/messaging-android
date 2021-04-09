@@ -231,8 +231,9 @@ class Messaging(
         }
         replyToSenderId?.let { msgBuilder.setReplyToSenderId(it) }
         replyToId?.let { msgBuilder.setReplyToId(it) }
-        val msg = msgBuilder.build()
-        db.mutate { tx ->
+        return db.mutate { tx ->
+            markViewed(tx, msgBuilder)
+            val msg = msgBuilder.build()
             // save the message in a list of all messages
             tx.put(msg.dbPath, msg)
             // update the relevant contact
@@ -240,32 +241,34 @@ class Messaging(
             // save the message under the relevant contact messages
             tx.put(msg.contactMessagePath, msg.dbPath)
             tx.put(out.dbPath, out.build())
-            if (msg.disappearAfterSeconds > 0) {
-                // immediately set message to disappear
-                tx.put(
-                    msg.disappearingMessagePath(nowUnixNano + msg.disappearAfterSeconds.toLong().secondsToMillis.millisToNanos),
-                    msg.dbPath
-                )
-            }
+            // immediately mark message viewed
             cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
+            msg
         }
-        return msg
     }
 
     fun markViewed(msgPath: String) {
         db.mutate { tx ->
             tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
-                if (msg.disappearAfterSeconds > 0 && msg.disappearAt == 0L) {
-                    // set message to disappear now that it's been viewed
-                    val disappearAt =
-                        nowUnixNano + msg.disappearAfterSeconds.toLong().secondsToMillis.millisToNanos
-                    tx.put(msg.dbPath, msg.toBuilder().setDisappearAt(disappearAt).build())
-                    tx.put(
-                        msg.disappearingMessagePath(disappearAt),
-                        msg.dbPath
-                    )
-                }
+                markViewed(tx, msg.toBuilder())
             }
+        }
+    }
+
+    private fun markViewed(tx: Transaction, builder: Model.StoredMessage.Builder) {
+        val msgPath = builder.dbPath
+        if (builder.firstViewedAt == 0L) {
+            builder.setFirstViewedAt(nowUnixNano)
+            if (builder.disappearAfterSeconds > 0) {
+                // set message to disappear now that it's been viewed
+                builder.disappearAt =
+                    builder.firstViewedAt + builder.disappearAfterSeconds.toLong().secondsToMillis.millisToNanos
+                tx.put(
+                    builder.disappearingMessagePath,
+                    msgPath
+                )
+            }
+            tx.put(msgPath, builder.build())
         }
     }
 

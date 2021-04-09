@@ -37,6 +37,9 @@ fun Model.Message.inbound(senderId: String): Model.StoredMessage.Builder {
 val Model.StoredMessage.dbPath: String
     get() = senderId.storedMessagePath(ts, id)
 
+val Model.StoredMessage.Builder.dbPath: String
+    get() = senderId.storedMessagePath(ts, id)
+
 fun String.storedMessagePath(ts: Long, messageId: String) =
     Schema.PATH_MESSAGES.path(this, ts, messageId)
 
@@ -98,12 +101,13 @@ val Model.StoredMessage.contactMessagesQuery: String
     get() =
         Schema.PATH_CONTACT_MESSAGES.path(contactId.pathSegment, "%")
 
-fun Model.StoredMessage.disappearingMessagePath(disappearAt: Long): String =
-    Schema.PATH_DISAPPEARING_MESSAGES.path(
-        disappearAt,
-        senderId,
-        id
-    )
+val Model.StoredMessage.Builder.disappearingMessagePath: String
+    get() =
+        Schema.PATH_DISAPPEARING_MESSAGES.path(
+            disappearAt,
+            senderId,
+            id
+        )
 
 val ByteArray.base32: String get() = Base32.humanFriendly.encodeToString(this)
 
