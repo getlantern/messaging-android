@@ -88,10 +88,23 @@ class MessagingTest : BaseMessagingTest() {
                     )
                     cat.sendToDirectContact(dogId, "cat sent this while not a contact")
 
+                    // hack dog's disappear settings to make sure we get hello message with new settings
+                    cat.db.mutate { tx ->
+                        tx.get<Model.Contact>(dogId.directContactPath)?.let {
+                            tx.put(
+                                it.dbPath,
+                                it.toBuilder().setMessagesDisappearAfterSeconds(17).build()
+                            )
+                        }
+                    }
                     dog.addOrUpdateContact(Model.ContactType.DIRECT, catId, "New Cat")
+                    cat.waitFor<Model.Contact>(
+                        dogId.directContactPath,
+                        "dog's initial disappear settings should arrive"
+                    ) {
+                        it.messagesDisappearAfterSeconds == 86400
+                    }
 
-                    // wait a little bit for hello message from dog
-                    delay(5000)
                     sendAndVerify(
                         "cat sends a message to dog after having been removed and re-added",
                         cat,
@@ -309,6 +322,71 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
+    fun testReactions() {
+        val smileyFace = "\uD83D\uDE04"
+        testInCoroutine {
+            newMessaging("dog").with { dog ->
+                newMessaging("cat").with { cat ->
+                    val catId = cat.identityKeyPair.publicKey.toString()
+                    val dogId = dog.store.identityKeyPair.publicKey.toString()
+
+                    dog.addOrUpdateContact(Model.ContactType.DIRECT, catId, "Cat")
+                    cat.addOrUpdateContact(Model.ContactType.DIRECT, dogId, "Dog")
+
+                    val msgs = sendAndVerify("dog sends to cat", dog, cat, "hi cat")
+                    assertNotNull(msgs.received)
+
+                    // add reaction from cat
+                    cat.react(
+                        msgs.received.dbPath,
+                        smileyFace
+                    ) // no, 'g' is not an emoticon, but it's just a test
+                    var updatedMostRecentMsg = cat.db.get<Model.StoredMessage>(msgs.received.dbPath)
+                    assertNotNull(updatedMostRecentMsg)
+                    assertEquals(
+                        smileyFace,
+                        updatedMostRecentMsg.getReactionsOrThrow(catId).emoticon,
+                        "cat's reaction should have been recorded locally"
+                    )
+
+                    val dogMsg = dog.waitFor<Model.StoredMessage>(
+                        msgs.sent.dbPath,
+                        "dog should have gotten reaction"
+                    ) {
+                        it.reactionsCount ?: 0 > 0
+                    }
+                    assertEquals(
+                        smileyFace,
+                        dogMsg.getReactionsOrThrow(catId).emoticon,
+                        "cat's reaction should have been recorded for dog too"
+                    )
+
+                    // clear reaction from cat
+                    cat.react(
+                        msgs.received.dbPath,
+                        ""
+                    )
+                    updatedMostRecentMsg =
+                        cat.db.get<Model.StoredMessage>(msgs.received.dbPath)
+                    assertNotNull(updatedMostRecentMsg)
+                    assertEquals(
+                        0,
+                        updatedMostRecentMsg.reactionsCount,
+                        "cat's reaction should have been cleared"
+                    )
+
+                    dog.waitFor<Model.StoredMessage>(
+                        msgs.sent.dbPath,
+                        "dog should have cleared reaction"
+                    ) {
+                        it?.reactionsCount ?: 0 == 0
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     fun testDeletions() {
         testInCoroutine {
             newMessaging("dog").with { dog ->
@@ -449,71 +527,6 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
-    fun testReactions() {
-        val smileyFace = "\uD83D\uDE04"
-        testInCoroutine {
-            newMessaging("dog").with { dog ->
-                newMessaging("cat").with { cat ->
-                    val catId = cat.identityKeyPair.publicKey.toString()
-                    val dogId = dog.store.identityKeyPair.publicKey.toString()
-
-                    dog.addOrUpdateContact(Model.ContactType.DIRECT, catId, "Cat")
-                    cat.addOrUpdateContact(Model.ContactType.DIRECT, dogId, "Dog")
-
-                    val msgs = sendAndVerify("dog sends to cat", dog, cat, "hi cat")
-                    assertNotNull(msgs.received)
-
-                    // add reaction from cat
-                    cat.react(
-                        msgs.received.dbPath,
-                        smileyFace
-                    ) // no, 'g' is not an emoticon, but it's just a test
-                    var updatedMostRecentMsg = cat.db.get<Model.StoredMessage>(msgs.received.dbPath)
-                    assertNotNull(updatedMostRecentMsg)
-                    assertEquals(
-                        smileyFace,
-                        updatedMostRecentMsg.getReactionsOrThrow(catId).emoticon,
-                        "cat's reaction should have been recorded locally"
-                    )
-
-                    val dogMsg = dog.waitFor<Model.StoredMessage>(
-                        msgs.sent.dbPath,
-                        "dog should have gotten reaction"
-                    ) {
-                        it.reactionsCount ?: 0 > 0
-                    }
-                    assertEquals(
-                        smileyFace,
-                        dogMsg.getReactionsOrThrow(catId).emoticon,
-                        "cat's reaction should have been recorded for dog too"
-                    )
-
-                    // clear reaction from cat
-                    cat.react(
-                        msgs.received.dbPath,
-                        ""
-                    )
-                    updatedMostRecentMsg =
-                        cat.db.get<Model.StoredMessage>(msgs.received.dbPath)
-                    assertNotNull(updatedMostRecentMsg)
-                    assertEquals(
-                        0,
-                        updatedMostRecentMsg.reactionsCount,
-                        "cat's reaction should have been cleared"
-                    )
-
-                    dog.waitFor<Model.StoredMessage>(
-                        msgs.sent.dbPath,
-                        "dog should have cleared reaction"
-                    ) {
-                        it?.reactionsCount ?: 0 == 0
-                    }
-                }
-            }
-        }
-    }
-
-    @Test
     fun testDisappearingMessages() {
         testInCoroutine {
             newMessaging("dog").with { dog ->
@@ -529,7 +542,36 @@ class MessagingTest : BaseMessagingTest() {
                         "messagesDisappearAfterSeconds should have defaulted to 1 day"
                     )
 
-                    delay(5000) // wait a while for contacts' initial delay settings to propagate
+                    // immediately hack the disappear settings to something different to make sure that the initial synchronization messages work
+                    dog.db.mutate { tx ->
+                        tx.get<Model.Contact>(catId.directContactPath)?.let {
+                            tx.put(
+                                it.dbPath,
+                                it.toBuilder().setMessagesDisappearAfterSeconds(17).build()
+                            )
+                        }
+                    }
+                    cat.db.mutate { tx ->
+                        tx.get<Model.Contact>(dogId.directContactPath)?.let {
+                            tx.put(
+                                it.dbPath,
+                                it.toBuilder().setMessagesDisappearAfterSeconds(17).build()
+                            )
+                        }
+                    }
+                    dog.waitFor<Model.Contact>(
+                        catId.directContactPath,
+                        "cat's initial disappear settings should arrive"
+                    ) {
+                        it.messagesDisappearAfterSeconds == 86400
+                    }
+                    cat.waitFor<Model.Contact>(
+                        dogId.directContactPath,
+                        "dog's initial disappear settings should arrive"
+                    ) {
+                        it.messagesDisappearAfterSeconds == 86400
+                    }
+
                     val disappearAfter =
                         1 // this is a very short value to allow us to test that messages don't disappear before they're sent
                     dog.setDisappearSettings(catId, disappearAfter)
