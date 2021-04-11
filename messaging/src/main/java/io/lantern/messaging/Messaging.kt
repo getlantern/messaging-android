@@ -156,7 +156,8 @@ class Messaging(
                 val existingContact = tx.get<Model.Contact>(path)
                 val contactBuilder = existingContact?.toBuilder() ?: Model.Contact.newBuilder()
                     .setContactId(contactId)
-                if (existingContact == null) {
+                val isNew = existingContact == null
+                if (isNew) {
                     contactBuilder.createdTs = nowUnixNano
                     contactBuilder.messagesDisappearAfterSeconds =
                         86400 // 1 day, TODO: make this configurable
@@ -170,7 +171,37 @@ class Messaging(
                         cryptoWorker.doDecryptAndStore(unidentifiedSenderMessage)
                         tx.delete(spamPath)
                     }
+                if (isNew) {
+                    // send our disappear settings as a kind of "hello", that also makes sure we're in sync on retention period
+                    sendDisappearSettings(
+                        tx,
+                        contact.contactId.id,
+                        contact.messagesDisappearAfterSeconds
+                    )
+                }
                 contact
+            }
+        }
+    }
+
+    fun deleteContact(contactId: Model.ContactId) {
+        return cryptoWorker.submitForValue {
+            db.mutate { tx ->
+                tx.delete(contactId.contactPath)
+                db.listPaths(contactId.contactByActivityQuery).forEach {
+                    tx.delete(it)
+                }
+                tx.listPaths(contactId.spamQuery).forEach { path -> tx.delete(path) }
+                tx.list<String>(contactId.contactMessagesQuery)
+                    .forEach { doDeleteLocally(tx, it.value) }
+                when (contactId.type) {
+                    Model.ContactType.DIRECT -> {
+                        store.deleteAllSessions(contactId.id)
+                    }
+                    else -> {
+                        // TODO: support group contacts
+                    }
+                }
             }
         }
     }
@@ -322,19 +353,27 @@ class Messaging(
                         .setMessagesDisappearAfterSeconds(disappearAfterSeconds)
                         .build()
                 )
-                val disappearSettings = Model.DisappearSettings.newBuilder()
-                    .setMessagesDisappearAfterSeconds(disappearAfterSeconds).build()
-                val senderId = store.identityKeyPair.publicKey.toString()
-                val out =
-                    Model.OutboundMessage.newBuilder()
-                        .setDisappearSettings(disappearSettings.toByteString())
-                        .setSent(nowUnixNano)
-                        .setSenderId(senderId)
-                        .setRecipientId(contactId) // TODO: this will need to change for groups
-                tx.put(out.dbPath, out.build())
-                cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
+                sendDisappearSettings(tx, contact.contactId.id, disappearAfterSeconds)
             }
         }
+    }
+
+    private fun sendDisappearSettings(
+        tx: Transaction,
+        contactId: String,
+        disappearAfterSeconds: Int
+    ) {
+        val disappearSettings = Model.DisappearSettings.newBuilder()
+            .setMessagesDisappearAfterSeconds(disappearAfterSeconds).build()
+        val senderId = store.identityKeyPair.publicKey.toString()
+        val out =
+            Model.OutboundMessage.newBuilder()
+                .setDisappearSettings(disappearSettings.toByteString())
+                .setSent(nowUnixNano)
+                .setSenderId(senderId)
+                .setRecipientId(contactId) // TODO: this will need to change for groups
+        tx.put(out.dbPath, out.build())
+        cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
     }
 
     fun deleteGlobally(msgPath: String) {
@@ -355,38 +394,42 @@ class Messaging(
 
     fun deleteLocally(msgPath: String): Model.StoredMessage? {
         return db.mutate { tx ->
-            db.get<Model.StoredMessage>(msgPath)?.let { msg ->
-                tx.delete(msgPath)
+            doDeleteLocally(tx, msgPath)
+        }
+    }
 
-                // Delete attachments on disk
-                // Note - we only delete attachments locally, not in the cloud, because clients
-                // aren't authorized to modify files. They will naturally be deleted once they hit
-                // the server-side retention limit.
-                msg.attachmentsMap.values.forEach { storedAttachment ->
-                    if (!File(storedAttachment.filePath).delete()) {
-                        logger.error("failed to delete attachment on disk, continuing")
-                    }
+    private fun doDeleteLocally(tx: Transaction, msgPath: String): Model.StoredMessage? {
+        return db.get<Model.StoredMessage>(msgPath)?.let { msg ->
+            tx.delete(msgPath)
+
+            // Delete attachments on disk
+            // Note - we only delete attachments locally, not in the cloud, because clients
+            // aren't authorized to modify files. They will naturally be deleted once they hit
+            // the server-side retention limit.
+            msg.attachmentsMap.values.forEach { storedAttachment ->
+                if (!File(storedAttachment.filePath).delete()) {
+                    logger.error("failed to delete attachment on disk, continuing")
                 }
-
-                // Delete index entries for messages under this Contact's conversation
-                tx.delete(msg.contactMessagePath)
-
-                // Update the Contact metadata based on the most recent remaining message
-                tx.listDetails<Model.StoredMessage>(
-                    msg.contactMessagesQuery,
-                    count = 1,
-                    reverseSort = true
-                ).let { storedMessages ->
-                    val mostRecentMsg = storedMessages.firstOrNull()
-                    if (mostRecentMsg != null) {
-                        updateContactMetaData(tx, mostRecentMsg.value, force = true)
-                    } else {
-                        clearContactMetaData(tx, msg.contactId)
-                    }
-                }
-
-                return@let msg
             }
+
+            // Delete index entries for messages under this Contact's conversation
+            tx.delete(msg.contactMessagePath)
+
+            // Update the Contact metadata based on the most recent remaining message
+            tx.listDetails<Model.StoredMessage>(
+                msg.contactMessagesQuery,
+                count = 1,
+                reverseSort = true
+            ).let { storedMessages ->
+                val mostRecentMsg = storedMessages.firstOrNull()
+                if (mostRecentMsg != null) {
+                    updateContactMetaData(tx, mostRecentMsg.value, force = true)
+                } else {
+                    clearContactMetaData(tx, msg.contactId)
+                }
+            }
+
+            return@let msg
         }
     }
 

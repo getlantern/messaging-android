@@ -635,6 +635,9 @@ internal class CryptoWorker(
                                     )
                                     tx.put(msgPath, updatedMsgBuilder.build())
                                     tx.delete(inbound.dbPath)
+                                } ?: {
+                                    // message has been deleted, delete attachment
+                                    File(attachment.filePath).delete()
                                 }
                             }
                         } finally {

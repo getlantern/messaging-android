@@ -35,10 +35,11 @@ private val logger = KotlinLogging.logger {}
 class MessagingTest : BaseMessagingTest() {
 
     @Test
-    fun testAddOrUpdateDirectContact() {
+    fun testManageDirectContact() {
         testInCoroutine {
             newMessaging("dog").with { dog ->
                 newMessaging("cat").with { cat ->
+                    val dogId = dog.identityKeyPair.publicKey.toString()
                     val catId = cat.identityKeyPair.publicKey.toString()
 
                     val now = nowUnixNano
@@ -68,6 +69,40 @@ class MessagingTest : BaseMessagingTest() {
                         createdTs,
                         catContact.createdTs,
                         "createdTime should have been left alone"
+                    )
+
+                    cat.addOrUpdateContact(Model.ContactType.DIRECT, dogId, "Dog")
+                    val msgs = sendAndVerify("cat sends message to dog", cat, dog, "hi dog")
+
+                    dog.deleteContact(catId.directContactId)
+                    assertFalse(dog.db.contains(catId.directContactId.contactPath))
+                    assertFalse(dog.db.contains(msgs.received.dbPath))
+                    assertEquals(
+                        0,
+                        dog.db.listPaths(Schema.PATH_CONTACT_MESSAGES.path("%")).count()
+                    )
+                    assertEquals(0, dog.db.listPaths(Schema.PATH_CONTACTS.path("%")).count())
+                    assertEquals(
+                        0,
+                        dog.db.listPaths(Schema.PATH_CONTACTS_BY_ACTIVITY.path("%")).count()
+                    )
+                    cat.sendToDirectContact(dogId, "cat sent this while not a contact")
+
+                    dog.addOrUpdateContact(Model.ContactType.DIRECT, catId, "New Cat")
+
+                    // wait a little bit for hello message from dog
+                    delay(5000)
+                    sendAndVerify(
+                        "cat sends a message to dog after having been removed and re-added",
+                        cat,
+                        dog,
+                        "hello again dog"
+                    )
+
+                    assertEquals(
+                        1,
+                        dog.db.listPaths(Schema.PATH_CONTACT_MESSAGES.path("%")).count(),
+                        "dog should have only 1 message from cat, the message sent while cat was not a contact should have been lost because it couldn't be decrypted"
                     )
                 }
             }
@@ -494,6 +529,7 @@ class MessagingTest : BaseMessagingTest() {
                         "messagesDisappearAfterSeconds should have defaulted to 1 day"
                     )
 
+                    delay(5000) // wait a while for contacts' initial delay settings to propagate
                     val disappearAfter =
                         1 // this is a very short value to allow us to test that messages don't disappear before they're sent
                     dog.setDisappearSettings(catId, disappearAfter)

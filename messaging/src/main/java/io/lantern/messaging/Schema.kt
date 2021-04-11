@@ -40,6 +40,9 @@ val Model.StoredMessage.dbPath: String
 val Model.StoredMessage.Builder.dbPath: String
     get() = senderId.storedMessagePath(ts, id)
 
+val String.directContactId: Model.ContactId
+    get() = Model.ContactId.newBuilder().setType(Model.ContactType.DIRECT).setId(this).build()
+
 fun String.storedMessagePath(ts: Long, messageId: String) =
     Schema.PATH_MESSAGES.path(this, ts, messageId)
 
@@ -83,7 +86,12 @@ val String.directContactPath: String
 val Model.Contact.timestampedIdxPath: String
     get() = Schema.PATH_CONTACTS_BY_ACTIVITY.path(mostRecentMessageTs, pathSegment)
 
-val Model.Contact.spamQuery: String get() = Schema.PATH_SPAM.path(contactId.id, "%")
+val Model.ContactId.contactByActivityQuery: String
+    get() = Schema.PATH_CONTACTS_BY_ACTIVITY.path("%", pathSegment)
+
+val Model.Contact.spamQuery: String get() = contactId.spamQuery
+
+val Model.ContactId.spamQuery: String get() = Schema.PATH_SPAM.path(id, "%")
 
 fun spamPath(senderId: String, messageId: String, ts: Long) =
     Schema.PATH_SPAM.path(senderId, ts, messageId)
@@ -99,7 +107,10 @@ val Model.StoredMessage.contactMessagePath: String
 
 val Model.StoredMessage.contactMessagesQuery: String
     get() =
-        Schema.PATH_CONTACT_MESSAGES.path(contactId.pathSegment, "%")
+        contactId.contactMessagesQuery
+
+val Model.ContactId.contactMessagesQuery: String
+    get() = Schema.PATH_CONTACT_MESSAGES.path(pathSegment, '%')
 
 val Model.StoredMessage.Builder.disappearingMessagePath: String
     get() =
