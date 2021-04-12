@@ -101,7 +101,7 @@ class Messaging(
         )
 
 
-    lateinit var myId: Model.ContactId
+    val myId: Model.ContactId
 
     init {
         // make sure we have a contact entry for ourselves
@@ -249,11 +249,10 @@ class Messaging(
 
         val base32Id = randomMessageId.base32
         val sent = nowUnixNano
-        val senderId = store.identityKeyPair.publicKey.toString()
         val msgBuilder =
             Model.StoredMessage.newBuilder().setId(base32Id)
                 .setContactId(recipientId.directContactId)
-                .setSenderId(senderId)
+                .setSenderId(myId.id)
                 .setTs(sent)
                 .setText(text)
                 .setDirection(Model.MessageDirection.OUT)
@@ -265,7 +264,7 @@ class Messaging(
         val out =
             Model.OutboundMessage.newBuilder().setMessageId(base32Id)
                 .setSent(sent)
-                .setSenderId(senderId)
+                .setSenderId(myId.id)
                 .setRecipientId(recipientId)
         var attachmentId = 0
         attachments?.forEach {
@@ -322,7 +321,6 @@ class Messaging(
         db.mutate { tx ->
             db.get<Model.StoredMessage>(msgPath)?.let { msg ->
                 val reactingToSenderId = msg.senderId
-                val senderId = store.identityKeyPair.publicKey.toString()
                 val reaction = Model.Reaction.newBuilder()
                     .setReactingToSenderId(reactingToSenderId.fromBase32.byteString())
                     .setReactingToMessageId(msg.id.fromBase32.byteString())
@@ -331,9 +329,9 @@ class Messaging(
                 val builder = msg.toBuilder()
                 // TODO: dry violation, this is repeated on receiving and sending ends
                 if (reaction.emoticon == "") {
-                    builder.removeReactions(senderId)
+                    builder.removeReactions(myId.id)
                 } else {
-                    builder.putReactions(senderId, reaction)
+                    builder.putReactions(myId.id, reaction)
                 }
                 tx.put(msg.dbPath, builder.build())
                 // send the reaction to other participants
@@ -341,7 +339,7 @@ class Messaging(
                     Model.OutboundMessage.newBuilder()
                         .setReaction(reaction.toByteString())
                         .setSent(nowUnixNano)
-                        .setSenderId(senderId)
+                        .setSenderId(myId.id)
                         .setRecipientId(msg.contactId.id) // TODO: this will need to change for groups
                 tx.put(out.dbPath, out.build())
                 cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
@@ -371,12 +369,11 @@ class Messaging(
     ) {
         val disappearSettings = Model.DisappearSettings.newBuilder()
             .setMessagesDisappearAfterSeconds(disappearAfterSeconds).build()
-        val senderId = store.identityKeyPair.publicKey.toString()
         val out =
             Model.OutboundMessage.newBuilder()
                 .setDisappearSettings(disappearSettings.toByteString())
                 .setSent(nowUnixNano)
-                .setSenderId(senderId)
+                .setSenderId(myId.id)
                 .setRecipientId(contactId) // TODO: this will need to change for groups
         tx.put(out.dbPath, out.build())
         cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
@@ -385,12 +382,11 @@ class Messaging(
     fun deleteGlobally(msgPath: String) {
         db.mutate { tx ->
             deleteLocally(msgPath)?.let { msg ->
-                val senderId = store.identityKeyPair.publicKey.toString()
                 val out =
                     Model.OutboundMessage.newBuilder()
                         .setDeleteMessageId(msg.id.fromBase32.byteString())
                         .setSent(nowUnixNano)
-                        .setSenderId(senderId)
+                        .setSenderId(myId.id)
                         .setRecipientId(msg.contactId.id) // TODO: this will need to change for groups
                 tx.put(out.dbPath, out.build())
                 cryptoWorker.submit { cryptoWorker.processOutgoing(out) }

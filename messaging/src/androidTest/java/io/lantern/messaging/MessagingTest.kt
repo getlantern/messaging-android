@@ -39,8 +39,8 @@ class MessagingTest : BaseMessagingTest() {
         testInCoroutine {
             newMessaging("dog").with { dog ->
                 newMessaging("cat").with { cat ->
-                    val dogId = dog.identityKeyPair.publicKey.toString()
-                    val catId = cat.identityKeyPair.publicKey.toString()
+                    val dogId = dog.myId.id
+                    val catId = cat.myId.id
 
                     val now = nowUnixNano
                     var catContact =
@@ -327,8 +327,8 @@ class MessagingTest : BaseMessagingTest() {
         testInCoroutine {
             newMessaging("dog").with { dog ->
                 newMessaging("cat").with { cat ->
-                    val catId = cat.identityKeyPair.publicKey.toString()
-                    val dogId = dog.store.identityKeyPair.publicKey.toString()
+                    val catId = cat.myId.id
+                    val dogId = dog.myId.id
 
                     dog.addOrUpdateDirectContact(catId, "Cat")
                     cat.addOrUpdateDirectContact(dogId, "Dog")
@@ -391,8 +391,8 @@ class MessagingTest : BaseMessagingTest() {
         testInCoroutine {
             newMessaging("dog").with { dog ->
                 newMessaging("cat").with { cat ->
-                    val catId = cat.identityKeyPair.publicKey.toString()
-                    val dogId = dog.store.identityKeyPair.publicKey.toString()
+                    val catId = cat.myId.id
+                    val dogId = dog.myId.id
 
                     dog.addOrUpdateDirectContact(catId, "Cat")
                     cat.addOrUpdateDirectContact(dogId, "Dog")
@@ -531,8 +531,8 @@ class MessagingTest : BaseMessagingTest() {
         testInCoroutine {
             newMessaging("dog").with { dog ->
                 newMessaging("cat").with { cat ->
-                    val catId = cat.identityKeyPair.publicKey.toString()
-                    val dogId = dog.store.identityKeyPair.publicKey.toString()
+                    val catId = cat.myId.id
+                    val dogId = dog.myId.id
 
                     val catContact = dog.addOrUpdateDirectContact(catId, "Cat")
                     val dogContact = cat.addOrUpdateDirectContact(dogId, "Dog")
@@ -660,7 +660,7 @@ class MessagingTest : BaseMessagingTest() {
     ): MessagePair {
         logger.debug("running case $testCase")
         val fromId = from.store.identityKeyPair.publicKey.toString()
-        val toId = to.identityKeyPair.publicKey.toString()
+        val toId = to.myId.id
 
         if (ignoreSendsForMillis > 0) {
             logger.debug("ignore sends for a while to make sure client handles this well")
