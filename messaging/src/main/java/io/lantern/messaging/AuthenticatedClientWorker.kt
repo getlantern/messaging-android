@@ -23,7 +23,6 @@ internal class AuthenticatedClientWorker(
     }
 
     override fun signLogin(loginBytes: ByteArray): ByteArray {
-        logger.debug("signing login")
         return Curve.calculateSignature(
             messaging.identityKeyPair.privateKey,
             loginBytes

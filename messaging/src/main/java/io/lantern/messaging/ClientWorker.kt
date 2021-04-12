@@ -58,7 +58,6 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
             Thread.sleep(actualRedialDelay)
         }
 
-        logger.debug("connecting")
         val newClient = buildClient()
         transportFactory.connect(newClient)
         cancelConnecting = executor.schedule({
@@ -71,7 +70,6 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
 
     fun onConnected(client: C) {
         submit {
-            logger.debug("successfully connected")
             consecutiveFailures = -1
             cancelConnecting?.cancel(true)
             cancelConnecting = null

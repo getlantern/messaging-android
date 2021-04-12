@@ -117,7 +117,6 @@ internal class CryptoWorker(
         }
 
         if (!out.knowsRecipientDevices) {
-            logger.debug("attempting to find recipient devices")
             val recipientIdentityKey = out.recipientIdentityKey
             // find out which deviceIds to send to
             val knownDeviceIds =
@@ -206,7 +205,6 @@ internal class CryptoWorker(
     }
 
     private fun retrievePreKeys(out: Model.OutboundMessage.Builder) {
-        logger.debug("retrieving pre keys")
         val recipientIdentityKey = out.recipientIdentityKey
         messaging.anonymousClientWorker.withClient { client ->
             client.requestPreKeys(
@@ -214,7 +212,6 @@ internal class CryptoWorker(
                 emptyList(),
                 object : Callback<List<Messages.PreKey>> {
                     override fun onSuccess(result: List<Messages.PreKey>) {
-                        logger.debug("successfully retrieved pre keys")
                         submit {
                             db.mutate {
                                 result.forEach { preKey ->
@@ -297,7 +294,6 @@ internal class CryptoWorker(
                 unidentifiedSenderMessage,
                 object : Callback<Unit> {
                     override fun onSuccess(result: Unit) {
-                        logger.debug("successfully sent message")
                         try {
                             db.mutate { tx ->
                                 // re-read message to make sure we're updating the latest
@@ -347,7 +343,6 @@ internal class CryptoWorker(
         removeExpiredUploadAuthorizations()
         val auth = uploadAuthorizations.removeLastOrNull()
         if (auth == null) {
-            logger.debug("getting new upload authorization before uploading attachment")
             getMoreUploadAuthorizationsIfNecessary {
                 uploadAttachment(
                     out,
@@ -367,8 +362,6 @@ internal class CryptoWorker(
 
                     val attachmentBuilder = attachment.toBuilder()
                     if (success) {
-                        // TODO: be less verbose with logging like this
-                        logger.debug("upload succeeded")
                         attachmentBuilder.setStatus(Model.StoredAttachment.Status.DONE)
                         attachmentBuilder.setAttachment(
                             attachmentBuilder.attachment.toBuilder()
@@ -388,7 +381,6 @@ internal class CryptoWorker(
                     tx.put(msgPath, updatedMsg)
 
                     if (updatedMsg.allAttachmentsUploaded) {
-                        logger.debug("all attachments uploaded, continue with processing outgoing message")
                         submit { processOutgoing(out) }
                     }
                 }
@@ -402,7 +394,6 @@ internal class CryptoWorker(
             return
         }
 
-        logger.debug("uploading attachment")
         val requestBody = MultipartBody.Builder().setType(MultipartBody.FORM)
         auth.uploadFormDataMap.forEach { (key, value) ->
             requestBody.addFormDataPart(key, value)
@@ -440,12 +431,10 @@ internal class CryptoWorker(
             return
         }
 
-        logger.debug("requesting $numToRequest upload authorizations")
         messaging.anonymousClientWorker.withClient { client ->
             client.requestUploadAuthorizations(numToRequest,
                 object : Callback<List<Messages.UploadAuthorization>> {
                     override fun onSuccess(result: List<Messages.UploadAuthorization>) {
-                        logger.debug("successfully retrieved ${result.size} upload authorizations")
                         submit {
                             uploadAuthorizations.addAll(result)
                             then()
@@ -528,28 +517,28 @@ internal class CryptoWorker(
         if (!tx.contains(senderId.directContactPath)) {
             throw UnknownSenderException(senderId, msg.id.base32)
         }
-        val msgBuilder = msg.inbound(senderId)
+        val storedMsgBuilder = msg.inbound(senderId)
         // save inbound attachments and trigger downloads
         msg.attachmentsMap.forEach { (id, attachment) ->
             val inboundAttachment =
                 Model.InboundAttachment.newBuilder().setSenderId(senderId)
-                    .setTs(msgBuilder.ts)
-                    .setMessageId(msgBuilder.id).setAttachmentId(id).build()
+                    .setTs(storedMsgBuilder.ts)
+                    .setMessageId(storedMsgBuilder.id).setAttachmentId(id).build()
             tx.put(inboundAttachment.dbPath, inboundAttachment)
             val storedAttachment =
                 messaging.newStoredAttachment.setAttachment(attachment).build()
-            msgBuilder.putAttachments(id, storedAttachment)
+            storedMsgBuilder.putAttachments(id, storedAttachment)
             downloadAttachment(inboundAttachment, storedAttachment)
         }
 
         // save the stored message
-        val msg = msgBuilder.build()
-        tx.put(msg.dbPath, msg)
+        val storedMsg = storedMsgBuilder.build()
+        tx.put(storedMsg.dbPath, storedMsg)
 
         // update the Contact metadata
-        messaging.updateContactMetaData(tx, msg)
+        messaging.updateContactMetaData(tx, storedMsg)
         // save a pointer to the message under the contact message path
-        tx.put(msg.contactMessagePath, msg.dbPath)
+        tx.put(storedMsg.contactMessagePath, storedMsg.dbPath)
     }
 
     private fun storeReaction(tx: Transaction, senderId: String, reaction: Model.Reaction) {
@@ -592,7 +581,6 @@ internal class CryptoWorker(
         attachment: Model.StoredAttachment
     ) {
         // TODO: provide a mechanism for resumable downloads
-        logger.debug("downloading attachment")
         httpClient.newCall(Request.Builder().url(attachment.attachment.downloadUrl).get().build())
             .enqueue(object : okhttp3.Callback {
                 override fun onResponse(call: Call, response: Response) {
@@ -605,7 +593,6 @@ internal class CryptoWorker(
                                 FileOutputStream(attachment.filePath).use { out ->
                                     Util.copy(response.body!!.byteStream(), out)
                                 }
-                                logger.debug("successfully downloaded attachment")
                             } catch (t: Throwable) {
                                 logger.error("error downloading attachment data, will try again: ${t.message}")
                                 retryFailed { downloadAttachment(inbound, attachment) }
@@ -654,7 +641,6 @@ internal class CryptoWorker(
     }
 
     internal fun registerPreKeys(numPreKeys: Int) {
-        logger.debug("requested to register pre keys")
         submit {
             doRegisterPreKeys(numPreKeys)
         }
@@ -665,13 +651,12 @@ internal class CryptoWorker(
             val spk = store.nextSignedPreKey
             val otpks = store.generatePreKeys(numPreKeys)
             messaging.authenticatedClientWorker.withClient { client ->
-                logger.debug("registering pre keys")
                 client.register(
                     spk.serialize(),
                     otpks.map { it.serialize() },
                     object : Callback<Unit> {
                         override fun onSuccess(result: Unit) {
-                            logger.debug("successfully registered pre keys")
+                            // nothing to do
                         }
 
                         override fun onError(err: Throwable) {

@@ -38,6 +38,7 @@ class Messaging(
     failedSendRetryDelayMillis: Long = 5L.secondsToMillis,
     stopSendRetryAfterMillis: Long = 24L.hoursToMillis,
     numInitialPreKeysToRegister: Int = 5,
+    private val defaultMessagesDisappearAfterSeconds: Int = 86400, // 1 day
     internal val name: String = "messaging",
     defaultConfiguration: Messages.Configuration = Messages.Configuration.newBuilder()
         .setMaxAttachmentSize(100000000).build()
@@ -160,7 +161,7 @@ class Messaging(
                 if (isNew) {
                     contactBuilder.createdTs = nowUnixNano
                     contactBuilder.messagesDisappearAfterSeconds =
-                        86400 // 1 day, TODO: make this configurable
+                        defaultMessagesDisappearAfterSeconds
                 }
                 val contact =
                     contactBuilder.setContactId(contactId).setDisplayName(displayName).build()
