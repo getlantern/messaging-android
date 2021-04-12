@@ -498,9 +498,9 @@ internal class CryptoWorker(
                     senderId,
                     Model.Reaction.parseFrom(transferMsg.reaction)
                 )
-                Model.TransferMessage.ContentCase.DELETEMESSAGEID -> db.listPaths(
-                    senderId.storedMessageQuery(transferMsg.deleteMessageId.base32)
-                ).forEach { messaging.deleteLocally(it) }
+                Model.TransferMessage.ContentCase.DELETEMESSAGEID -> messaging.deleteLocally(
+                    senderId.storedMessagePath(transferMsg.deleteMessageId.base32)
+                )
                 Model.TransferMessage.ContentCase.DISAPPEARSETTINGS -> storeDisappearSettings(
                     tx,
                     senderId,
@@ -545,19 +545,16 @@ internal class CryptoWorker(
         if (!tx.contains(senderId.directContactPath)) {
             throw UnknownSenderException(senderId, reaction.reactingToMessageId.base32)
         }
-        tx.findOne<Model.StoredMessage>(
-            reaction.reactingToSenderId.base32.storedMessageQuery(
-                reaction.reactingToMessageId.base32
-            )
-        )?.let { msg ->
-            val builder = msg.toBuilder()
-            if (reaction.emoticon.isBlank()) {
-                builder.removeReactions(senderId)
-            } else {
-                builder.putReactions(senderId, reaction)
+        tx.get<Model.StoredMessage>(reaction.reactingToSenderId.base32.storedMessagePath(reaction.reactingToMessageId.base32))
+            ?.let { msg ->
+                val builder = msg.toBuilder()
+                if (reaction.emoticon.isBlank()) {
+                    builder.removeReactions(senderId)
+                } else {
+                    builder.putReactions(senderId, reaction)
+                }
+                tx.put(msg.dbPath, builder.build())
             }
-            tx.put(msg.dbPath, builder.build())
-        }
     }
 
     private fun storeDisappearSettings(

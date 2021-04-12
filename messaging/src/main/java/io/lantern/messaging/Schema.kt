@@ -21,9 +21,9 @@ object Schema {
 }
 
 fun Model.Message.inbound(senderId: String): Model.StoredMessage.Builder {
-    val builder = Model.StoredMessage.newBuilder().setContactId(
-        Model.ContactId.newBuilder().setType(Model.ContactType.DIRECT).setId(senderId).build()
-    ).setSenderId(senderId)
+    // TODO: need to support group messages
+    val builder = Model.StoredMessage.newBuilder().setContactId(senderId.directContactId)
+        .setSenderId(senderId)
         .setId(id.base32)
         .setTs(nowUnixNano)
         .setDirection(Model.MessageDirection.IN)
@@ -35,25 +35,22 @@ fun Model.Message.inbound(senderId: String): Model.StoredMessage.Builder {
 }
 
 val Model.StoredMessage.dbPath: String
-    get() = senderId.storedMessagePath(ts, id)
+    get() = senderId.storedMessagePath(id)
 
 val Model.StoredMessage.Builder.dbPath: String
-    get() = senderId.storedMessagePath(ts, id)
+    get() = senderId.storedMessagePath(id)
 
 val String.directContactId: Model.ContactId
     get() = Model.ContactId.newBuilder().setType(Model.ContactType.DIRECT).setId(this).build()
 
-fun String.storedMessagePath(ts: Long, messageId: String) =
-    Schema.PATH_MESSAGES.path(this, ts, messageId)
+fun String.storedMessagePath(messageId: String) =
+    Schema.PATH_MESSAGES.path(this, messageId)
 
 fun String.storedMessageQuery(messageId: String) =
-    Schema.PATH_MESSAGES.path(this, "%", messageId)
-
-val Model.StoredMessage.timestampUnknownQuery: String
-    get() = Schema.PATH_MESSAGES.path(senderId, "%", id)
+    Schema.PATH_MESSAGES.path(this, messageId)
 
 val Model.OutboundMessage.Builder.msgPath: String
-    get() = senderId.storedMessagePath(sent, messageId)
+    get() = senderId.storedMessagePath(messageId)
 
 val Model.OutboundMessage.Builder.dbPath: String
     get() = Schema.PATH_OUTBOUND.path(sent, id)
@@ -65,7 +62,7 @@ val Model.InboundAttachment.dbPath: String
     get() = Schema.PATH_INBOUND_ATTACHMENTS.path(ts, senderId, messageId, attachmentId)
 
 val Model.InboundAttachment.msgPath: String
-    get() = Schema.PATH_MESSAGES.path(senderId, ts, messageId)
+    get() = Schema.PATH_MESSAGES.path(senderId, messageId)
 
 val Model.Contact.pathSegment: String
     get() = contactId.pathSegment

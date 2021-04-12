@@ -44,7 +44,7 @@ class MessagingTest : BaseMessagingTest() {
 
                     val now = nowUnixNano
                     var catContact =
-                        dog.addOrUpdateContact(Model.ContactType.DIRECT, catId, "Cat")
+                        dog.addOrUpdateDirectContact(catId, "Cat")
                     val createdTs = catContact.createdTs
                     assertEquals(
                         Model.ContactType.DIRECT,
@@ -59,7 +59,7 @@ class MessagingTest : BaseMessagingTest() {
                     assertEquals("Cat", catContact.displayName, "displayName should have been set")
                     assertTrue(createdTs >= now, "createdTime should have been set")
 
-                    catContact = dog.addOrUpdateContact(Model.ContactType.DIRECT, catId, "New Cat")
+                    catContact = dog.addOrUpdateDirectContact(catId, "New Cat")
                     assertEquals(
                         "New Cat",
                         catContact.displayName,
@@ -71,10 +71,10 @@ class MessagingTest : BaseMessagingTest() {
                         "createdTime should have been left alone"
                     )
 
-                    cat.addOrUpdateContact(Model.ContactType.DIRECT, dogId, "Dog")
+                    cat.addOrUpdateDirectContact(dogId, "Dog")
                     val msgs = sendAndVerify("cat sends message to dog", cat, dog, "hi dog")
 
-                    dog.deleteContact(catId.directContactId)
+                    dog.deleteDirectContact(catId)
                     assertFalse(dog.db.contains(catId.directContactId.contactPath))
                     assertFalse(dog.db.contains(msgs.received.dbPath))
                     assertEquals(
@@ -97,7 +97,7 @@ class MessagingTest : BaseMessagingTest() {
                             )
                         }
                     }
-                    dog.addOrUpdateContact(Model.ContactType.DIRECT, catId, "New Cat")
+                    dog.addOrUpdateDirectContact(catId, "New Cat")
                     cat.waitFor<Model.Contact>(
                         dogId.directContactPath,
                         "dog's initial disappear settings should arrive"
@@ -157,7 +157,7 @@ class MessagingTest : BaseMessagingTest() {
                 }
 
                 // first add Cat as a contact
-                dog.addOrUpdateContact(Model.ContactType.DIRECT, catId, "Cat")
+                dog.addOrUpdateDirectContact(catId, "Cat")
                 // ensure that we immediately have a Contact
                 val storedContact = dog.db.get<Model.Contact>(catId.directContactPath)
                 assertTrue(storedContact != null)
@@ -214,7 +214,7 @@ class MessagingTest : BaseMessagingTest() {
                     )
 
                     // now have cat add dog as a contact
-                    cat.addOrUpdateContact(Model.ContactType.DIRECT, dogId, "Dog")
+                    cat.addOrUpdateDirectContact(dogId, "Dog")
 
                     // verify that cat now has message from dog
                     val mostRecentMsg =
@@ -291,9 +291,9 @@ class MessagingTest : BaseMessagingTest() {
                     val dogId = dog.store.identityKeyPair.publicKey.toString()
                     val fakeId = KeyHelper.generateIdentityKeyPair().publicKey.toString()
 
-                    cat.addOrUpdateContact(Model.ContactType.DIRECT, dogId, "Dog")
-                    dog.addOrUpdateContact(Model.ContactType.DIRECT, catId, "Cat")
-                    dog.addOrUpdateContact(Model.ContactType.DIRECT, fakeId, "Fake")
+                    cat.addOrUpdateDirectContact(dogId, "Dog")
+                    dog.addOrUpdateDirectContact(catId, "Cat")
+                    dog.addOrUpdateDirectContact(fakeId, "Fake")
 
                     val msg1 = dog.sendToDirectContact(catId, "hi cat")
                     dog.waitFor<Model.StoredMessage>(
@@ -330,8 +330,8 @@ class MessagingTest : BaseMessagingTest() {
                     val catId = cat.identityKeyPair.publicKey.toString()
                     val dogId = dog.store.identityKeyPair.publicKey.toString()
 
-                    dog.addOrUpdateContact(Model.ContactType.DIRECT, catId, "Cat")
-                    cat.addOrUpdateContact(Model.ContactType.DIRECT, dogId, "Dog")
+                    dog.addOrUpdateDirectContact(catId, "Cat")
+                    cat.addOrUpdateDirectContact(dogId, "Dog")
 
                     val msgs = sendAndVerify("dog sends to cat", dog, cat, "hi cat")
                     assertNotNull(msgs.received)
@@ -394,8 +394,8 @@ class MessagingTest : BaseMessagingTest() {
                     val catId = cat.identityKeyPair.publicKey.toString()
                     val dogId = dog.store.identityKeyPair.publicKey.toString()
 
-                    dog.addOrUpdateContact(Model.ContactType.DIRECT, catId, "Cat")
-                    cat.addOrUpdateContact(Model.ContactType.DIRECT, dogId, "Dog")
+                    dog.addOrUpdateDirectContact(catId, "Cat")
+                    cat.addOrUpdateDirectContact(dogId, "Dog")
 
                     val initialMsgs = sendAndVerify(
                         "dog sends to cat", dog, cat, "hi cat", attachments = arrayOf(
@@ -494,7 +494,7 @@ class MessagingTest : BaseMessagingTest() {
                     // locally delete dog's message
                     dog.deleteLocally(initialMsgs.sent.dbPath)
                     assertNull(
-                        cat.db.get<Model.StoredMessage>(initialMsgs.sent.dbPath),
+                        dog.db.get<Model.StoredMessage>(initialMsgs.sent.dbPath),
                         "message should have been deleted"
                     )
                     initialMsgs.sent.attachmentsMap.values.forEach { storedAttachment ->
@@ -534,8 +534,8 @@ class MessagingTest : BaseMessagingTest() {
                     val catId = cat.identityKeyPair.publicKey.toString()
                     val dogId = dog.store.identityKeyPair.publicKey.toString()
 
-                    val catContact = dog.addOrUpdateContact(Model.ContactType.DIRECT, catId, "Cat")
-                    val dogContact = cat.addOrUpdateContact(Model.ContactType.DIRECT, dogId, "Dog")
+                    val catContact = dog.addOrUpdateDirectContact(catId, "Cat")
+                    val dogContact = cat.addOrUpdateDirectContact(dogId, "Dog")
                     assertEquals(
                         86400,
                         catContact.messagesDisappearAfterSeconds,
@@ -574,7 +574,7 @@ class MessagingTest : BaseMessagingTest() {
 
                     val disappearAfter =
                         1 // this is a very short value to allow us to test that messages don't disappear before they're sent
-                    dog.setDisappearSettings(catId, disappearAfter)
+                    dog.setDisappearSettings(catId.directContactPath, disappearAfter)
                     assertEquals(
                         disappearAfter,
                         dog.db.get<Model.Contact>(catContact.dbPath)?.messagesDisappearAfterSeconds,
@@ -743,7 +743,7 @@ class MessagingTest : BaseMessagingTest() {
 
         // ensure that recipient has received the message
         var recipientStoredMsg =
-            to.waitFor<Model.StoredMessage>(senderStoredMsg.timestampUnknownQuery, testCase)
+            to.waitFor<Model.StoredMessage>(senderStoredMsg.dbPath, testCase)
         assertEquals(senderStoredMsg.id, recipientStoredMsg.id)
         assertEquals(Model.MessageDirection.IN, recipientStoredMsg.direction, testCase)
         assertEquals(fromId, recipientStoredMsg.senderId, testCase)

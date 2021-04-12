@@ -23,9 +23,17 @@ import java.util.*
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
+/**
+ * This exception indicates that a message was received from an unknown sender (i.e. someone not in
+ * the local contact list).
+ */
 class UnknownSenderException(internal val senderId: String, internal val messageId: String) :
     Exception("Unknown sender")
 
+/**
+ * This exception indicates that an attempt was made to upload an attachment larger than the
+ * supported size.
+ */
 class AttachmentTooBigException(val maxAttachmentBytes: Long) : Exception("Attachment Too Big")
 
 class Messaging(
@@ -44,8 +52,7 @@ class Messaging(
         .setMaxAttachmentSize(100000000).build()
 ) : Closeable {
     internal val logger = KotlinLogging.logger(name)
-
-    val db: DB get() = store.db
+    internal val db: DB get() = store.db
 
     init {
         // register protocol buffer types before starting crypto worker or doing anything else that
@@ -63,7 +70,7 @@ class Messaging(
         // initialize configuration
         db.mutate { tx ->
             val latestCfg =
-                db.get<Messages.Configuration>(Schema.PATH_CONFIG) ?: defaultConfiguration
+                db.get(Schema.PATH_CONFIG) ?: defaultConfiguration
             cfg.set(latestCfg)
             tx.put(Schema.PATH_CONFIG, latestCfg)
         }
@@ -93,17 +100,19 @@ class Messaging(
             maxRedialDelayMillis
         )
 
+
+    lateinit var myId: Model.ContactId
+
     init {
         // make sure we have a contact entry for ourselves
-        db.mutate { tx ->
-            tx.get<Model.Contact>(Schema.PATH_ME) ?: tx.put(
+        val me = db.mutate { tx ->
+            tx.get(Schema.PATH_ME) ?: tx.put(
                 Schema.PATH_ME,
-                Model.Contact.newBuilder().setContactId(
-                    Model.ContactId.newBuilder().setType(Model.ContactType.DIRECT)
-                        .setId(identityKeyPair.publicKey.toString()).build()
-                ).build()
+                Model.Contact.newBuilder()
+                    .setContactId(identityKeyPair.publicKey.toString().directContactId).build()
             )
         }
+        myId = me.contactId
 
         // immediately request some upload authorizations so that we're ready to upload attachments
         cryptoWorker.submit { cryptoWorker.getMoreUploadAuthorizationsIfNecessary() }
@@ -143,14 +152,13 @@ class Messaging(
     }
 
     // Adds or updates the given direct Contact
-    fun addOrUpdateContact(
-        type: Model.ContactType,
-        id: String,
+    fun addOrUpdateDirectContact(id: String, displayName: String): Model.Contact =
+        addOrUpdateContact(id.directContactId, displayName)
+
+    private fun addOrUpdateContact(
+        contactId: Model.ContactId,
         displayName: String
     ): Model.Contact {
-        val contactId = Model.ContactId.newBuilder()
-            .setType(type)
-            .setId(id).build()
         val path = contactId.contactPath
         return cryptoWorker.submitForValue {
             db.mutate { tx ->
@@ -185,7 +193,14 @@ class Messaging(
         }
     }
 
-    fun deleteContact(contactId: Model.ContactId) {
+    /**
+     * Deletes the specified contact and all associated data
+     */
+    fun deleteDirectContact(id: String) {
+        deleteContact(id.directContactId)
+    }
+
+    private fun deleteContact(contactId: Model.ContactId) {
         return cryptoWorker.submitForValue {
             db.mutate { tx ->
                 tx.delete(contactId.contactPath)
@@ -230,19 +245,14 @@ class Messaging(
             throw IllegalArgumentException("If specifying either replyToSenderId and replyToId, please specify both")
         }
         val recipient = db.get<Model.Contact>(recipientId.directContactPath)
-        if (recipient == null) {
-            throw IllegalArgumentException("Unknown recipient")
-        }
+            ?: throw IllegalArgumentException("Unknown recipient")
 
         val base32Id = randomMessageId.base32
         val sent = nowUnixNano
         val senderId = store.identityKeyPair.publicKey.toString()
         val msgBuilder =
             Model.StoredMessage.newBuilder().setId(base32Id)
-                .setContactId(
-                    Model.ContactId.newBuilder().setType(Model.ContactType.DIRECT)
-                        .setId(recipientId).build()
-                )
+                .setContactId(recipientId.directContactId)
                 .setSenderId(senderId)
                 .setTs(sent)
                 .setText(text)
@@ -339,9 +349,8 @@ class Messaging(
         }
     }
 
-    fun setDisappearSettings(contactId: String, disappearAfterSeconds: Int) {
+    fun setDisappearSettings(contactPath: String, disappearAfterSeconds: Int) {
         // TODO: support group contacts
-        val contactPath = contactId.directContactPath
         db.mutate { tx ->
             db.get<Model.Contact>(contactPath)?.let { contact ->
                 tx.put(
@@ -572,7 +581,7 @@ class Messaging(
     }
 }
 
-val randomMessageId: ByteString
+private val randomMessageId: ByteString
     get() {
         val uuid = UUID.randomUUID()
         val bytes = ByteArray(16)
