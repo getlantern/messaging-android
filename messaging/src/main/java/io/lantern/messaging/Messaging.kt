@@ -313,10 +313,6 @@ class Messaging(
             db.get<Model.StoredMessage>(msgPath)?.let { msg ->
                 val reactingToSenderId = msg.senderId
                 val senderId = store.identityKeyPair.publicKey.toString()
-                if (senderId == reactingToSenderId) {
-                    throw IllegalArgumentException("can't react to your own message")
-                }
-
                 val reaction = Model.Reaction.newBuilder()
                     .setReactingToSenderId(reactingToSenderId.fromBase32.byteString())
                     .setReactingToMessageId(msg.id.fromBase32.byteString())
