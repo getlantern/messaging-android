@@ -12,10 +12,10 @@ A group contact, identified by its group id
 ### /cba/[timestamp]/[d/[identityKey]|g/[groupId]]
 An index of Contacts by most recent activity. A given Contact will appear only once in this index.
 
-### /m/[senderIdentityKey]/[timestamp]/[messageId]
+### /m/[senderIdentityKey]/[messageId]
 The full content of all Messages are stored here, including both sent and received messages.
-The timestamp is the sent time of the message. The messageId is an id that's unique for messages
-sent from the given senderIdentityKey (in practice it's a type 4 UUID).
+The messageId is an id that's unique for messages sent from the given senderIdentityKey (in practice
+it's a type 4 UUID).
 
 ### /cm/[d/[identityKey]|g/[groupId]]/[timestamp]/[senderIdentityKey]/[messageId]
 An index of all messages for a given Contact, by the sent timestamp of the message.
