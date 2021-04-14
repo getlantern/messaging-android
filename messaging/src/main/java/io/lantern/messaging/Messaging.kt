@@ -52,7 +52,7 @@ class Messaging(
         .setMaxAttachmentSize(100000000).build()
 ) : Closeable {
     internal val logger = KotlinLogging.logger(name)
-    internal val db: DB get() = store.db
+    val db: DB get() = store.db
 
     init {
         // register protocol buffer types before starting crypto worker or doing anything else that
