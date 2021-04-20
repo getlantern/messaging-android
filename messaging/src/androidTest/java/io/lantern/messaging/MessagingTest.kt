@@ -2,7 +2,6 @@ package io.lantern.messaging
 
 import androidx.test.platform.app.InstrumentationRegistry
 import io.lantern.db.DB
-import io.lantern.messaging.store.MessagingStore
 import io.lantern.messaging.tassis.MessageHandler
 import io.lantern.messaging.tassis.Transport
 import io.lantern.messaging.tassis.websocket.WSListener
@@ -37,86 +36,97 @@ class MessagingTest : BaseMessagingTest() {
     @Test
     fun testManageDirectContact() {
         testInCoroutine {
-            newMessaging("dog").with { dog ->
-                newMessaging("cat").with { cat ->
-                    val dogId = dog.myId.id
-                    val catId = cat.myId.id
+            newDB.use { dogDB ->
+                newDB.use { catDB ->
+                    newMessaging(dogDB, "dog").with { dog ->
+                        newMessaging(catDB, "cat").with { cat ->
+                            val dogId = dog.myId.id
+                            val catId = cat.myId.id
 
-                    val now = nowUnixNano
-                    var catContact =
-                        dog.addOrUpdateDirectContact(catId, "Cat")
-                    val createdTs = catContact.createdTs
-                    assertEquals(
-                        Model.ContactType.DIRECT,
-                        catContact.contactId.type,
-                        "cat should have right contact type"
-                    )
-                    assertEquals(
-                        catId,
-                        catContact.contactId.id,
-                        "cat id should have been set correctly"
-                    )
-                    assertEquals("Cat", catContact.displayName, "displayName should have been set")
-                    assertTrue(createdTs >= now, "createdTime should have been set")
+                            val now = nowUnixNano
+                            var catContact =
+                                dog.addOrUpdateDirectContact(catId, "Cat")
+                            val createdTs = catContact.createdTs
+                            assertEquals(
+                                Model.ContactType.DIRECT,
+                                catContact.contactId.type,
+                                "cat should have right contact type"
+                            )
+                            assertEquals(
+                                catId,
+                                catContact.contactId.id,
+                                "cat id should have been set correctly"
+                            )
+                            assertEquals(
+                                "Cat",
+                                catContact.displayName,
+                                "displayName should have been set"
+                            )
+                            assertTrue(createdTs >= now, "createdTime should have been set")
 
-                    catContact = dog.addOrUpdateDirectContact(catId, "New Cat")
-                    assertEquals(
-                        "New Cat",
-                        catContact.displayName,
-                        "displayName should have been changed"
-                    )
-                    assertEquals(
-                        createdTs,
-                        catContact.createdTs,
-                        "createdTime should have been left alone"
-                    )
+                            catContact = dog.addOrUpdateDirectContact(catId, "New Cat")
+                            assertEquals(
+                                "New Cat",
+                                catContact.displayName,
+                                "displayName should have been changed"
+                            )
+                            assertEquals(
+                                createdTs,
+                                catContact.createdTs,
+                                "createdTime should have been left alone"
+                            )
 
-                    cat.addOrUpdateDirectContact(dogId, "Dog")
-                    val msgs = sendAndVerify("cat sends message to dog", cat, dog, "hi dog")
+                            cat.addOrUpdateDirectContact(dogId, "Dog")
+                            val msgs = sendAndVerify("cat sends message to dog", cat, dog, "hi dog")
 
-                    dog.deleteDirectContact(catId)
-                    assertFalse(dog.db.contains(catId.directContactId.contactPath))
-                    assertFalse(dog.db.contains(msgs.received.dbPath))
-                    assertEquals(
-                        0,
-                        dog.db.listPaths(Schema.PATH_CONTACT_MESSAGES.path("%")).count()
-                    )
-                    assertEquals(0, dog.db.listPaths(Schema.PATH_CONTACTS.path("%")).count())
-                    assertEquals(
-                        0,
-                        dog.db.listPaths(Schema.PATH_CONTACTS_BY_ACTIVITY.path("%")).count()
-                    )
-                    cat.sendToDirectContact(dogId, "cat sent this while not a contact")
+                            dog.deleteDirectContact(catId)
+                            assertFalse(dog.db.contains(catId.directContactId.contactPath))
+                            assertFalse(dog.db.contains(msgs.received.dbPath))
+                            assertEquals(
+                                0,
+                                dog.db.listPaths(Schema.PATH_CONTACT_MESSAGES.path("%")).count()
+                            )
+                            assertEquals(
+                                0,
+                                dog.db.listPaths(Schema.PATH_CONTACTS.path("%")).count()
+                            )
+                            assertEquals(
+                                0,
+                                dog.db.listPaths(Schema.PATH_CONTACTS_BY_ACTIVITY.path("%")).count()
+                            )
+                            cat.sendToDirectContact(dogId, "cat sent this while not a contact")
 
-                    // hack dog's disappear settings to make sure we get hello message with new settings
-                    cat.db.mutate { tx ->
-                        tx.get<Model.Contact>(dogId.directContactPath)?.let {
-                            tx.put(
-                                it.dbPath,
-                                it.toBuilder().setMessagesDisappearAfterSeconds(17).build()
+                            // hack dog's disappear settings to make sure we get hello message with new settings
+                            cat.db.mutate { tx ->
+                                tx.get<Model.Contact>(dogId.directContactPath)?.let {
+                                    tx.put(
+                                        it.dbPath,
+                                        it.toBuilder().setMessagesDisappearAfterSeconds(17).build()
+                                    )
+                                }
+                            }
+                            dog.addOrUpdateDirectContact(catId, "New Cat")
+                            cat.waitFor<Model.Contact>(
+                                dogId.directContactPath,
+                                "dog's initial disappear settings should arrive"
+                            ) {
+                                it.messagesDisappearAfterSeconds == 86400
+                            }
+
+                            sendAndVerify(
+                                "cat sends a message to dog after having been removed and re-added",
+                                cat,
+                                dog,
+                                "hello again dog"
+                            )
+
+                            assertEquals(
+                                1,
+                                dog.db.listPaths(Schema.PATH_CONTACT_MESSAGES.path("%")).count(),
+                                "dog should have only 1 message from cat, the message sent while cat was not a contact should have been lost because it couldn't be decrypted"
                             )
                         }
                     }
-                    dog.addOrUpdateDirectContact(catId, "New Cat")
-                    cat.waitFor<Model.Contact>(
-                        dogId.directContactPath,
-                        "dog's initial disappear settings should arrive"
-                    ) {
-                        it.messagesDisappearAfterSeconds == 86400
-                    }
-
-                    sendAndVerify(
-                        "cat sends a message to dog after having been removed and re-added",
-                        cat,
-                        dog,
-                        "hello again dog"
-                    )
-
-                    assertEquals(
-                        1,
-                        dog.db.listPaths(Schema.PATH_CONTACT_MESSAGES.path("%")).count(),
-                        "dog should have only 1 message from cat, the message sent while cat was not a contact should have been lost because it couldn't be decrypted"
-                    )
                 }
             }
         }
@@ -124,198 +134,205 @@ class MessagingTest : BaseMessagingTest() {
 
     @Test
     fun testBasicFlowWithConnectivityIssues() {
-        val catStore = newStore()
-        val theDog = newMessaging("dog")
+        newDB.use { dogDB ->
+            newDB.use { catDB ->
+                val catStore = newStore(catDB)
+                val theDog = newMessaging(dogDB, "dog")
 
-        testInCoroutine {
-            theDog.with { it ->
-                var dog = it
-                val catId = catStore.identityKeyPair.publicKey.toString()
-                val dogId = dog.store.identityKeyPair.publicKey.toString()
+                testInCoroutine {
+                    theDog.with { it ->
+                        var dog = it
+                        val catId = catStore.identityKeyPair.publicKey.toString()
+                        val dogId = dog.store.identityKeyPair.publicKey.toString()
 
-                assertNotNull(
-                    dog.store.db.get<Model.Contact>(Schema.PATH_ME),
-                    "self-contact should exist"
-                )
-                dog.setMyDisplayName("I'm a Dog")
-                assertEquals(
-                    "I'm a Dog",
-                    dog.store.db.get<Model.Contact>(Schema.PATH_ME)?.displayName
-                )
+                        assertNotNull(
+                            dog.db.get<Model.Contact>(Schema.PATH_ME),
+                            "self-contact should exist"
+                        )
+                        dog.setMyDisplayName("I'm a Dog")
+                        assertEquals(
+                            "I'm a Dog",
+                            dog.db.get<Model.Contact>(Schema.PATH_ME)?.displayName
+                        )
 
-                // try to create an overly large attachment and make sure it fails
-                try {
-                    dog.createAttachment(
-                        "application/octet-stream",
-                        Long.MAX_VALUE - AttachmentCipherOutputStream.MAXIMUM_ENCRYPTION_OVERHEAD,
-                        ByteArrayInputStream(ByteArray(0))
-                    )
-                    fail("creating a giant attachment shouldn't be allowed")
-                } catch (e: AttachmentTooBigException) {
-                    assertTrue(e.maxAttachmentBytes > 0)
-                    assertTrue(e.maxAttachmentBytes < Long.MAX_VALUE)
-                }
+                        // try to create an overly large attachment and make sure it fails
+                        try {
+                            dog.createAttachment(
+                                "application/octet-stream",
+                                Long.MAX_VALUE - AttachmentCipherOutputStream.MAXIMUM_ENCRYPTION_OVERHEAD,
+                                ByteArrayInputStream(ByteArray(0))
+                            )
+                            fail("creating a giant attachment shouldn't be allowed")
+                        } catch (e: AttachmentTooBigException) {
+                            assertTrue(e.maxAttachmentBytes > 0)
+                            assertTrue(e.maxAttachmentBytes < Long.MAX_VALUE)
+                        }
 
-                // first add Cat as a contact
-                dog.addOrUpdateDirectContact(catId, "Cat")
-                // ensure that we immediately have a Contact
-                val storedContact = dog.db.get<Model.Contact>(catId.directContactPath)
-                assertTrue(storedContact != null)
-                assertEquals(catId, storedContact.contactId.id)
-                assertEquals("Cat", storedContact.displayName)
+                        // first add Cat as a contact
+                        dog.addOrUpdateDirectContact(catId, "Cat")
+                        // ensure that we immediately have a Contact
+                        val storedContact = dog.db.get<Model.Contact>(catId.directContactPath)
+                        assertTrue(storedContact != null)
+                        assertEquals(catId, storedContact.contactId.id)
+                        assertEquals("Cat", storedContact.displayName)
 
-                // now send a message from dog->cat before cat has come online
-                // we do not expect this message to be delivered to cat because cat hasn't added dog
-                // as a contact
-                val sentMsg = dog.sendToDirectContact(
-                    catId, "hello cat", attachments = arrayOf(
-                        dog.createAttachment(
-                            "text/plain",
-                            "attachment for cat".length.toLong(),
-                            ByteArrayInputStream(
-                                "attachment for cat".toByteArray(
-                                    Charsets.UTF_8
+                        // now send a message from dog->cat before cat has come online
+                        // we do not expect this message to be delivered to cat because cat hasn't added dog
+                        // as a contact
+                        val sentMsg = dog.sendToDirectContact(
+                            catId, "hello cat", attachments = arrayOf(
+                                dog.createAttachment(
+                                    "text/plain",
+                                    "attachment for cat".length.toLong(),
+                                    ByteArrayInputStream(
+                                        "attachment for cat".toByteArray(
+                                            Charsets.UTF_8
+                                        )
+                                    )
                                 )
                             )
                         )
-                    )
-                )
-                var sentMsgFromDB = dog.waitFor<Model.StoredMessage>(
-                    sentMsg.dbPath,
-                    "message should still be in SENDING status"
-                ) {
-                    it.status == Model.StoredMessage.DeliveryStatus.SENDING
-                }
-
-                logger.debug("close dog")
-                dog.close()
-                logger.debug("before reopening dog, set dials to fail for a while")
-                BrokenTransportFactory.succeedDialing.set(false)
-                GlobalScope.launch {
-                    delay(2000)
-                    logger.debug("allow dials to succeed again")
-                    BrokenTransportFactory.succeedDialing.set(true)
-                }
-                logger.debug("reopen dog to make sure we can pick up where we left off")
-                dog = newMessaging("dog")
-
-                // start the Messaging system for cat, which will result in the registration of pre
-                // keys, allowing the message to send successfully
-                newMessaging("cat", store = catStore).with { cat ->
-                    val sentMsgFromDB =
                         dog.waitFor<Model.StoredMessage>(
                             sentMsg.dbPath,
-                            "message from dog to cat should have successfully sent once Cat registered pre keys"
-                        ) { it.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT }
-                    assertEquals(
-                        Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT,
-                        sentMsgFromDB.status,
-                        "once cat has started registering preKeys, pending message should successfully send"
-                    )
-
-                    // now have cat add dog as a contact
-                    cat.addOrUpdateDirectContact(dogId, "Dog")
-
-                    // verify that cat now has message from dog
-                    val mostRecentMsg =
-                        cat.waitFor<Model.StoredMessage>(
-                            Schema.PATH_MESSAGES.path("%"),
-                            "cat should have recent message"
+                            "message should still be in SENDING status"
                         ) {
-                            it.attachmentsMap.filter { (_, attachment) -> attachment.status == Model.StoredAttachment.Status.DONE }
-                                .count() == 1
+                            it.status == Model.StoredMessage.DeliveryStatus.SENDING
                         }
-                    assertEquals(
-                        dogId,
-                        mostRecentMsg.senderId,
-                        "most recent message should have come from dog"
-                    )
-                    assertEquals(
-                        "hello cat",
-                        mostRecentMsg.text,
-                        "most recent message should have had correct text"
-                    )
 
-                    // close connections to make sure reconnecting works okay
-                    BrokenTransportFactory.closeAll()
+                        logger.debug("close dog")
+                        dog.close()
+                        logger.debug("before reopening dog, set dials to fail for a while")
+                        BrokenTransportFactory.succeedDialing.set(false)
+                        GlobalScope.launch {
+                            delay(2000)
+                            logger.debug("allow dials to succeed again")
+                            BrokenTransportFactory.succeedDialing.set(true)
+                        }
+                        logger.debug("reopen dog to make sure we can pick up where we left off")
+                        dog = newMessaging(dogDB, "dog")
 
-                    // now reply from cat
-                    sendAndVerify(
-                        "cat can successfully respond to dog",
-                        cat,
-                        dog,
-                        "hi dog",
-                        replyToId = mostRecentMsg.id,
-                        ignoreSendsForMillis = 2000
-                    )
+                        // start the Messaging system for cat, which will result in the registration of pre
+                        // keys, allowing the message to send successfully
+                        newMessaging(catDB, "cat").with { cat ->
+                            val sentMsgFromDB =
+                                dog.waitFor<Model.StoredMessage>(
+                                    sentMsg.dbPath,
+                                    "message from dog to cat should have successfully sent once Cat registered pre keys"
+                                ) { it.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT }
+                            assertEquals(
+                                Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT,
+                                sentMsgFromDB.status,
+                                "once cat has started registering preKeys, pending message should successfully send"
+                            )
 
-                    // make sure outbound and inbound queues are empty
-                    assertEquals(
-                        0,
-                        dog.db.list<Any>(Schema.PATH_OUTBOUND.path("%")).size,
-                        "dog should have no queued outbound messages"
-                    )
-                    assertEquals(
-                        0,
-                        dog.db.list<Any>(Schema.PATH_INBOUND_ATTACHMENTS.path("%")).size,
-                        "dog should have no queued inbound attachments"
-                    )
+                            // now have cat add dog as a contact
+                            cat.addOrUpdateDirectContact(dogId, "Dog")
 
-                    assertEquals(
-                        0,
-                        dog.db.list<Any>(Schema.PATH_OUTBOUND.path("%")).size,
-                        "cat should have no queued outbound messages"
-                    )
-                    assertEquals(
-                        0,
-                        dog.db.list<Any>(Schema.PATH_INBOUND_ATTACHMENTS.path("%")).size,
-                        "cat should have no queued inbound attachments"
-                    )
+                            // verify that cat now has message from dog
+                            val mostRecentMsg =
+                                cat.waitFor<Model.StoredMessage>(
+                                    Schema.PATH_MESSAGES.path("%"),
+                                    "cat should have recent message"
+                                ) {
+                                    it.attachmentsMap.filter { (_, attachment) -> attachment.status == Model.StoredAttachment.Status.DONE }
+                                        .count() == 1
+                                }
+                            assertEquals(
+                                dogId,
+                                mostRecentMsg.senderId,
+                                "most recent message should have come from dog"
+                            )
+                            assertEquals(
+                                "hello cat",
+                                mostRecentMsg.text,
+                                "most recent message should have had correct text"
+                            )
 
-                    dog.unregister()
-                    cat.unregister()
+                            // close connections to make sure reconnecting works okay
+                            BrokenTransportFactory.closeAll()
+
+                            // now reply from cat
+                            sendAndVerify(
+                                "cat can successfully respond to dog",
+                                cat,
+                                dog,
+                                "hi dog",
+                                replyToId = mostRecentMsg.id,
+                                ignoreSendsForMillis = 2000
+                            )
+
+                            // make sure outbound and inbound queues are empty
+                            assertEquals(
+                                0,
+                                dog.db.list<Any>(Schema.PATH_OUTBOUND.path("%")).size,
+                                "dog should have no queued outbound messages"
+                            )
+                            assertEquals(
+                                0,
+                                dog.db.list<Any>(Schema.PATH_INBOUND_ATTACHMENTS.path("%")).size,
+                                "dog should have no queued inbound attachments"
+                            )
+
+                            assertEquals(
+                                0,
+                                dog.db.list<Any>(Schema.PATH_OUTBOUND.path("%")).size,
+                                "cat should have no queued outbound messages"
+                            )
+                            assertEquals(
+                                0,
+                                dog.db.list<Any>(Schema.PATH_INBOUND_ATTACHMENTS.path("%")).size,
+                                "cat should have no queued inbound attachments"
+                            )
+
+                            dog.unregister()
+                            cat.unregister()
+                        }
+                    }
+                    logger.debug("test finished")
+
                 }
             }
-            logger.debug("test finished")
-
         }
-        logger.debug("finished runBlocking")
     }
 
     @Test
     fun testDeliveryStatus() {
         testInCoroutine {
-            newMessaging("cat").with { cat ->
-                newMessaging("dog", stopSendRetryAfterMillis = 5000).with { dog ->
-                    val catId = cat.store.identityKeyPair.publicKey.toString()
-                    val dogId = dog.store.identityKeyPair.publicKey.toString()
-                    val fakeId = KeyHelper.generateIdentityKeyPair().publicKey.toString()
+            newDB.use { dogDB ->
+                newDB.use { catDB ->
+                    newMessaging(catDB, "cat").with { cat ->
+                        newMessaging(dogDB, "dog", stopSendRetryAfterMillis = 5000).with { dog ->
+                            val catId = cat.store.identityKeyPair.publicKey.toString()
+                            val dogId = dog.store.identityKeyPair.publicKey.toString()
+                            val fakeId = KeyHelper.generateIdentityKeyPair().publicKey.toString()
 
-                    cat.addOrUpdateDirectContact(dogId, "Dog")
-                    dog.addOrUpdateDirectContact(catId, "Cat")
-                    dog.addOrUpdateDirectContact(fakeId, "Fake")
+                            cat.addOrUpdateDirectContact(dogId, "Dog")
+                            dog.addOrUpdateDirectContact(catId, "Cat")
+                            dog.addOrUpdateDirectContact(fakeId, "Fake")
 
-                    val msg1 = dog.sendToDirectContact(catId, "hi cat")
-                    dog.waitFor<Model.StoredMessage>(
-                        msg1.dbPath,
-                        "sending to real recipient should have succeeded"
-                    ) {
-                        it?.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
+                            val msg1 = dog.sendToDirectContact(catId, "hi cat")
+                            dog.waitFor<Model.StoredMessage>(
+                                msg1.dbPath,
+                                "sending to real recipient should have succeeded"
+                            ) {
+                                it?.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
+                            }
+
+                            val msg2 = dog.sendToDirectContact(fakeId, "hi fake one")
+                            dog.waitFor<Model.StoredMessage>(
+                                msg2.dbPath,
+                                "sending to fake recipient should have failed"
+                            ) {
+                                it?.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED
+                            }
+
+                            assertEquals(
+                                0,
+                                dog.db.list<Any>(Schema.PATH_OUTBOUND.path("%")).size,
+                                "there should be no queued outbound messages once deliveries have succeeded and failed"
+                            )
+                        }
                     }
-
-                    val msg2 = dog.sendToDirectContact(fakeId, "hi fake one")
-                    dog.waitFor<Model.StoredMessage>(
-                        msg2.dbPath,
-                        "sending to fake recipient should have failed"
-                    ) {
-                        it?.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED
-                    }
-
-                    assertEquals(
-                        0,
-                        dog.db.list<Any>(Schema.PATH_OUTBOUND.path("%")).size,
-                        "there should be no queued outbound messages once deliveries have succeeded and failed"
-                    )
                 }
             }
         }
@@ -325,61 +342,66 @@ class MessagingTest : BaseMessagingTest() {
     fun testReactions() {
         val smileyFace = "\uD83D\uDE04"
         testInCoroutine {
-            newMessaging("dog").with { dog ->
-                newMessaging("cat").with { cat ->
-                    val catId = cat.myId.id
-                    val dogId = dog.myId.id
+            newDB.use { dogDB ->
+                newDB.use { catDB ->
+                    newMessaging(dogDB, "dog").with { dog ->
+                        newMessaging(catDB, "cat").with { cat ->
+                            val catId = cat.myId.id
+                            val dogId = dog.myId.id
 
-                    dog.addOrUpdateDirectContact(catId, "Cat")
-                    cat.addOrUpdateDirectContact(dogId, "Dog")
+                            dog.addOrUpdateDirectContact(catId, "Cat")
+                            cat.addOrUpdateDirectContact(dogId, "Dog")
 
-                    val msgs = sendAndVerify("dog sends to cat", dog, cat, "hi cat")
-                    assertNotNull(msgs.received)
+                            val msgs = sendAndVerify("dog sends to cat", dog, cat, "hi cat")
+                            assertNotNull(msgs.received)
 
-                    // add reaction from cat
-                    cat.react(
-                        msgs.received.dbPath,
-                        smileyFace
-                    ) // no, 'g' is not an emoticon, but it's just a test
-                    var updatedMostRecentMsg = cat.db.get<Model.StoredMessage>(msgs.received.dbPath)
-                    assertNotNull(updatedMostRecentMsg)
-                    assertEquals(
-                        smileyFace,
-                        updatedMostRecentMsg.getReactionsOrThrow(catId).emoticon,
-                        "cat's reaction should have been recorded locally"
-                    )
+                            // add reaction from cat
+                            cat.react(
+                                msgs.received.dbPath,
+                                smileyFace
+                            ) // no, 'g' is not an emoticon, but it's just a test
+                            var updatedMostRecentMsg =
+                                cat.db.get<Model.StoredMessage>(msgs.received.dbPath)
+                            assertNotNull(updatedMostRecentMsg)
+                            assertEquals(
+                                smileyFace,
+                                updatedMostRecentMsg.getReactionsOrThrow(catId).emoticon,
+                                "cat's reaction should have been recorded locally"
+                            )
 
-                    val dogMsg = dog.waitFor<Model.StoredMessage>(
-                        msgs.sent.dbPath,
-                        "dog should have gotten reaction"
-                    ) {
-                        it.reactionsCount ?: 0 > 0
-                    }
-                    assertEquals(
-                        smileyFace,
-                        dogMsg.getReactionsOrThrow(catId).emoticon,
-                        "cat's reaction should have been recorded for dog too"
-                    )
+                            val dogMsg = dog.waitFor<Model.StoredMessage>(
+                                msgs.sent.dbPath,
+                                "dog should have gotten reaction"
+                            ) {
+                                it.reactionsCount ?: 0 > 0
+                            }
+                            assertEquals(
+                                smileyFace,
+                                dogMsg.getReactionsOrThrow(catId).emoticon,
+                                "cat's reaction should have been recorded for dog too"
+                            )
 
-                    // clear reaction from cat
-                    cat.react(
-                        msgs.received.dbPath,
-                        ""
-                    )
-                    updatedMostRecentMsg =
-                        cat.db.get<Model.StoredMessage>(msgs.received.dbPath)
-                    assertNotNull(updatedMostRecentMsg)
-                    assertEquals(
-                        0,
-                        updatedMostRecentMsg.reactionsCount,
-                        "cat's reaction should have been cleared"
-                    )
+                            // clear reaction from cat
+                            cat.react(
+                                msgs.received.dbPath,
+                                ""
+                            )
+                            updatedMostRecentMsg =
+                                cat.db.get<Model.StoredMessage>(msgs.received.dbPath)
+                            assertNotNull(updatedMostRecentMsg)
+                            assertEquals(
+                                0,
+                                updatedMostRecentMsg.reactionsCount,
+                                "cat's reaction should have been cleared"
+                            )
 
-                    dog.waitFor<Model.StoredMessage>(
-                        msgs.sent.dbPath,
-                        "dog should have cleared reaction"
-                    ) {
-                        it?.reactionsCount ?: 0 == 0
+                            dog.waitFor<Model.StoredMessage>(
+                                msgs.sent.dbPath,
+                                "dog should have cleared reaction"
+                            ) {
+                                it?.reactionsCount ?: 0 == 0
+                            }
+                        }
                     }
                 }
             }
@@ -389,138 +411,142 @@ class MessagingTest : BaseMessagingTest() {
     @Test
     fun testDeletions() {
         testInCoroutine {
-            newMessaging("dog").with { dog ->
-                newMessaging("cat").with { cat ->
-                    val catId = cat.myId.id
-                    val dogId = dog.myId.id
+            newDB.use { dogDB ->
+                newDB.use { catDB ->
+                    newMessaging(dogDB, "dog").with { dog ->
+                        newMessaging(catDB, "cat").with { cat ->
+                            val catId = cat.myId.id
+                            val dogId = dog.myId.id
 
-                    dog.addOrUpdateDirectContact(catId, "Cat")
-                    cat.addOrUpdateDirectContact(dogId, "Dog")
+                            dog.addOrUpdateDirectContact(catId, "Cat")
+                            cat.addOrUpdateDirectContact(dogId, "Dog")
 
-                    val initialMsgs = sendAndVerify(
-                        "dog sends to cat", dog, cat, "hi cat", attachments = arrayOf(
-                            dog.createAttachment(
-                                "text/plain",
-                                "attachment for cat".length.toLong(),
-                                ByteArrayInputStream(
-                                    "attachment for cat".toByteArray(
-                                        Charsets.UTF_8
+                            val initialMsgs = sendAndVerify(
+                                "dog sends to cat", dog, cat, "hi cat", attachments = arrayOf(
+                                    dog.createAttachment(
+                                        "text/plain",
+                                        "attachment for cat".length.toLong(),
+                                        ByteArrayInputStream(
+                                            "attachment for cat".toByteArray(
+                                                Charsets.UTF_8
+                                            )
+                                        )
                                     )
                                 )
                             )
-                        )
-                    )
-                    assertNotNull(initialMsgs.received)
+                            assertNotNull(initialMsgs.received)
 
-                    // respond from cat
-                    val replyMsgs = sendAndVerify(
-                        "cat responds to dog",
-                        cat,
-                        dog,
-                        "howdie",
-                        replyToId = initialMsgs.sent.id, attachments = arrayOf(
-                            dog.createAttachment(
-                                "text/plain",
-                                "attachment for dog".length.toLong(),
-                                ByteArrayInputStream(
-                                    "attachment for dog".toByteArray(
-                                        Charsets.UTF_8
+                            // respond from cat
+                            val replyMsgs = sendAndVerify(
+                                "cat responds to dog",
+                                cat,
+                                dog,
+                                "howdie",
+                                replyToId = initialMsgs.sent.id, attachments = arrayOf(
+                                    dog.createAttachment(
+                                        "text/plain",
+                                        "attachment for dog".length.toLong(),
+                                        ByteArrayInputStream(
+                                            "attachment for dog".toByteArray(
+                                                Charsets.UTF_8
+                                            )
+                                        )
                                     )
                                 )
                             )
-                        )
-                    )
 
-                    // globally delete cat's reply
-                    cat.deleteGlobally(replyMsgs.sent.dbPath)
-                    assertNull(
-                        cat.db.get<Model.StoredMessage>(replyMsgs.sent.dbPath),
-                        "message should have been deleted"
-                    )
-                    replyMsgs.sent.attachmentsMap.values.forEach { storedAttachment ->
-                        assertFalse(
-                            File(storedAttachment.filePath).exists(),
-                            "attachment file should have been deleted"
-                        )
-                    }
-                    cat.db.get<Model.Contact>(replyMsgs.sent.contactId.contactPath)!!
-                        .let { dogContact ->
-                            assertEquals(
-                                initialMsgs.received.ts,
-                                dogContact.mostRecentMessageTs,
-                                "mostRecentMessageTs for dog should have reverted to prior message"
+                            // globally delete cat's reply
+                            cat.deleteGlobally(replyMsgs.sent.dbPath)
+                            assertNull(
+                                cat.db.get<Model.StoredMessage>(replyMsgs.sent.dbPath),
+                                "message should have been deleted"
                             )
-                            assertEquals(
-                                initialMsgs.received.text,
-                                dogContact.mostRecentMessageText,
-                                "mostRecentMessageText for dog should have reverted to prior message"
-                            )
-                            assertEquals(
-                                initialMsgs.received.attachmentsMap.values.first().attachment.mimeType,
-                                dogContact.mostRecentAttachmentMimeType,
-                                "mostRecentAttachmentMimeType for dog should be blank"
-                            )
-                        }
+                            replyMsgs.sent.attachmentsMap.values.forEach { storedAttachment ->
+                                assertFalse(
+                                    File(storedAttachment.filePath).exists(),
+                                    "attachment file should have been deleted"
+                                )
+                            }
+                            cat.db.get<Model.Contact>(replyMsgs.sent.contactId.contactPath)!!
+                                .let { dogContact ->
+                                    assertEquals(
+                                        initialMsgs.received.ts,
+                                        dogContact.mostRecentMessageTs,
+                                        "mostRecentMessageTs for dog should have reverted to prior message"
+                                    )
+                                    assertEquals(
+                                        initialMsgs.received.text,
+                                        dogContact.mostRecentMessageText,
+                                        "mostRecentMessageText for dog should have reverted to prior message"
+                                    )
+                                    assertEquals(
+                                        initialMsgs.received.attachmentsMap.values.first().attachment.mimeType,
+                                        dogContact.mostRecentAttachmentMimeType,
+                                        "mostRecentAttachmentMimeType for dog should be blank"
+                                    )
+                                }
 
-                    dog.waitForNull(
-                        replyMsgs.received.dbPath,
-                        "message should have been deleted for dog too"
-                    )
-                    replyMsgs.received.attachmentsMap.values.forEach { storedAttachment ->
-                        assertFalse(
-                            File(storedAttachment.filePath).exists(),
-                            "attachment file should have been deleted for dog too"
-                        )
-                    }
-                    dog.db.get<Model.Contact>(replyMsgs.received.contactId.contactPath)!!
-                        .let { catContact ->
-                            assertEquals(
-                                initialMsgs.sent.ts,
-                                catContact.mostRecentMessageTs,
-                                "mostRecentMessageTs for cat should have reverted to prior message"
+                            dog.waitForNull(
+                                replyMsgs.received.dbPath,
+                                "message should have been deleted for dog too"
                             )
-                            assertEquals(
-                                initialMsgs.sent.text,
-                                catContact.mostRecentMessageText,
-                                "mostRecentMessageText for cat should have reverted to prior message"
-                            )
-                            assertEquals(
-                                initialMsgs.sent.attachmentsMap.values.first().attachment.mimeType,
-                                catContact.mostRecentAttachmentMimeType,
-                                "mostRecentAttachmentMimeType for cat should have reverted to prior message"
-                            )
-                        }
+                            replyMsgs.received.attachmentsMap.values.forEach { storedAttachment ->
+                                assertFalse(
+                                    File(storedAttachment.filePath).exists(),
+                                    "attachment file should have been deleted for dog too"
+                                )
+                            }
+                            dog.db.get<Model.Contact>(replyMsgs.received.contactId.contactPath)!!
+                                .let { catContact ->
+                                    assertEquals(
+                                        initialMsgs.sent.ts,
+                                        catContact.mostRecentMessageTs,
+                                        "mostRecentMessageTs for cat should have reverted to prior message"
+                                    )
+                                    assertEquals(
+                                        initialMsgs.sent.text,
+                                        catContact.mostRecentMessageText,
+                                        "mostRecentMessageText for cat should have reverted to prior message"
+                                    )
+                                    assertEquals(
+                                        initialMsgs.sent.attachmentsMap.values.first().attachment.mimeType,
+                                        catContact.mostRecentAttachmentMimeType,
+                                        "mostRecentAttachmentMimeType for cat should have reverted to prior message"
+                                    )
+                                }
 
-                    // locally delete dog's message
-                    dog.deleteLocally(initialMsgs.sent.dbPath)
-                    assertNull(
-                        dog.db.get<Model.StoredMessage>(initialMsgs.sent.dbPath),
-                        "message should have been deleted"
-                    )
-                    initialMsgs.sent.attachmentsMap.values.forEach { storedAttachment ->
-                        assertFalse(
-                            File(storedAttachment.filePath).exists(),
-                            "attachment file should have been deleted"
-                        )
-                    }
-                    dog.db.get<Model.Contact>(initialMsgs.sent.contactId.contactPath)!!
-                        .let { catContact ->
-                            assertEquals(
-                                0L,
-                                catContact.mostRecentMessageTs,
-                                "cat contact should have no most recent message timestamp"
+                            // locally delete dog's message
+                            dog.deleteLocally(initialMsgs.sent.dbPath)
+                            assertNull(
+                                dog.db.get<Model.StoredMessage>(initialMsgs.sent.dbPath),
+                                "message should have been deleted"
                             )
-                            assertEquals(
-                                "",
-                                catContact.mostRecentMessageText,
-                                "cat contact should have no most recent message text"
-                            )
-                            assertEquals(
-                                "",
-                                catContact.mostRecentAttachmentMimeType,
-                                "cat contact should have no most recent message attachment mime type"
-                            )
+                            initialMsgs.sent.attachmentsMap.values.forEach { storedAttachment ->
+                                assertFalse(
+                                    File(storedAttachment.filePath).exists(),
+                                    "attachment file should have been deleted"
+                                )
+                            }
+                            dog.db.get<Model.Contact>(initialMsgs.sent.contactId.contactPath)!!
+                                .let { catContact ->
+                                    assertEquals(
+                                        0L,
+                                        catContact.mostRecentMessageTs,
+                                        "cat contact should have no most recent message timestamp"
+                                    )
+                                    assertEquals(
+                                        "",
+                                        catContact.mostRecentMessageText,
+                                        "cat contact should have no most recent message text"
+                                    )
+                                    assertEquals(
+                                        "",
+                                        catContact.mostRecentAttachmentMimeType,
+                                        "cat contact should have no most recent message attachment mime type"
+                                    )
+                                }
                         }
+                    }
                 }
             }
         }
@@ -529,106 +555,115 @@ class MessagingTest : BaseMessagingTest() {
     @Test
     fun testDisappearingMessages() {
         testInCoroutine {
-            newMessaging("dog").with { dog ->
-                newMessaging("cat").with { cat ->
-                    val catId = cat.myId.id
-                    val dogId = dog.myId.id
+            newDB.use { dogDB ->
+                newDB.use { catDB ->
+                    newMessaging(dogDB, "dog").with { dog ->
+                        newMessaging(catDB, "cat").with { cat ->
+                            val catId = cat.myId.id
+                            val dogId = dog.myId.id
 
-                    val catContact = dog.addOrUpdateDirectContact(catId, "Cat")
-                    val dogContact = cat.addOrUpdateDirectContact(dogId, "Dog")
-                    assertEquals(
-                        86400,
-                        catContact.messagesDisappearAfterSeconds,
-                        "messagesDisappearAfterSeconds should have defaulted to 1 day"
-                    )
-
-                    // immediately hack the disappear settings to something different to make sure that the initial synchronization messages work
-                    dog.db.mutate { tx ->
-                        tx.get<Model.Contact>(catId.directContactPath)?.let {
-                            tx.put(
-                                it.dbPath,
-                                it.toBuilder().setMessagesDisappearAfterSeconds(17).build()
+                            val catContact = dog.addOrUpdateDirectContact(catId, "Cat")
+                            val dogContact = cat.addOrUpdateDirectContact(dogId, "Dog")
+                            assertEquals(
+                                86400,
+                                catContact.messagesDisappearAfterSeconds,
+                                "messagesDisappearAfterSeconds should have defaulted to 1 day"
                             )
-                        }
-                    }
-                    cat.db.mutate { tx ->
-                        tx.get<Model.Contact>(dogId.directContactPath)?.let {
-                            tx.put(
-                                it.dbPath,
-                                it.toBuilder().setMessagesDisappearAfterSeconds(17).build()
+
+                            // immediately hack the disappear settings to something different to make sure that the initial synchronization messages work
+                            dog.db.mutate { tx ->
+                                tx.get<Model.Contact>(catId.directContactPath)?.let {
+                                    tx.put(
+                                        it.dbPath,
+                                        it.toBuilder().setMessagesDisappearAfterSeconds(17).build()
+                                    )
+                                }
+                            }
+                            cat.db.mutate { tx ->
+                                tx.get<Model.Contact>(dogId.directContactPath)?.let {
+                                    tx.put(
+                                        it.dbPath,
+                                        it.toBuilder().setMessagesDisappearAfterSeconds(17).build()
+                                    )
+                                }
+                            }
+                            dog.waitFor<Model.Contact>(
+                                catId.directContactPath,
+                                "cat's initial disappear settings should arrive"
+                            ) {
+                                it.messagesDisappearAfterSeconds == 86400
+                            }
+                            cat.waitFor<Model.Contact>(
+                                dogId.directContactPath,
+                                "dog's initial disappear settings should arrive"
+                            ) {
+                                it.messagesDisappearAfterSeconds == 86400
+                            }
+
+                            val disappearAfter =
+                                1 // this is a very short value to allow us to test that messages don't disappear before they're sent
+                            dog.setDisappearSettings(catId.directContactPath, disappearAfter)
+                            assertEquals(
+                                disappearAfter,
+                                dog.db.get<Model.Contact>(catContact.dbPath)?.messagesDisappearAfterSeconds,
+                                "messagesDisappearAfterSeconds should have changed locally"
                             )
+
+                            cat.waitFor<Model.Contact>(
+                                dogContact.dbPath,
+                                "cat should have gotten updated messagesDisappearAfterSeconds for dog contact"
+                            ) {
+                                it.messagesDisappearAfterSeconds == disappearAfter
+                            }
+
+                            val msgs = sendAndVerify(
+                                "send disappearing message",
+                                dog,
+                                cat,
+                                "hi cat",
+                                ignoreSendsForMillis = 2000
+                            )
+                            dog.waitForNull(
+                                msgs.sent.dbPath,
+                                "message should have disappeared locally"
+                            )
+                            var remoteMsg = cat.db.get<Model.StoredMessage>(msgs.received.dbPath)
+                            assertNotNull(
+                                remoteMsg,
+                                "message should not yet have disappeared remotely"
+                            )
+
+                            cat.markViewed(msgs.received.dbPath)
+                            // close and reopen cat to make sure disappearing messages work after startup
+                            cat.close()
+                            newMessaging(catDB, "cat").with { cat ->
+                                remoteMsg = cat.db.get(msgs.received.dbPath)
+                                assertNotNull(
+                                    remoteMsg,
+                                    "message should still not have disappeared remotely after reopening messaging"
+                                )
+                                assertTrue(
+                                    remoteMsg!!.firstViewedAt > 0,
+                                    "remoteMsg should be marked viewed"
+                                )
+
+                                cat.waitForNull(
+                                    msgs.received.dbPath,
+                                    "message should have disappeared remotely"
+                                )
+
+                                assertTrue(
+                                    dog.db.listPaths(Schema.PATH_DISAPPEARING_MESSAGES.path("%"))
+                                        .isEmpty(),
+                                    "disappearing message entry should be gone locally"
+                                )
+                                assertTrue(
+                                    cat.db.listPaths(Schema.PATH_DISAPPEARING_MESSAGES.path("%"))
+                                        .isEmpty(),
+                                    "disappearing message entry should be gone remotely"
+                                )
+                            }
                         }
-                    }
-                    dog.waitFor<Model.Contact>(
-                        catId.directContactPath,
-                        "cat's initial disappear settings should arrive"
-                    ) {
-                        it.messagesDisappearAfterSeconds == 86400
-                    }
-                    cat.waitFor<Model.Contact>(
-                        dogId.directContactPath,
-                        "dog's initial disappear settings should arrive"
-                    ) {
-                        it.messagesDisappearAfterSeconds == 86400
-                    }
-
-                    val disappearAfter =
-                        1 // this is a very short value to allow us to test that messages don't disappear before they're sent
-                    dog.setDisappearSettings(catId.directContactPath, disappearAfter)
-                    assertEquals(
-                        disappearAfter,
-                        dog.db.get<Model.Contact>(catContact.dbPath)?.messagesDisappearAfterSeconds,
-                        "messagesDisappearAfterSeconds should have changed locally"
-                    )
-
-                    cat.waitFor<Model.Contact>(
-                        dogContact.dbPath,
-                        "cat should have gotten updated messagesDisappearAfterSeconds for dog contact"
-                    ) {
-                        it.messagesDisappearAfterSeconds == disappearAfter
-                    }
-
-                    val msgs = sendAndVerify(
-                        "send disappearing message",
-                        dog,
-                        cat,
-                        "hi cat",
-                        ignoreSendsForMillis = 2000
-                    )
-                    dog.waitForNull(
-                        msgs.sent.dbPath,
-                        "message should have disappeared locally"
-                    )
-                    var remoteMsg = cat.db.get<Model.StoredMessage>(msgs.received.dbPath)
-                    assertNotNull(remoteMsg, "message should not yet have disappeared remotely")
-
-                    cat.markViewed(msgs.received.dbPath)
-                    // close and reopen cat to make sure disappearing messages work after startup
-                    cat.close()
-                    newMessaging("cat").with { cat ->
-                        remoteMsg = cat.db.get(msgs.received.dbPath)
-                        assertNotNull(
-                            remoteMsg,
-                            "message should still not have disappeared remotely after reopening messaging"
-                        )
-                        assertTrue(
-                            remoteMsg!!.firstViewedAt > 0,
-                            "remoteMsg should be marked viewed"
-                        )
-
-                        cat.waitForNull(
-                            msgs.received.dbPath,
-                            "message should have disappeared remotely"
-                        )
-
-                        assertTrue(
-                            dog.db.listPaths(Schema.PATH_DISAPPEARING_MESSAGES.path("%")).isEmpty(),
-                            "disappearing message entry should be gone locally"
-                        )
-                        assertTrue(
-                            cat.db.listPaths(Schema.PATH_DISAPPEARING_MESSAGES.path("%")).isEmpty(),
-                            "disappearing message entry should be gone remotely"
-                        )
                     }
                 }
             }
@@ -819,18 +854,18 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     private fun newMessaging(
+        db: DB,
         name: String,
         clientTimeoutMillis: Long = 5L.secondsToMillis,
         failedSendRetryDelayMillis: Long = 100,
         stopSendRetryAfterMillis: Long = 5L.minutesToMillis,
-        store: MessagingStore? = null
     ): Messaging {
         return Messaging(
+            db,
             File(
                 InstrumentationRegistry.getInstrumentation().targetContext.filesDir,
                 "attachments"
             ),
-            store ?: newStore(name = name),
             BrokenTransportFactory(
                 "wss://tassis.lantern.io/api",
                 (clientTimeoutMillis / 2)
@@ -900,7 +935,7 @@ internal suspend fun Messaging.with(fn: suspend (messaging: Messaging) -> Unit) 
         fn(this)
     } catch (t: Throwable) {
         try {
-            this.store.db.dump()
+            this.db.dump()
         } catch (t: Throwable) {
             // ignore
         }

@@ -3,7 +3,7 @@ package io.lantern.messaging
 import com.google.protobuf.ByteString
 import io.lantern.db.DB
 import io.lantern.db.Transaction
-import io.lantern.messaging.store.MessagingStore
+import io.lantern.messaging.store.MessagingProtocolStore
 import io.lantern.messaging.tassis.Callback
 import io.lantern.messaging.tassis.Messages
 import io.lantern.messaging.tassis.TransportFactory
@@ -37,8 +37,8 @@ class UnknownSenderException(internal val senderId: String, internal val message
 class AttachmentTooBigException(val maxAttachmentBytes: Long) : Exception("Attachment Too Big")
 
 class Messaging(
+    parentDB: DB,
     private val attachmentsDirectory: File,
-    internal val store: MessagingStore,
     transportFactory: TransportFactory,
     clientTimeoutMillis: Long = 10L.secondsToMillis,
     redialBackoffMillis: Long = 500L,
@@ -52,7 +52,8 @@ class Messaging(
         .setMaxAttachmentSize(100000000).build()
 ) : Closeable {
     internal val logger = KotlinLogging.logger(name)
-    val db: DB get() = store.db
+    internal val store = MessagingProtocolStore(parentDB)
+    val db = parentDB.withSchema("messaging")
 
     init {
         // register protocol buffer types before starting crypto worker or doing anything else that
@@ -570,7 +571,6 @@ class Messaging(
             cryptoWorker.executor.awaitTermination(10, TimeUnit.SECONDS)
             anonymousClientWorker.executor.awaitTermination(10, TimeUnit.SECONDS)
             authenticatedClientWorker.executor.awaitTermination(10, TimeUnit.SECONDS)
-            store.close()
         } catch (t: Throwable) {
             logger.error(t.message)
         }

@@ -14,22 +14,29 @@ import java.util.*
 import kotlin.test.*
 
 @RunWith(AndroidJUnit4::class)
-class MessagingStoreTest : BaseMessagingTest() {
+class MessagingProtocolStoreTest : BaseMessagingTest() {
     @Test
     fun testIdentityKeyPair() {
-        newStore().use { ms ->
+        newDB.use { db ->
+            val ms = newStore(db = db)
             val kp1 = ms.identityKeyPair
             val kp2 = ms.identityKeyPair
             assertEquals(kp1.publicKey, kp2.publicKey)
             assertTrue(Arrays.equals(kp1.privateKey.bytes, kp2.privateKey.bytes))
             assertEquals(
                 kp1.publicKey,
-                ECPublicKey(ms.db.get<String>(MessagingStore.PATH_IDENTITY_KEY_PUBLIC_BASE32))
+                ECPublicKey(
+                    db.withSchema("messaging_store")
+                        .get<String>(MessagingProtocolStore.PATH_IDENTITY_KEY_PUBLIC_BASE32)
+                )
             )
             assertTrue(
                 Arrays.equals(
                     kp1.privateKey.bytes,
-                    ECPrivateKey(ms.db.get<String>(MessagingStore.PATH_IDENTITY_KEY_PRIVATE_BASE32)).bytes
+                    ECPrivateKey(
+                        db.withSchema("messaging_store")
+                            .get<String>(MessagingProtocolStore.PATH_IDENTITY_KEY_PRIVATE_BASE32)
+                    ).bytes
                 )
             )
         }
@@ -37,7 +44,8 @@ class MessagingStoreTest : BaseMessagingTest() {
 
     @Test
     fun testPreKeys() {
-        newStore().use { ms ->
+        newDB.use { db ->
+            val ms = newStore(db)
             try {
                 ms.storePreKey(1, KeyHelper.generatePreKeys(0, 1)[0])
                 fail("should not be allowed to directly store one time pre keys")
@@ -67,7 +75,8 @@ class MessagingStoreTest : BaseMessagingTest() {
 
     @Test
     fun testSignedPreKeys() {
-        newStore().use { ms ->
+        newDB.use { db ->
+            val ms = newStore(db)
             try {
                 ms.storeSignedPreKey(1, KeyHelper.generateSignedPreKey(ms.identityKeyPair, 1))
                 fail("should not be allowed to directly store signed pre keys")
@@ -95,7 +104,8 @@ class MessagingStoreTest : BaseMessagingTest() {
 
     @Test
     fun testSessions() {
-        newStore().use { ms ->
+        newDB.use { db ->
+            val ms = newStore(db)
             val address1 =
                 SignalProtocolAddress(Curve.generateKeyPair().publicKey, DeviceId.random())
             val address2 = SignalProtocolAddress(address1.identityKey, DeviceId.random())

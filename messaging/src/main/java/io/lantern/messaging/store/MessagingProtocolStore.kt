@@ -1,8 +1,6 @@
 package io.lantern.messaging.store
 
-import android.content.Context
 import io.lantern.db.DB
-import io.lantern.secrets.Secrets
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.InvalidKeyIdException
 import org.whispersystems.libsignal.SignalProtocolAddress
@@ -15,27 +13,11 @@ import org.whispersystems.libsignal.state.SessionRecord
 import org.whispersystems.libsignal.state.SignalProtocolStore
 import org.whispersystems.libsignal.state.SignedPreKeyRecord
 import org.whispersystems.libsignal.util.KeyHelper
-import java.io.Closeable
-import java.io.File
 
-class MessagingStore(
-    ctx: Context,
-    dbPath: String = File(ctx.filesDir, "messaging.db").absolutePath,
-    secretPrefsName: String = "secrets",
-    masterKeyName: String = "messagingMasterKey",
-    dbPasswordName: String = "messagingDbPassword",
-    dbPasswordBytes: Int = 32,
-    name: String = "messaging-store"
-) : SignalProtocolStore, Closeable {
-    internal val db: DB
-    private val secrets: Secrets
-
-    init {
-        val secretsPreferences = ctx.getSharedPreferences(secretPrefsName, Context.MODE_PRIVATE)
-        secrets = Secrets(masterKeyName, secretsPreferences)
-        val dbPassword = secrets.get(dbPasswordName, dbPasswordBytes)
-        db = DB.createOrOpen(ctx, dbPath, dbPassword, name = "$name-db")
-    }
+class MessagingProtocolStore(
+    parentDB: DB
+) : SignalProtocolStore {
+    private val db = parentDB.withSchema("messaging_protocol_store")
 
     override fun getIdentityKeyPair(): ECKeyPair {
         return db.mutate { tx ->
@@ -176,10 +158,6 @@ class MessagingStore(
         db.mutate { tx ->
             db.listRaw<ByteArray>("${devicesForNamePath(name)}%").forEach { tx.delete(it.path) }
         }
-    }
-
-    override fun close() {
-        db.close()
     }
 
     companion object {
