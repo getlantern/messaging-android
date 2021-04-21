@@ -21,8 +21,12 @@ import org.whispersystems.libsignal.util.KeyHelper
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
 import org.whispersystems.signalservice.internal.util.Util
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileOutputStream
+import java.util.*
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.collections.ArrayList
 import kotlin.test.*
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
@@ -177,20 +181,22 @@ class MessagingTest : BaseMessagingTest() {
                         assertEquals("Cat", storedContact.displayName)
 
                         // now send a message from dog->cat before cat has come online
-                        // we do not expect this message to be delivered to cat because cat hasn't added dog
-                        // as a contact
-                        val sentMsg = dog.sendToDirectContact(
-                            catId, "hello cat", attachments = arrayOf(
-                                dog.createAttachment(
-                                    "text/plain",
-                                    "attachment for cat".length.toLong(),
-                                    ByteArrayInputStream(
-                                        "attachment for cat".toByteArray(
-                                            Charsets.UTF_8
-                                        )
-                                    )
-                                )
+                        // because cat hasn't yet added dog as a contact, this will first go to spam
+                        // but once cat adds dog as a contact, cat should get the message
+                        val input = ByteArrayInputStream(
+                            "attachment for cat".toByteArray(
+                                Charsets.UTF_8
                             )
+                        )
+                        // use a lazy attachment
+                        val plainTextFile = File(tempDir, UUID.randomUUID().toString())
+                        FileOutputStream(plainTextFile).use { output -> Util.copy(input, output) }
+                        val attachment = dog.createAttachment(
+                            plainTextFile,
+                            "text/plain"
+                        )
+                        val sentMsg = dog.sendToDirectContact(
+                            catId, "hello cat", attachments = arrayOf(attachment)
                         )
                         dog.waitFor<Model.StoredMessage>(
                             sentMsg.dbPath,
@@ -296,6 +302,109 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
+    fun testAttachments() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newDB.use { catDB ->
+                    newMessaging(dogDB, "dog").with { dog ->
+                        newMessaging(catDB, "cat").with { cat ->
+                            val dogId = dog.myId.id
+                            val catId = cat.myId.id
+                            dog.addOrUpdateDirectContact(catId, "Cat")
+                            cat.addOrUpdateDirectContact(dogId, "Dog")
+                            // lazy attachment to a non-existent file
+                            val badPlainTextFile = File(tempDir, UUID.randomUUID().toString())
+                            val badAttachment = dog.createAttachment(
+                                badPlainTextFile,
+                                "text/plain"
+                            )
+                            val lazyPlainTextFile = File(tempDir, UUID.randomUUID().toString())
+                            FileOutputStream(lazyPlainTextFile).use { output ->
+                                Util.copy(
+                                    ByteArrayInputStream(
+                                        "lazy attachment".toByteArray(
+                                            Charsets.UTF_8
+                                        )
+                                    ), output
+                                )
+                            }
+                            val lazyAttachment = dog.createAttachment(
+                                lazyPlainTextFile,
+                                "text/plain"
+                            )
+                            val eagerPlainTextFile = File(tempDir, UUID.randomUUID().toString())
+                            FileOutputStream(eagerPlainTextFile).use { output ->
+                                Util.copy(
+                                    ByteArrayInputStream(
+                                        "eager attachment".toByteArray(
+                                            Charsets.UTF_8
+                                        )
+                                    ), output
+                                )
+                            }
+                            val eagerAttachment = dog.createAttachment(
+                                eagerPlainTextFile,
+                                "text/plain"
+                            )
+                            val streamAttachment = dog.createAttachment(
+                                "text/plain",
+                                "stream attachment".length.toLong(),
+                                ByteArrayInputStream(
+                                    "stream attachment".toByteArray(
+                                        Charsets.UTF_8
+                                    )
+                                )
+                            )
+                            val sentMsg = dog.sendToDirectContact(
+                                catId,
+                                "hello cat",
+                                attachments = arrayOf(
+                                    badAttachment,
+                                    lazyAttachment,
+                                    eagerAttachment,
+                                    streamAttachment
+                                )
+                            )
+                            val recvMsg = cat.waitFor<Model.StoredMessage>(
+                                sentMsg.dbPath,
+                                "cat should receive message"
+                            )
+
+                            assertEquals(
+                                "hello cat",
+                                recvMsg.text,
+                                "cat should have received correct message text"
+                            )
+                            assertEquals(
+                                3,
+                                recvMsg.attachmentsCount,
+                                "cat should have received 3 attachments"
+                            )
+
+                            suspend fun readAttachment(id: Int): String {
+                                dog.waitFor<Model.StoredMessage>(
+                                    recvMsg.dbPath,
+                                    "waiting for attachment to download"
+                                ) {
+                                    it.attachmentsMap[id]?.status == Model.StoredAttachment.Status.DONE
+                                }?.let {
+                                    val out = ByteArrayOutputStream()
+                                    it.attachmentsMap[id]?.inputStream?.use { Util.copy(it, out) }
+                                    return out.toString(Charsets.UTF_8.name())
+                                }
+                            }
+
+                            assertEquals("lazy attachment", readAttachment(1))
+                            assertEquals("eager attachment", readAttachment(2))
+                            assertEquals("stream attachment", readAttachment(3))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     fun testDeliveryStatus() {
         testInCoroutine {
             newDB.use { dogDB ->
@@ -315,7 +424,7 @@ class MessagingTest : BaseMessagingTest() {
                                 msg1.dbPath,
                                 "sending to real recipient should have succeeded"
                             ) {
-                                it?.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
+                                it.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
                             }
 
                             val msg2 = dog.sendToDirectContact(fakeId, "hi fake one")
@@ -323,7 +432,7 @@ class MessagingTest : BaseMessagingTest() {
                                 msg2.dbPath,
                                 "sending to fake recipient should have failed"
                             ) {
-                                it?.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED
+                                it.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED
                             }
 
                             assertEquals(
@@ -373,7 +482,7 @@ class MessagingTest : BaseMessagingTest() {
                                 msgs.sent.dbPath,
                                 "dog should have gotten reaction"
                             ) {
-                                it.reactionsCount ?: 0 > 0
+                                it.reactionsCount > 0
                             }
                             assertEquals(
                                 smileyFace,
@@ -399,7 +508,7 @@ class MessagingTest : BaseMessagingTest() {
                                 msgs.sent.dbPath,
                                 "dog should have cleared reaction"
                             ) {
-                                it?.reactionsCount ?: 0 == 0
+                                it.reactionsCount == 0
                             }
                         }
                     }
@@ -463,7 +572,7 @@ class MessagingTest : BaseMessagingTest() {
                             )
                             replyMsgs.sent.attachmentsMap.values.forEach { storedAttachment ->
                                 assertFalse(
-                                    File(storedAttachment.filePath).exists(),
+                                    File(storedAttachment.encryptedFilePath).exists(),
                                     "attachment file should have been deleted"
                                 )
                             }
@@ -492,7 +601,7 @@ class MessagingTest : BaseMessagingTest() {
                             )
                             replyMsgs.received.attachmentsMap.values.forEach { storedAttachment ->
                                 assertFalse(
-                                    File(storedAttachment.filePath).exists(),
+                                    File(storedAttachment.encryptedFilePath).exists(),
                                     "attachment file should have been deleted for dog too"
                                 )
                             }
@@ -523,7 +632,7 @@ class MessagingTest : BaseMessagingTest() {
                             )
                             initialMsgs.sent.attachmentsMap.values.forEach { storedAttachment ->
                                 assertFalse(
-                                    File(storedAttachment.filePath).exists(),
+                                    File(storedAttachment.encryptedFilePath).exists(),
                                     "attachment file should have been deleted"
                                 )
                             }
@@ -636,8 +745,8 @@ class MessagingTest : BaseMessagingTest() {
                             cat.markViewed(msgs.received.dbPath)
                             // close and reopen cat to make sure disappearing messages work after startup
                             cat.close()
-                            newMessaging(catDB, "cat").with { cat ->
-                                remoteMsg = cat.db.get(msgs.received.dbPath)
+                            newMessaging(catDB, "cat").with { theCat ->
+                                remoteMsg = theCat.db.get(msgs.received.dbPath)
                                 assertNotNull(
                                     remoteMsg,
                                     "message should still not have disappeared remotely after reopening messaging"
@@ -647,7 +756,7 @@ class MessagingTest : BaseMessagingTest() {
                                     "remoteMsg should be marked viewed"
                                 )
 
-                                cat.waitForNull(
+                                theCat.waitForNull(
                                     msgs.received.dbPath,
                                     "message should have disappeared remotely"
                                 )
@@ -658,7 +767,7 @@ class MessagingTest : BaseMessagingTest() {
                                     "disappearing message entry should be gone locally"
                                 )
                                 assertTrue(
-                                    cat.db.listPaths(Schema.PATH_DISAPPEARING_MESSAGES.path("%"))
+                                    theCat.db.listPaths(Schema.PATH_DISAPPEARING_MESSAGES.path("%"))
                                         .isEmpty(),
                                     "disappearing message entry should be gone remotely"
                                 )
@@ -769,7 +878,7 @@ class MessagingTest : BaseMessagingTest() {
                     testCase
                 )
                 assertEquals(
-                    File(attachment.filePath).length(),
+                    File(attachment.encryptedFilePath).length(),
                     AttachmentCipherOutputStream.getCiphertextLength(attachment.attachment.plaintextLength),
                     testCase
                 )

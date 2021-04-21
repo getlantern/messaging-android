@@ -36,6 +36,11 @@ class UnknownSenderException(internal val senderId: String, internal val message
  */
 class AttachmentTooBigException(val maxAttachmentBytes: Long) : Exception("Attachment Too Big")
 
+/**
+ * This exception indicates that the file from which we attempted to create an attachment is missing
+ */
+class AttachmentPlainTextMissingException() : Exception("Attachment Plaintext File Is Missing")
+
 class Messaging(
     parentDB: DB,
     private val attachmentsDirectory: File,
@@ -410,7 +415,7 @@ class Messaging(
             // aren't authorized to modify files. They will naturally be deleted once they hit
             // the server-side retention limit.
             msg.attachmentsMap.values.forEach { storedAttachment ->
-                if (!File(storedAttachment.filePath).delete()) {
+                if (!File(storedAttachment.encryptedFilePath).delete()) {
                     logger.error("failed to delete attachment on disk, continuing")
                 }
             }
@@ -438,42 +443,74 @@ class Messaging(
 
     // Creates a StoredAttachment from the given File
     fun createAttachment(
-        mimeType: String,
         file: File,
+        mimeType: String? = null,
         metadata: Map<String, String>? = null,
-    ): Model.StoredAttachment =
-        createAttachment(mimeType, file.length(), FileInputStream(file), metadata)
-
-    /**
-     * Creates a StoredAttachment from the data read from the given InputStream.
-     */
-    fun createAttachment(
-        mimeType: String,
-        length: Long,
-        input: InputStream,
-        metadata: Map<String, String>? = null,
+        lazy: Boolean = true,
     ): Model.StoredAttachment {
-        input.use {
+        val attachment = Model.Attachment.newBuilder().setMimeType(mimeType)
+        if (metadata != null) {
+            attachment.putAllMetadata(metadata)
+        }
+        val storedAttachment =
+            newStoredAttachment.setPlainTextFilePath(file.absolutePath)
+                .setAttachment(attachment.build())
+        if (!lazy) {
+            encryptAttachment(storedAttachment)
+        }
+        return storedAttachment.build()
+    }
+
+    // Creates a StoredAttachment from the given InputStream
+    internal fun createAttachment(
+        mimeType: String? = null,
+        length: Long,
+        inputStream: InputStream,
+        metadata: Map<String, String>? = null
+    ): Model.StoredAttachment {
+        val attachment = Model.Attachment.newBuilder().setMimeType(mimeType)
+        if (metadata != null) {
+            attachment.putAllMetadata(metadata)
+        }
+        val storedAttachment =
+            newStoredAttachment.setAttachment(attachment.build())
+        encryptAttachment(storedAttachment, inputStream, length)
+        return storedAttachment.build()
+    }
+
+    fun encryptAttachment(
+        storedAttachment: Model.StoredAttachment.Builder,
+        inputStream: InputStream? = null,
+        length: Long? = null
+    ) {
+        val plainTextFile = File(storedAttachment.plainTextFilePath)
+        if (inputStream == null && !plainTextFile.exists()) {
+            throw AttachmentPlainTextMissingException()
+        }
+        (inputStream ?: FileInputStream(plainTextFile)).use { input ->
             val maxLength = cfg.get().maxAttachmentSize
-            if (AttachmentCipherOutputStream.getCiphertextLength(length) > maxLength) {
+            if (AttachmentCipherOutputStream.getCiphertextLength(
+                    length ?: plainTextFile.length()
+                ) > maxLength
+            ) {
                 throw AttachmentTooBigException(maxLength - AttachmentCipherOutputStream.MAXIMUM_ENCRYPTION_OVERHEAD)
             }
 
-            val storedAttachment = newStoredAttachment
             val keyMaterial = ByteArray(64)
             SecureRandom().nextBytes(keyMaterial)
             val output =
                 AttachmentCipherOutputStream(
                     keyMaterial,
-                    FileOutputStream(storedAttachment.filePath)
+                    FileOutputStream(storedAttachment.encryptedFilePath)
                 )
             val plaintextLength = Util.copy(input, output)
-            val attachmentBuilder = Model.Attachment.newBuilder().setMimeType(mimeType)
-                .setKeyMaterial(keyMaterial.byteString())
-                .setPlaintextLength(plaintextLength)
-                .setDigest(output.transmittedDigest.byteString())
-            metadata?.let { attachmentBuilder.putAllMetadata(it) }
-            return storedAttachment.setAttachment(attachmentBuilder.build()).build()
+            val attachmentBuilder =
+                storedAttachment.attachment.toBuilder()
+                    .setKeyMaterial(keyMaterial.byteString())
+                    .setPlaintextLength(plaintextLength)
+                    .setDigest(output.transmittedDigest.byteString())
+            storedAttachment.attachment = attachmentBuilder.build()
+            storedAttachment.status = Model.StoredAttachment.Status.PENDING_UPLOAD
         }
     }
 
@@ -489,11 +526,11 @@ class Messaging(
                     guid.substring(2, 3)
                 ).joinToString(File.separator)
             )
-            if (!subDirectory.mkdirs()) {
-                throw RuntimeException("Unable to make attachments sub-directory ${subDirectory}")
+            if (!subDirectory.exists() && !subDirectory.mkdirs()) {
+                throw RuntimeException("Unable to make attachments sub-directory $subDirectory")
             }
             return Model.StoredAttachment.newBuilder().setGuid(guid)
-                .setFilePath(File(subDirectory, guid).absolutePath)
+                .setEncryptedFilePath(File(subDirectory, guid).absolutePath)
         }
 
     internal fun updateContactMetaData(
@@ -514,7 +551,7 @@ class Messaging(
             .setMostRecentMessageDirection(msg.direction).setMostRecentMessageText(msg.text)
         if (msg.attachmentsCount > 0) {
             updatedContactBuilder.mostRecentAttachmentMimeType =
-                msg.attachmentsMap[0]!!.attachment.mimeType
+                msg.attachmentsMap.values.iterator().next().attachment.mimeType
         }
         val updatedContact = updatedContactBuilder.build()
         tx.put(contactPath, updatedContact)
@@ -592,7 +629,7 @@ val nowUnixNano: Long
 
 val Model.StoredAttachment.inputStream: InputStream
     get() = AttachmentCipherInputStream.createForAttachment(
-        File(filePath),
+        File(encryptedFilePath),
         attachment.plaintextLength,
         attachment.keyMaterial.toByteArray(),
         attachment.digest.toByteArray()

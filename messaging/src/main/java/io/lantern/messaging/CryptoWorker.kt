@@ -23,6 +23,7 @@ import org.whispersystems.signalservice.internal.util.Util
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 internal class CryptoWorker(
@@ -36,6 +37,7 @@ internal class CryptoWorker(
     private val httpClient = OkHttpClient() // TODO: configure support for proxying and stuff
     private val cipher = SealedSessionCipher(store, store.deviceId)
     private val uploadAuthorizations = ArrayDeque<Messages.UploadAuthorization>()
+    private val encryptAttachmentsExecutor = Executors.newSingleThreadExecutor()
 
     init {
         // find out about all disappearing messages (including previously saved ones) and schedule
@@ -65,9 +67,11 @@ internal class CryptoWorker(
 
     private val Model.OutboundMessage.Builder.expired: Boolean get() = (nowUnixNano - sent).nanosToMillis > stopSendRetryAfterMillis
 
-    private val Model.StoredMessage.pendingAttachments: Map<Int, Model.StoredAttachment> get() = attachmentsMap.filter { it.value.status == Model.StoredAttachment.Status.PENDING }
+    private val Model.StoredMessage.attachmentsPendingEncryption: Map<Int, Model.StoredAttachment> get() = attachmentsMap.filter { it.value.status == Model.StoredAttachment.Status.PENDING_ENCRYPTION }
 
-    private val Model.StoredMessage.allAttachmentsUploaded: Boolean get() = attachmentsMap.count { it.value.status == Model.StoredAttachment.Status.DONE } == attachmentsCount
+    private val Model.StoredMessage.attachmentsPendingUpload: Map<Int, Model.StoredAttachment> get() = attachmentsMap.filter { it.value.status == Model.StoredAttachment.Status.PENDING_UPLOAD }
+
+    private val Model.StoredMessage.allAttachmentsUploaded: Boolean get() = attachmentsMap.values.find { it.status == Model.StoredAttachment.Status.PENDING_UPLOAD } == null
 
     private val Model.OutboundMessage.Builder.knowsRecipientDevices: Boolean get() = subDeliveryStatusesCount > 0
 
@@ -86,7 +90,9 @@ internal class CryptoWorker(
             replyToSenderId?.let { msgBuilder.setReplyToSenderId(it.fromBase32.byteString()) }
             replyToId?.let { msgBuilder.setReplyToId(it.fromBase32.byteString()) }
             attachmentsMap.forEach { (id, attachment) ->
-                msgBuilder.putAttachments(id, attachment.attachment)
+                if (attachment.status != Model.StoredAttachment.Status.FAILED) {
+                    msgBuilder.putAttachments(id, attachment.attachment)
+                }
             }
             return msgBuilder.build()
         }
@@ -146,10 +152,33 @@ internal class CryptoWorker(
                     return
                 }
 
-                val pendingAttachments = msg.pendingAttachments
-                if (pendingAttachments.isNotEmpty()) {
+                if (msg.attachmentsPendingEncryption.isNotEmpty()) {
+                    encryptAttachmentsExecutor.submit {
+                        db.mutate { tx ->
+                            db.get<Model.StoredMessage>(out.msgPath)?.let { it ->
+                                val msg = it.toBuilder()
+                                it.attachmentsPendingEncryption.forEach { (id, attachment) ->
+                                    val storedAttachment = attachment.toBuilder()
+                                    try {
+                                        messaging.encryptAttachment(storedAttachment)
+                                    } catch (e: AttachmentPlainTextMissingException) {
+                                        storedAttachment.status =
+                                            Model.StoredAttachment.Status.FAILED
+                                    }
+                                    msg.putAttachments(id, storedAttachment.build())
+                                }
+                                tx.put(msg.dbPath, msg.build())
+                                submit { processOutgoing(out) }
+                            }
+                        }
+                    }
+                    return
+                }
+
+                val attachmentsPendingUpload = msg.attachmentsPendingUpload
+                if (attachmentsPendingUpload.isNotEmpty()) {
                     // handle pending attachments before sending message
-                    pendingAttachments.forEach { (id, attachment) ->
+                    attachmentsPendingUpload.forEach { (id, attachment) ->
                         uploadAttachment(out, msg, id, attachment)
                     }
                     return
@@ -398,7 +427,11 @@ internal class CryptoWorker(
         auth.uploadFormDataMap.forEach { (key, value) ->
             requestBody.addFormDataPart(key, value)
         }
-        requestBody.addFormDataPart("file", "filename", File(attachment.filePath).asRequestBody())
+        requestBody.addFormDataPart(
+            "file",
+            "filename",
+            File(attachment.encryptedFilePath).asRequestBody()
+        )
         val rb = requestBody.build()
         val request = Request.Builder().url(auth.uploadURL).post(rb).build()
         httpClient.newCall(request).enqueue(object : okhttp3.Callback {
@@ -587,7 +620,7 @@ internal class CryptoWorker(
                             logger.error("download failed with un-retriable status ${response.code}: ${response.body?.string()}")
                         } else {
                             try {
-                                FileOutputStream(attachment.filePath).use { out ->
+                                FileOutputStream(attachment.encryptedFilePath).use { out ->
                                     Util.copy(response.body!!.byteStream(), out)
                                 }
                             } catch (t: Throwable) {
@@ -621,7 +654,7 @@ internal class CryptoWorker(
                                     tx.delete(inbound.dbPath)
                                 } ?: {
                                     // message has been deleted, delete attachment
-                                    File(attachment.filePath).delete()
+                                    File(attachment.encryptedFilePath).delete()
                                 }
                             }
                         } finally {
@@ -666,5 +699,10 @@ internal class CryptoWorker(
                     })
             }
         }
+    }
+
+    override fun close() {
+        encryptAttachmentsExecutor.shutdownNow()
+        super.close()
     }
 }

@@ -9,7 +9,7 @@ import java.io.File
 import java.util.*
 
 abstract class BaseMessagingTest {
-    private var tempDir: File? = null
+    protected var tempDir: File? = null
 
     protected val newDB: DB
         get() = DB.createOrOpen(
