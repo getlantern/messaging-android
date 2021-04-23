@@ -65,7 +65,7 @@ class MessagingProtocolStore(
     }
 
     override fun storePreKey(preKeyId: Int, record: PreKeyRecord?) {
-        throw AssertionError("storePreKey should never be called directly, please use generatePreKeys() to generate new keys")
+        throw AssertionError("storePreKey should never be called directly, please use generatePreKeys() to generate new keys") // ktlint-disable max-line-length
     }
 
     override fun loadPreKey(preKeyId: Int): PreKeyRecord {
@@ -98,7 +98,7 @@ class MessagingProtocolStore(
         }
 
     override fun storeSignedPreKey(signedPreKeyId: Int, record: SignedPreKeyRecord?) {
-        throw AssertionError("storeSignedPreKey should never be called directly, please use nextSignedPreKey to generate new keys")
+        throw AssertionError("storeSignedPreKey should never be called directly, please use nextSignedPreKey to generate new keys") // ktlint-disable max-line-length
     }
 
     override fun loadSignedPreKey(signedPreKeyId: Int): SignedPreKeyRecord {
@@ -108,8 +108,9 @@ class MessagingProtocolStore(
 
     override fun loadSignedPreKeys(): MutableList<SignedPreKeyRecord> {
         return ArrayList(
-            db.list<ByteArray>("${PATH_ALL_SIGNED_PREKEYS_BY_ID}/%")
-                .map { SignedPreKeyRecord(it.value) })
+            db.list<ByteArray>("$PATH_ALL_SIGNED_PREKEYS_BY_ID/%")
+                .map { SignedPreKeyRecord(it.value) }
+        )
     }
 
     override fun containsSignedPreKey(signedPreKeyId: Int): Boolean {
@@ -139,7 +140,8 @@ class MessagingProtocolStore(
     override fun getSubDeviceSessions(name: String): MutableList<DeviceId> {
         return ArrayList(
             db.listPaths("${devicesForNamePath(name)}%")
-                .map { SignalProtocolAddress(it.split("/").last()).deviceId })
+                .map { SignalProtocolAddress(it.split("/").last()).deviceId }
+        )
     }
 
     override fun storeSession(address: SignalProtocolAddress, record: SessionRecord?) {
@@ -163,30 +165,30 @@ class MessagingProtocolStore(
     companion object {
         private const val PATH_SIGNAL_PROTOCOL_STORE = "/signalProtocolStore"
 
-        private const val PATH_IDENTITY_KEY = "${PATH_SIGNAL_PROTOCOL_STORE}/identityKeyPair"
-        private const val PATH_IDENTITY_KEY_PUBLIC = "${PATH_IDENTITY_KEY}/public"
-        internal const val PATH_IDENTITY_KEY_PUBLIC_BASE32 = "${PATH_IDENTITY_KEY}/publicBase32"
-        private const val PATH_IDENTITY_KEY_PRIVATE = "${PATH_IDENTITY_KEY}/private"
-        internal const val PATH_IDENTITY_KEY_PRIVATE_BASE32 = "${PATH_IDENTITY_KEY}/privateBase32"
+        private const val PATH_IDENTITY_KEY = "$PATH_SIGNAL_PROTOCOL_STORE/identityKeyPair"
+        private const val PATH_IDENTITY_KEY_PUBLIC = "$PATH_IDENTITY_KEY/public"
+        internal const val PATH_IDENTITY_KEY_PUBLIC_BASE32 = "$PATH_IDENTITY_KEY/publicBase32"
+        private const val PATH_IDENTITY_KEY_PRIVATE = "$PATH_IDENTITY_KEY/private"
+        internal const val PATH_IDENTITY_KEY_PRIVATE_BASE32 = "$PATH_IDENTITY_KEY/privateBase32"
 
-        private const val PATH_DEVICE_ID = "${PATH_SIGNAL_PROTOCOL_STORE}/deviceId"
+        private const val PATH_DEVICE_ID = "$PATH_SIGNAL_PROTOCOL_STORE/deviceId"
 
-        private const val PATH_PREKEYS = "${PATH_SIGNAL_PROTOCOL_STORE}/preKeys"
-        private const val PATH_SIGNED_PREKEYS = "${PATH_PREKEYS}/signed"
-        private const val PATH_CURRENT_SIGNED_PREKEY_ID = "${PATH_SIGNED_PREKEYS}/currentId"
-        private const val PATH_CURRENT_SIGNED_PREKEY = "${PATH_SIGNED_PREKEYS}/current"
-        private const val PATH_ALL_SIGNED_PREKEYS_BY_ID = "${PATH_SIGNED_PREKEYS}/all"
-        private fun signedPreKeyPath(id: Int) = "${PATH_ALL_SIGNED_PREKEYS_BY_ID}/${id}"
+        private const val PATH_PREKEYS = "$PATH_SIGNAL_PROTOCOL_STORE/preKeys"
+        private const val PATH_SIGNED_PREKEYS = "$PATH_PREKEYS/signed"
+        private const val PATH_CURRENT_SIGNED_PREKEY_ID = "$PATH_SIGNED_PREKEYS/currentId"
+        private const val PATH_CURRENT_SIGNED_PREKEY = "$PATH_SIGNED_PREKEYS/current"
+        private const val PATH_ALL_SIGNED_PREKEYS_BY_ID = "$PATH_SIGNED_PREKEYS/all"
+        private fun signedPreKeyPath(id: Int) = "$PATH_ALL_SIGNED_PREKEYS_BY_ID/$id"
 
-        private const val PATH_ONE_TIME_PREKEYS = "${PATH_PREKEYS}/onetime"
-        private const val PATH_NEXT_ONE_TIME_PREKEY_ID = "${PATH_ONE_TIME_PREKEYS}/nextId"
-        private const val PATH_ALL_ONE_TIME_PREKEYS_BY_ID = "${PATH_ONE_TIME_PREKEYS}/all"
-        private fun oneTimePreKeyPath(id: Int) = "${PATH_ALL_ONE_TIME_PREKEYS_BY_ID}/${id}"
+        private const val PATH_ONE_TIME_PREKEYS = "$PATH_PREKEYS/onetime"
+        private const val PATH_NEXT_ONE_TIME_PREKEY_ID = "$PATH_ONE_TIME_PREKEYS/nextId"
+        private const val PATH_ALL_ONE_TIME_PREKEYS_BY_ID = "$PATH_ONE_TIME_PREKEYS/all"
+        private fun oneTimePreKeyPath(id: Int) = "$PATH_ALL_ONE_TIME_PREKEYS_BY_ID/$id"
 
-        private const val PATH_ALL_SESSIONS_BY_ADDRESS = "${PATH_SIGNAL_PROTOCOL_STORE}/sessions"
+        private const val PATH_ALL_SESSIONS_BY_ADDRESS = "$PATH_SIGNAL_PROTOCOL_STORE/sessions"
         private fun sessionPath(address: SignalProtocolAddress) =
-            "${PATH_ALL_SESSIONS_BY_ADDRESS}/${address}"
+            "$PATH_ALL_SESSIONS_BY_ADDRESS/$address"
 
-        private fun devicesForNamePath(name: String) = "${PATH_ALL_SESSIONS_BY_ADDRESS}/${name}:"
+        private fun devicesForNamePath(name: String) = "$PATH_ALL_SESSIONS_BY_ADDRESS/$name:"
     }
 }

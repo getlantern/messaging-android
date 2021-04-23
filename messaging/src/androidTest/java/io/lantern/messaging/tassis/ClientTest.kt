@@ -97,7 +97,9 @@ class ClientTest {
                 SignalProtocolAddress(
                     KeyHelper.generateIdentityKeyPair().publicKey,
                     DeviceId.random()
-                ), ByteArray(0), object : Callback<Unit> {
+                ),
+                ByteArray(0),
+                object : Callback<Unit> {
                     override fun onSuccess(result: Unit) {
                         fail("call shouldn't have succeeded")
                     }
@@ -105,7 +107,8 @@ class ClientTest {
                     override fun onError(err: Throwable) {
                         assertTrue(err is TimeoutException)
                     }
-                })
+                }
+            )
         }.start()
         assertTrue(delegate.closed.get(10000), "client should have closed")
     }
@@ -114,7 +117,6 @@ class ClientTest {
 internal class Delegate : AnonymousClientDelegate {
     internal val connected = ValueMonitor(false)
     internal val connectError = ValueMonitor<Throwable?>(null)
-    internal val configUpdated = ValueMonitor(false)
     internal val closed = ValueMonitor(false)
 
     override fun onConnected(client: AnonymousClient) {
@@ -125,9 +127,7 @@ internal class Delegate : AnonymousClientDelegate {
         connectError.set(err)
     }
 
-    override fun onConfigUpdate(cfg: Messages.Configuration) {
-        configUpdated.set(true)
-    }
+    override fun onConfigUpdate(cfg: Messages.Configuration) {}
 
     override fun onClose(err: Throwable?) {
         closed.set(true)

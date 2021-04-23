@@ -96,8 +96,7 @@ interface TransportFactory {
  * Represents an error from tassis
  */
 data class TassisError(val name: String, val description: String) :
-    RuntimeException("${name}: $description")
-
+    RuntimeException("$name: $description")
 
 /**
  * Represents an inbound message from another user. Call ack() once the message has been durably
@@ -187,7 +186,7 @@ abstract class Client<D : ClientDelegate>(
     private val msgSequence = AtomicInteger(1)
     protected val pending = ConcurrentHashMap<Int, Callback<Any?>>()
     protected val isConnecting = AtomicBoolean(true)
-    protected val closed = AtomicBoolean()
+    private val closed = AtomicBoolean()
     private val timeoutChecker = Executors.newSingleThreadScheduledExecutor {
         Thread(it, "client-timeout-checker")
     }
@@ -203,14 +202,17 @@ abstract class Client<D : ClientDelegate>(
         }
         transport?.send(msg.toByteArray())
         if (callback != null) {
-            timeoutChecker.schedule({
-                pending.remove(msgSequence)?.let {
-                    // if any request times out, consider the whole connection bad and just close it
-                    val err = TimeoutException("request timed out")
-                    it.onError(err)
-                    close()
-                }
-            }, roundTripTimeoutMillis, TimeUnit.MILLISECONDS)
+            timeoutChecker.schedule(
+                {
+                    pending.remove(msgSequence)?.let {
+                        // if any request times out, consider the whole connection bad and just close it
+                        val err = TimeoutException("request timed out")
+                        it.onError(err)
+                        close()
+                    }
+                },
+                roundTripTimeoutMillis, TimeUnit.MILLISECONDS
+            )
         }
     }
 
@@ -244,13 +246,16 @@ abstract class Client<D : ClientDelegate>(
      */
     fun close() {
         transport?.close()
-        timeoutChecker.schedule({
-            if (closed.compareAndSet(false, true)) {
-                logger.debug("transport failed to close in time, cancel")
-                transport?.cancel()
-                doClose(CloseTimedOutException())
-            }
-        }, roundTripTimeoutMillis, TimeUnit.MILLISECONDS)
+        timeoutChecker.schedule(
+            {
+                if (closed.compareAndSet(false, true)) {
+                    logger.debug("transport failed to close in time, cancel")
+                    transport?.cancel()
+                    doClose(CloseTimedOutException())
+                }
+            },
+            roundTripTimeoutMillis, TimeUnit.MILLISECONDS
+        )
     }
 
     override fun onFailure(err: Throwable) {
@@ -343,19 +348,22 @@ class AuthenticatedClient(
                     .setSignature(signature.byteString())
             ).build()
             logger.debug("sending login")
-            send(authResponse, object : Callback<Messages.Ack> {
-                override fun onSuccess(result: Messages.Ack) {
-                    logger.debug("successfully logged in")
-                    if (isConnecting.compareAndSet(true, false)) {
-                        delegate.onConnected(this@AuthenticatedClient)
+            send(
+                authResponse,
+                object : Callback<Messages.Ack> {
+                    override fun onSuccess(result: Messages.Ack) {
+                        logger.debug("successfully logged in")
+                        if (isConnecting.compareAndSet(true, false)) {
+                            delegate.onConnected(this@AuthenticatedClient)
+                        }
+                    }
+
+                    override fun onError(err: Throwable) {
+                        logger.debug("error during login ${err.message}")
+                        this@AuthenticatedClient.onFailure(err)
                     }
                 }
-
-                override fun onError(err: Throwable) {
-                    logger.debug("error during login ${err.message}")
-                    this@AuthenticatedClient.onFailure(err)
-                }
-            })
+            )
         } catch (err: Throwable) {
             onFailure(err)
         }
@@ -380,19 +388,22 @@ class AnonymousClient(
             .setIdentityKey(identityKey.bytes.byteString())
         knownDeviceIds.forEach { requestPreKeys.addKnownDeviceIds(it.bytes.byteString()) }
         val msg = nextMessage().setRequestPreKeys(requestPreKeys.build()).build()
-        send(msg, object : Callback<Messages.PreKeys> {
-            override fun onSuccess(result: Messages.PreKeys) {
-                try {
-                    cb.onSuccess(result.preKeysList)
-                } catch (t: Throwable) {
-                    logger.error("error after receiving pre keys: $t.message", t)
+        send(
+            msg,
+            object : Callback<Messages.PreKeys> {
+                override fun onSuccess(result: Messages.PreKeys) {
+                    try {
+                        cb.onSuccess(result.preKeysList)
+                    } catch (t: Throwable) {
+                        logger.error("error after receiving pre keys: $t.message", t)
+                    }
+                }
+
+                override fun onError(err: Throwable) {
+                    cb.onError(err)
                 }
             }
-
-            override fun onError(err: Throwable) {
-                cb.onError(err)
-            }
-        })
+        )
     }
 
     fun requestUploadAuthorizations(
@@ -402,19 +413,22 @@ class AnonymousClient(
         val requestUploadAuthorizations = Messages.RequestUploadAuthorizations.newBuilder()
             .setNumRequested(numRequested).build()
         val msg = nextMessage().setRequestUploadAuthorizations(requestUploadAuthorizations).build()
-        send(msg, object : Callback<Messages.UploadAuthorizations> {
-            override fun onSuccess(result: Messages.UploadAuthorizations) {
-                try {
-                    cb.onSuccess(result.authorizationsList)
-                } catch (t: Throwable) {
-                    logger.error("error after receiving upload authorizations: $t.message", t)
+        send(
+            msg,
+            object : Callback<Messages.UploadAuthorizations> {
+                override fun onSuccess(result: Messages.UploadAuthorizations) {
+                    try {
+                        cb.onSuccess(result.authorizationsList)
+                    } catch (t: Throwable) {
+                        logger.error("error after receiving upload authorizations: $t.message", t)
+                    }
+                }
+
+                override fun onError(err: Throwable) {
+                    cb.onError(err)
                 }
             }
-
-            override fun onError(err: Throwable) {
-                cb.onError(err)
-            }
-        })
+        )
     }
 
     fun sendUnidentifiedSenderMessage(

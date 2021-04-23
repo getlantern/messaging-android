@@ -4,7 +4,11 @@ import io.lantern.messaging.tassis.MessageHandler
 import io.lantern.messaging.tassis.Transport
 import io.lantern.messaging.tassis.TransportFactory
 import mu.KotlinLogging
-import okhttp3.*
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import okio.ByteString
 import java.util.concurrent.TimeUnit
 
@@ -48,7 +52,7 @@ open class WebSocketTransportFactory(
 }
 
 internal open class WSTransport(
-    internal val webSocket: WebSocket
+    private val webSocket: WebSocket
 ) : Transport {
     override fun send(data: ByteArray) {
         webSocket.send(ByteString.of(*data))
@@ -64,8 +68,8 @@ internal open class WSTransport(
 }
 
 open class WSListener(
-    protected val factory: WebSocketTransportFactory,
-    protected val handler: MessageHandler,
+    private val factory: WebSocketTransportFactory,
+    private val handler: MessageHandler,
 ) : WebSocketListener() {
     override fun onOpen(webSocket: WebSocket, response: Response) {
         handler.setTransport(factory.buildTransport(webSocket))

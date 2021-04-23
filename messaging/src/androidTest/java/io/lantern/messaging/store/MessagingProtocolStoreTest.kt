@@ -10,8 +10,12 @@ import org.whispersystems.libsignal.ecc.Curve
 import org.whispersystems.libsignal.ecc.ECPrivateKey
 import org.whispersystems.libsignal.ecc.ECPublicKey
 import org.whispersystems.libsignal.util.KeyHelper
-import java.util.*
-import kotlin.test.*
+import java.util.Arrays
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import kotlin.test.fail
 
 @RunWith(AndroidJUnit4::class)
 class MessagingProtocolStoreTest : BaseMessagingTest() {

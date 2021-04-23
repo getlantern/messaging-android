@@ -36,5 +36,20 @@ A queue of inbound attachments that are pending download. If downloading fails, 
 re-queued here for a limited period of time until they either send successfully or time runs out.
 
 ## Included Signal Code
-The included Signal code (like AttachmentCipherInputStream) comes from https://github.com/signalapp/Signal-Android,
- not from https://github.com/signalapp/libsignal-service-java
+The included Signal code (like AttachmentCipherInputStream) comes from https://github.com/signalapp/Signal-Android, not from https://github.com/signalapp/libsignal-service-java
+
+## ktlint
+This project is formatted and linted with ktlint using the [ktlint-gradle plugin](https://github.com/JLLeitschuh/ktlint-gradle).
+
+It includes a commit hook that automatically formats any staged files on commit, so there's no need
+to auto-format in the IDE, and in fact the IDE's auto formatting will be different than ktlint
+anyway.
+
+You can install the [ktlint Intellij plugin](https://plugins.jetbrains.com/plugin/15057-ktlint-unofficial-)
+for some support for linting within Android Studio.
+
+### Manually Auto-format
+./gradlew ktlintFormat
+
+### Manually Check
+./gradlew ktlintCheck

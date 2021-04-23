@@ -24,10 +24,15 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
-import java.util.*
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.collections.ArrayList
-import kotlin.test.*
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.fail
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 import kotlin.time.seconds
@@ -127,7 +132,7 @@ class MessagingTest : BaseMessagingTest() {
                             assertEquals(
                                 1,
                                 dog.db.listPaths(Schema.PATH_CONTACT_MESSAGES.path("%")).count(),
-                                "dog should have only 1 message from cat, the message sent while cat was not a contact should have been lost because it couldn't be decrypted"
+                                "dog should have only 1 message from cat, the message sent while cat was not a contact should have been lost because it couldn't be decrypted" // ktlint-disable max-line-length
                             )
                         }
                     }
@@ -159,11 +164,13 @@ class MessagingTest : BaseMessagingTest() {
                             dog.db.get<Model.Contact>(Schema.PATH_ME)?.displayName
                         )
 
+                        val hugeLength = Long.MAX_VALUE -
+                            AttachmentCipherOutputStream.MAXIMUM_ENCRYPTION_OVERHEAD
                         // try to create an overly large attachment and make sure it fails
                         try {
                             dog.createAttachment(
                                 "application/octet-stream",
-                                Long.MAX_VALUE - AttachmentCipherOutputStream.MAXIMUM_ENCRYPTION_OVERHEAD,
+                                hugeLength,
                                 ByteArrayInputStream(ByteArray(0))
                             )
                             fail("creating a giant attachment shouldn't be allowed")
@@ -295,7 +302,6 @@ class MessagingTest : BaseMessagingTest() {
                         }
                     }
                     logger.debug("test finished")
-
                 }
             }
         }
@@ -325,7 +331,8 @@ class MessagingTest : BaseMessagingTest() {
                                         "lazy attachment".toByteArray(
                                             Charsets.UTF_8
                                         )
-                                    ), output
+                                    ),
+                                    output
                                 )
                             }
                             val lazyAttachment = dog.createAttachment(
@@ -339,7 +346,8 @@ class MessagingTest : BaseMessagingTest() {
                                         "eager attachment".toByteArray(
                                             Charsets.UTF_8
                                         )
-                                    ), output
+                                    ),
+                                    output
                                 )
                             }
                             val eagerAttachment = dog.createAttachment(
@@ -387,9 +395,9 @@ class MessagingTest : BaseMessagingTest() {
                                     "waiting for attachment to download"
                                 ) {
                                     it.attachmentsMap[id]?.status == Model.StoredAttachment.Status.DONE
-                                }?.let {
+                                }.let { storedMsg ->
                                     val out = ByteArrayOutputStream()
-                                    it.attachmentsMap[id]?.inputStream?.use { Util.copy(it, out) }
+                                    storedMsg.attachmentsMap[id]?.inputStream?.use { Util.copy(it, out) }
                                     return out.toString(Charsets.UTF_8.name())
                                 }
                             }
@@ -496,7 +504,7 @@ class MessagingTest : BaseMessagingTest() {
                                 ""
                             )
                             updatedMostRecentMsg =
-                                cat.db.get<Model.StoredMessage>(msgs.received.dbPath)
+                                cat.db.get(msgs.received.dbPath)
                             assertNotNull(updatedMostRecentMsg)
                             assertEquals(
                                 0,
@@ -531,7 +539,8 @@ class MessagingTest : BaseMessagingTest() {
                             cat.addOrUpdateDirectContact(dogId, "Dog")
 
                             val initialMsgs = sendAndVerify(
-                                "dog sends to cat", dog, cat, "hi cat", attachments = arrayOf(
+                                "dog sends to cat", dog, cat, "hi cat",
+                                attachments = arrayOf(
                                     dog.createAttachment(
                                         "text/plain",
                                         "attachment for cat".length.toLong(),
@@ -551,7 +560,8 @@ class MessagingTest : BaseMessagingTest() {
                                 cat,
                                 dog,
                                 "howdie",
-                                replyToId = initialMsgs.sent.id, attachments = arrayOf(
+                                replyToId = initialMsgs.sent.id,
+                                attachments = arrayOf(
                                     dog.createAttachment(
                                         "text/plain",
                                         "attachment for dog".length.toLong(),
@@ -822,7 +832,8 @@ class MessagingTest : BaseMessagingTest() {
             text,
             attachments = attachments,
             replyToId = replyToId,
-            replyToSenderId = replyToId?.let { toId })
+            replyToSenderId = replyToId?.let { toId }
+        )
         assertFalse(senderStoredMsg.id.isNullOrBlank())
         assertEquals(Model.StoredMessage.DeliveryStatus.SENDING, senderStoredMsg.status, testCase)
         assertEquals(Model.MessageDirection.OUT, senderStoredMsg.direction, testCase)
@@ -940,8 +951,8 @@ class MessagingTest : BaseMessagingTest() {
             )
             // wait for all attachments to download
             recipientStoredMsg =
-                to.waitFor(recipientStoredMsg.dbPath, testCase) {
-                    it.attachmentsMap.values.count { it.status != Model.StoredAttachment.Status.DONE } == 0
+                to.waitFor(recipientStoredMsg.dbPath, testCase) { storedMsg ->
+                    storedMsg.attachmentsMap.values.count { it.status != Model.StoredAttachment.Status.DONE } == 0
                 }
             recipientStoredMsg.attachmentsMap.forEach { (id, attachment) ->
                 // make sure metadata matches expected
@@ -954,7 +965,8 @@ class MessagingTest : BaseMessagingTest() {
                     Util.streamsEqual(
                         attachment.inputStream,
                         attachments[id].inputStream,
-                    ), testCase
+                    ),
+                    testCase
                 )
             }
         }
@@ -1009,7 +1021,7 @@ internal suspend fun <T : Any> Messaging.waitFor(
         delay(25)
         elapsed += 25
     }
-    fail("waited ${elapsed}ms without finding match for '${testCase}'")
+    fail("waited ${elapsed}ms without finding match for '$testCase'")
 }
 
 @ExperimentalTime
@@ -1029,13 +1041,13 @@ internal suspend fun Messaging.waitForNull(
         delay(25)
         elapsed += 25
     }
-    throw AssertionError("waited ${elapsed}ms without value turning null for '${testCase}'")
+    throw AssertionError("waited ${elapsed}ms without value turning null for '$testCase'")
 }
 
 internal fun DB.dump() {
-    val dumpString = this.list<Any>("%").sortedBy { it.path }.map {
+    val dumpString = this.list<Any>("%").sortedBy { it.path }.joinToString("\n") {
         "${it.path}: ${it.value}"
-    }.joinToString("\n")
+    }
     println("DB Dump for ${this.get<Model.Contact>(Schema.PATH_ME)?.displayName}\n===============================================\n\n${dumpString}\n\n======================================")
 }
 

@@ -3,13 +3,20 @@ package io.lantern.messaging
 import io.lantern.db.ChangeSet
 import io.lantern.db.Subscriber
 import io.lantern.db.Transaction
-import io.lantern.messaging.tassis.*
 import io.lantern.messaging.tassis.Callback
+import io.lantern.messaging.tassis.InboundMessage
+import io.lantern.messaging.tassis.Messages
+import io.lantern.messaging.tassis.Padding
+import io.lantern.messaging.tassis.byteString
 import io.lantern.messaging.time.millisToNanos
 import io.lantern.messaging.time.minutesToMillis
 import io.lantern.messaging.time.nanosToMillis
-import okhttp3.*
+import okhttp3.Call
+import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.Response
 import org.signal.libsignal.metadata.SealedSessionCipher
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.SessionBuilder
@@ -42,38 +49,55 @@ internal class CryptoWorker(
     init {
         // find out about all disappearing messages (including previously saved ones) and schedule
         // them for deletion
-        db.subscribe(object : Subscriber<String>(
-            "disappearingMessagesSubscriber",
-            Schema.PATH_DISAPPEARING_MESSAGES.path('%')
-        ) {
-            override fun onChanges(changes: ChangeSet<String>) {
-                changes.updates.forEach { (path, msgPath) ->
-                    val scheduledTimeNanos = path.split("/")[2].toLong()
-                    val delayNanos = scheduledTimeNanos - nowUnixNano
-                    executor.schedule({
-                        try {
-                            db.mutate { tx ->
-                                messaging.deleteLocally(msgPath)
-                                tx.delete(path)
-                            }
-                        } catch (t: Throwable) {
-                            logger.error("failed to delete disappearing message: ${t.message}")
-                        }
-                    }, delayNanos, TimeUnit.NANOSECONDS)
+        db.subscribe(
+            object : Subscriber<String>(
+                "disappearingMessagesSubscriber",
+                Schema.PATH_DISAPPEARING_MESSAGES.path('%')
+            ) {
+                override fun onChanges(changes: ChangeSet<String>) {
+                    changes.updates.forEach { (path, msgPath) ->
+                        val scheduledTimeNanos = path.split("/")[2].toLong()
+                        val delayNanos = scheduledTimeNanos - nowUnixNano
+                        executor.schedule(
+                            {
+                                try {
+                                    db.mutate { tx ->
+                                        messaging.deleteLocally(msgPath)
+                                        tx.delete(path)
+                                    }
+                                } catch (t: Throwable) {
+                                    logger.error("failed to delete disappearing message: ${t.message}") // ktlint-disable max-line-length
+                                }
+                            },
+                            delayNanos, TimeUnit.NANOSECONDS
+                        )
+                    }
                 }
-            }
-        }, true)
+            },
+            true
+        )
     }
 
-    private val Model.OutboundMessage.Builder.expired: Boolean get() = (nowUnixNano - sent).nanosToMillis > stopSendRetryAfterMillis
+    private val Model.OutboundMessage.Builder.expired: Boolean
+        get() = (nowUnixNano - sent).nanosToMillis > stopSendRetryAfterMillis
 
-    private val Model.StoredMessage.attachmentsPendingEncryption: Map<Int, Model.StoredAttachment> get() = attachmentsMap.filter { it.value.status == Model.StoredAttachment.Status.PENDING_ENCRYPTION }
+    private val Model.StoredMessage.attachmentsPendingEncryption: Map<Int, Model.StoredAttachment>
+        get() = attachmentsMap.filter {
+            it.value.status == Model.StoredAttachment.Status.PENDING_ENCRYPTION
+        }
 
-    private val Model.StoredMessage.attachmentsPendingUpload: Map<Int, Model.StoredAttachment> get() = attachmentsMap.filter { it.value.status == Model.StoredAttachment.Status.PENDING_UPLOAD }
+    private val Model.StoredMessage.attachmentsPendingUpload: Map<Int, Model.StoredAttachment>
+        get() = attachmentsMap.filter {
+            it.value.status == Model.StoredAttachment.Status.PENDING_UPLOAD
+        }
 
-    private val Model.StoredMessage.allAttachmentsUploaded: Boolean get() = attachmentsMap.values.find { it.status == Model.StoredAttachment.Status.PENDING_UPLOAD } == null
+    private val Model.StoredMessage.allAttachmentsUploaded: Boolean
+        get() = attachmentsMap.values.find {
+            it.status == Model.StoredAttachment.Status.PENDING_UPLOAD
+        } == null
 
-    private val Model.OutboundMessage.Builder.knowsRecipientDevices: Boolean get() = subDeliveryStatusesCount > 0
+    private val Model.OutboundMessage.Builder.knowsRecipientDevices: Boolean
+        get() = subDeliveryStatusesCount > 0
 
     private val Model.OutboundMessage.Builder.recipientIdentityKey: ECPublicKey
         get() = ECPublicKey(
@@ -104,9 +128,13 @@ internal class CryptoWorker(
             val msgPath = this.msgPath
             // update message (if it still exists)
             tx.get<Model.StoredMessage>(msgPath)?.let {
+                val numSent = this.subDeliveryStatusesMap.count {
+                    it.value == Model.OutboundMessage.SubDeliveryStatus.SENT
+                }
                 val finalStatus =
-                    if (this.subDeliveryStatusesMap.count { it.value == Model.OutboundMessage.SubDeliveryStatus.SENT } > 0)
-                        Model.StoredMessage.DeliveryStatus.PARTIALLY_FAILED else Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED
+                    if (numSent > 0)
+                        Model.StoredMessage.DeliveryStatus.PARTIALLY_FAILED else
+                        Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED
                 tx.put(
                     msgPath,
                     tx.get<Model.StoredMessage>(msgPath)?.toBuilder()
@@ -156,7 +184,7 @@ internal class CryptoWorker(
                     encryptAttachmentsExecutor.submit {
                         db.mutate { tx ->
                             db.get<Model.StoredMessage>(out.msgPath)?.let { it ->
-                                val msg = it.toBuilder()
+                                val upToDateMsg = it.toBuilder()
                                 it.attachmentsPendingEncryption.forEach { (id, attachment) ->
                                     val storedAttachment = attachment.toBuilder()
                                     try {
@@ -165,9 +193,9 @@ internal class CryptoWorker(
                                         storedAttachment.status =
                                             Model.StoredAttachment.Status.FAILED
                                     }
-                                    msg.putAttachments(id, storedAttachment.build())
+                                    upToDateMsg.putAttachments(id, storedAttachment.build())
                                 }
-                                tx.put(msg.dbPath, msg.build())
+                                tx.put(upToDateMsg.dbPath, upToDateMsg.build())
                                 submit { processOutgoing(out) }
                             }
                         }
@@ -184,22 +212,25 @@ internal class CryptoWorker(
                     return
                 }
 
-                encryptAndSendToAll(out, afterSuccess = { tx, completelySent ->
-                    val msgPath = out.msgPath
-                    tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
-                        val msgBuilder = msg.toBuilder()
-                        if (completelySent) {
-                            // mark the outbound message as "viewed" only once it's been completely sent
-                            messaging.markViewed(tx, msgBuilder)
+                encryptAndSendToAll(
+                    out,
+                    afterSuccess = { tx, completelySent ->
+                        val msgPath = out.msgPath
+                        tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
+                            val msgBuilder = msg.toBuilder()
+                            if (completelySent) {
+                                // mark the outbound message as "viewed" only once it's been completely sent
+                                messaging.markViewed(tx, msgBuilder)
+                            }
+                            tx.put(
+                                msgPath,
+                                msgBuilder
+                                    .setStatus(if (completelySent) Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT else Model.StoredMessage.DeliveryStatus.PARTIALLY_SENT)
+                                    .build()
+                            )
                         }
-                        tx.put(
-                            msgPath,
-                            msgBuilder
-                                .setStatus(if (completelySent) Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT else Model.StoredMessage.DeliveryStatus.PARTIALLY_SENT)
-                                .build()
-                        )
                     }
-                }) {
+                ) {
                     Model.TransferMessage.newBuilder()
                         .setMessage(msg.message.toByteString()).build()
                         .toByteArray()
@@ -278,7 +309,8 @@ internal class CryptoWorker(
                         logger.debug("error retrieving pre keys: ${err.message}")
                         retryFailed { processOutgoing(out) }
                     }
-                })
+                }
+            )
         }
     }
 
@@ -354,7 +386,8 @@ internal class CryptoWorker(
                         logger.error("failed to send: ${err.message}")
                         retryFailed { encryptAndSendTo(out, deviceId, afterSuccess, build) }
                     }
-                })
+                }
+            )
         }
     }
 
@@ -391,15 +424,13 @@ internal class CryptoWorker(
 
                     val attachmentBuilder = attachment.toBuilder()
                     if (success) {
-                        attachmentBuilder.setStatus(Model.StoredAttachment.Status.DONE)
-                        attachmentBuilder.setAttachment(
-                            attachmentBuilder.attachment.toBuilder()
-                                .setDownloadUrl(auth.downloadURL).build()
-                        )
+                        attachmentBuilder.status = Model.StoredAttachment.Status.DONE
+                        attachmentBuilder.attachment = attachmentBuilder.attachment.toBuilder()
+                            .setDownloadUrl(auth.downloadURL).build()
                     } else {
-                        attachmentBuilder.setStatus(Model.StoredAttachment.Status.FAILED)
+                        attachmentBuilder.status = Model.StoredAttachment.Status.FAILED
                         // mark the message as failed
-                        msgBuilder.setStatus(Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED)
+                        msgBuilder.status = Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED
                         // delete the outgoing short message
                         tx.delete(out.dbPath)
                         // TODO: would be nice to be able to cancel other in-flight attachment uploads to avoid wasting bandwidth here, but it's a very edge case
@@ -465,7 +496,8 @@ internal class CryptoWorker(
         }
 
         messaging.anonymousClientWorker.withClient { client ->
-            client.requestUploadAuthorizations(numToRequest,
+            client.requestUploadAuthorizations(
+                numToRequest,
                 object : Callback<List<Messages.UploadAuthorization>> {
                     override fun onSuccess(result: List<Messages.UploadAuthorization>) {
                         submit {
@@ -478,7 +510,8 @@ internal class CryptoWorker(
                         logger.debug("error retrieving upload authorizations: ${err.message}")
                         retryFailed { getMoreUploadAuthorizationsIfNecessary() }
                     }
-                })
+                }
+            )
         }
     }
 
@@ -627,7 +660,6 @@ internal class CryptoWorker(
                                 logger.error("error downloading attachment data, will try again: ${t.message}")
                                 retryFailed { downloadAttachment(inbound, attachment) }
                                 return
-
                             }
                         }
                     } finally {
@@ -696,7 +728,8 @@ internal class CryptoWorker(
                             )
                             registerPreKeys(numPreKeys)
                         }
-                    })
+                    }
+                )
             }
         }
     }

@@ -6,7 +6,8 @@ import io.lantern.messaging.store.MessagingProtocolStore
 import org.junit.After
 import org.junit.Before
 import java.io.File
-import java.util.*
+import java.util.Random
+import java.util.UUID
 
 abstract class BaseMessagingTest {
     protected var tempDir: File? = null

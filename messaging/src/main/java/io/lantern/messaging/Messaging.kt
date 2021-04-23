@@ -16,10 +16,14 @@ import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherInputStream
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
 import org.whispersystems.signalservice.internal.util.Util
-import java.io.*
+import java.io.Closeable
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.io.InputStream
 import java.nio.ByteBuffer
 import java.security.SecureRandom
-import java.util.*
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
@@ -39,7 +43,7 @@ class AttachmentTooBigException(val maxAttachmentBytes: Long) : Exception("Attac
 /**
  * This exception indicates that the file from which we attempted to create an attachment is missing
  */
-class AttachmentPlainTextMissingException() : Exception("Attachment Plaintext File Is Missing")
+class AttachmentPlainTextMissingException : Exception("Attachment Plaintext File Is Missing")
 
 class Messaging(
     parentDB: DB,
@@ -105,7 +109,6 @@ class Messaging(
             redialBackoffMillis,
             maxRedialDelayMillis
         )
-
 
     val myId: Model.ContactId
 
@@ -238,6 +241,7 @@ class Messaging(
     /**
      * Send an outbound message from the user to a direct contact
      */
+    @Throws(IllegalArgumentException::class)
     fun sendToDirectContact(
         recipientId: String,
         text: String?,
@@ -245,10 +249,14 @@ class Messaging(
         replyToId: String? = null,
         attachments: Array<Model.StoredAttachment>? = null,
     ): Model.StoredMessage {
-        if (text.isNullOrBlank() && attachments?.size == 0) {
+        if (text.isNullOrBlank() && attachments?.size == 0)
             throw IllegalArgumentException("Please specify either text or at least one attachment")
-        } else if ((!replyToSenderId.isNullOrBlank() || !replyToId.isNullOrBlank()) && (replyToSenderId.isNullOrBlank() || replyToId.isNullOrBlank())) {
-            throw IllegalArgumentException("If specifying either replyToSenderId and replyToId, please specify both")
+        else if ((!replyToSenderId.isNullOrBlank() || !replyToId.isNullOrBlank()) &&
+            (replyToSenderId.isNullOrBlank() || replyToId.isNullOrBlank())
+        ) {
+            throw IllegalArgumentException(
+                "If specifying either replyToSenderId and replyToId, please specify both"
+            )
         }
         val recipient = db.get<Model.Contact>(recipientId.directContactPath)
             ?: throw IllegalArgumentException("Unknown recipient")
@@ -305,11 +313,11 @@ class Messaging(
     internal fun markViewed(tx: Transaction, builder: Model.StoredMessage.Builder) {
         val msgPath = builder.dbPath
         if (builder.firstViewedAt == 0L) {
-            builder.setFirstViewedAt(nowUnixNano)
+            builder.firstViewedAt = nowUnixNano
             if (builder.disappearAfterSeconds > 0) {
                 // set message to disappear now that it's been viewed
-                builder.disappearAt =
-                    builder.firstViewedAt + builder.disappearAfterSeconds.toLong().secondsToMillis.millisToNanos
+                builder.disappearAt = builder.firstViewedAt +
+                    builder.disappearAfterSeconds.toLong().secondsToMillis.millisToNanos
                 tx.put(
                     builder.disappearingMessagePath,
                     msgPath
@@ -493,7 +501,9 @@ class Messaging(
                     length ?: plainTextFile.length()
                 ) > maxLength
             ) {
-                throw AttachmentTooBigException(maxLength - AttachmentCipherOutputStream.MAXIMUM_ENCRYPTION_OVERHEAD)
+                val maxPlainTextLength =
+                    maxLength - AttachmentCipherOutputStream.MAXIMUM_ENCRYPTION_OVERHEAD
+                throw AttachmentTooBigException(maxPlainTextLength)
             }
 
             val keyMaterial = ByteArray(64)
@@ -559,7 +569,7 @@ class Messaging(
         tx.put(updatedContact.timestampedIdxPath, contactPath)
     }
 
-    internal fun clearContactMetaData(
+    private fun clearContactMetaData(
         tx: Transaction,
         contactId: Model.ContactId
     ) {

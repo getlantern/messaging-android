@@ -12,13 +12,14 @@ internal class AnonymousClientWorker(
     redialBackoffMillis: Long,
     maxRedialDelayMillis: Long
 ) : ClientWorker<AnonymousClientDelegate, AnonymousClient>(
-    transportFactory,
-    messaging,
-    "anonymous",
-    roundTripTimeoutMillis,
-    redialBackoffMillis,
-    maxRedialDelayMillis
-), AnonymousClientDelegate {
+        transportFactory,
+        messaging,
+        "anonymous",
+        roundTripTimeoutMillis,
+        redialBackoffMillis,
+        maxRedialDelayMillis
+    ),
+    AnonymousClientDelegate {
     override fun buildClient(): AnonymousClient {
         return AnonymousClient(this, roundTripTimeoutMillis)
     }

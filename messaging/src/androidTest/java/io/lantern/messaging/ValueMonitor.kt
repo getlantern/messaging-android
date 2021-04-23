@@ -2,8 +2,8 @@ package io.lantern.messaging
 
 import java.util.concurrent.atomic.AtomicReference
 
-class ValueMonitor<V>(private val initialValue: V) : java.lang.Object() {
-    private val value = AtomicReference<V>(initialValue)
+class ValueMonitor<V>(initialValue: V) : java.lang.Object() {
+    private val value = AtomicReference(initialValue)
 
     fun set(v: V) {
         value.set(v)

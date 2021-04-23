@@ -1,9 +1,10 @@
+@file:Suppress("unused")
+
 package io.lantern.messaging
 
 import io.lantern.messaging.tassis.Client
 import io.lantern.messaging.tassis.ClientDelegate
 import io.lantern.messaging.tassis.TransportFactory
-import java.util.concurrent.Future
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import kotlin.math.pow
@@ -54,16 +55,19 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
                 (redialBackoffMillis * 2.0.pow(consecutiveFailures)).toLong()
             val actualRedialDelay =
                 if (maxRedialDelayMillis < redialDelay) maxRedialDelayMillis else redialDelay
-            logger.debug("due to $consecutiveFailures previous errors communicating with tassis, will wait ${actualRedialDelay}ms before dialing again")
+            logger.debug("due to $consecutiveFailures previous errors communicating with tassis, will wait ${actualRedialDelay}ms before dialing again") // ktlint-disable max-line-length
             Thread.sleep(actualRedialDelay)
         }
 
         val newClient = buildClient()
         transportFactory.connect(newClient)
-        cancelConnecting = executor.schedule({
-            logger.debug("closing client that failed to connect within timeout")
-            newClient.close()
-        }, connectTimeoutMillis, TimeUnit.MILLISECONDS)
+        cancelConnecting = executor.schedule(
+            {
+                logger.debug("closing client that failed to connect within timeout")
+                newClient.close()
+            },
+            connectTimeoutMillis, TimeUnit.MILLISECONDS
+        )
     }
 
     abstract fun buildClient(): C

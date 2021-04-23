@@ -2,17 +2,21 @@ package io.lantern.messaging
 
 import mu.KotlinLogging
 import java.io.Closeable
-import java.util.concurrent.*
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 
 internal abstract class Worker(
     protected val messaging: Messaging,
     name: String,
     retryDelayMillis: Long? = null
 ) : Closeable {
-    protected val logger = KotlinLogging.logger("${messaging.logger.name}-${name}")
+    protected val logger = KotlinLogging.logger("${messaging.logger.name}-$name")
 
     internal val executor = Executors.newSingleThreadScheduledExecutor {
-        Thread(it, "${messaging.name}-${name}-executor")
+        Thread(it, "${messaging.name}-$name-executor")
     }
 
     private val retries = LinkedBlockingQueue<() -> Unit>()
@@ -20,11 +24,14 @@ internal abstract class Worker(
     init {
         if (retryDelayMillis != null) {
             logger.debug("will automatically retry every ${retryDelayMillis}ms")
-            executor.scheduleAtFixedRate({
-                while (true) {
-                    retries.poll()?.let { submit(it) } ?: return@scheduleAtFixedRate
-                }
-            }, retryDelayMillis, retryDelayMillis, TimeUnit.MILLISECONDS)
+            executor.scheduleAtFixedRate(
+                {
+                    while (true) {
+                        retries.poll()?.let { submit(it) } ?: return@scheduleAtFixedRate
+                    }
+                },
+                retryDelayMillis, retryDelayMillis, TimeUnit.MILLISECONDS
+            )
         }
     }
 
@@ -45,11 +52,7 @@ internal abstract class Worker(
 
     internal fun <T> submitForValue(cmd: () -> T): T {
         try {
-            return executor.submit(object : Callable<T> {
-                override fun call(): T {
-                    return cmd()
-                }
-            }).get()
+            return executor.submit(Callable { cmd() }).get()
         } catch (e: ExecutionException) {
             throw e.cause ?: e
         }

@@ -46,17 +46,11 @@ val String.directContactId: Model.ContactId
 fun String.storedMessagePath(messageId: String) =
     Schema.PATH_MESSAGES.path(this, messageId)
 
-fun String.storedMessageQuery(messageId: String) =
-    Schema.PATH_MESSAGES.path(this, messageId)
-
 val Model.OutboundMessage.Builder.msgPath: String
     get() = senderId.storedMessagePath(messageId)
 
 val Model.OutboundMessage.Builder.dbPath: String
     get() = Schema.PATH_OUTBOUND.path(sent, id)
-
-fun Model.StoredMessage.inboundAttachmentPath(attachmentId: Int) =
-    Schema.PATH_INBOUND_ATTACHMENTS.path(senderId, ts, id, attachmentId)
 
 val Model.InboundAttachment.dbPath: String
     get() = Schema.PATH_INBOUND_ATTACHMENTS.path(ts, senderId, messageId, attachmentId)
