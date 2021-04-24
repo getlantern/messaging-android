@@ -38,18 +38,26 @@ re-queued here for a limited period of time until they either send successfully 
 ## Included Signal Code
 The included Signal code (like AttachmentCipherInputStream) comes from https://github.com/signalapp/Signal-Android, not from https://github.com/signalapp/libsignal-service-java
 
+## Included Apache Tika Library
+We use Apache Tika, but is contains a class that
+
 ## ktlint
 This project is formatted and linted with ktlint using the [ktlint-gradle plugin](https://github.com/JLLeitschuh/ktlint-gradle).
-
-It includes a commit hook that automatically formats any staged files on commit, so there's no need
-to auto-format in the IDE, and in fact the IDE's auto formatting will be different than ktlint
-anyway.
 
 You can install the [ktlint Intellij plugin](https://plugins.jetbrains.com/plugin/15057-ktlint-unofficial-)
 for some support for linting within Android Studio.
 
+### Add Commit Hook
+./gradlew addKtlintCheckGitPreCommitHook
+
+This adds a pre commit hook that lints all staged files upon commit.
+
 ### Manually Auto-format
 ./gradlew ktlintFormat
 
+This auto-formats all Kotlin files in the project.
+
 ### Manually Check
 ./gradlew ktlintCheck
+
+This manually runs the linter against all Kotlin files in the project.

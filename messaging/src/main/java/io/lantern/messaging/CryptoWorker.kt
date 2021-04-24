@@ -86,15 +86,19 @@ internal class CryptoWorker(
             it.value.status == Model.StoredAttachment.Status.PENDING_ENCRYPTION
         }
 
+    /**
+     * Any attachments that are pending upload or have thumbnails pending upload are considered
+     * pending.
+     */
     private val Model.StoredMessage.attachmentsPendingUpload: Map<Int, Model.StoredAttachment>
         get() = attachmentsMap.filter {
-            it.value.status == Model.StoredAttachment.Status.PENDING_UPLOAD
+            it.value.status == Model.StoredAttachment.Status.PENDING_UPLOAD ||
+                it.value.hasThumbnail() &&
+                it.value.thumbnail.status == Model.StoredAttachment.Status.PENDING_UPLOAD
         }
 
     private val Model.StoredMessage.allAttachmentsUploaded: Boolean
-        get() = attachmentsMap.values.find {
-            it.status == Model.StoredAttachment.Status.PENDING_UPLOAD
-        } == null
+        get() = attachmentsPendingUpload.isEmpty()
 
     private val Model.OutboundMessage.Builder.knowsRecipientDevices: Boolean
         get() = subDeliveryStatusesCount > 0
@@ -115,7 +119,14 @@ internal class CryptoWorker(
             replyToId?.let { msgBuilder.setReplyToId(it.fromBase32.byteString()) }
             attachmentsMap.forEach { (id, attachment) ->
                 if (attachment.status != Model.StoredAttachment.Status.FAILED) {
-                    msgBuilder.putAttachments(id, attachment.attachment)
+                    val attachmentWithThumbnail = Model.AttachmentWithThumbnail.newBuilder()
+                        .setAttachment(attachment.attachment)
+                    if (attachment.hasThumbnail() &&
+                        attachment.thumbnail.status != Model.StoredAttachment.Status.FAILED
+                    ) {
+                        attachmentWithThumbnail.thumbnail = attachment.thumbnail.attachment
+                    }
+                    msgBuilder.putAttachments(id, attachmentWithThumbnail.build())
                 }
             }
             return msgBuilder.build()
@@ -207,7 +218,15 @@ internal class CryptoWorker(
                 if (attachmentsPendingUpload.isNotEmpty()) {
                     // handle pending attachments before sending message
                     attachmentsPendingUpload.forEach { (id, attachment) ->
-                        uploadAttachment(out, msg, id, attachment)
+                        if (attachment.status == Model.StoredAttachment.Status.PENDING_UPLOAD) {
+                            uploadAttachment(out, msg, id, attachment, false)
+                        }
+                        if (attachment.hasThumbnail() &&
+                            attachment.thumbnail.status ==
+                            Model.StoredAttachment.Status.PENDING_UPLOAD
+                        ) {
+                            uploadAttachment(out, msg, id, attachment.thumbnail, true)
+                        }
                     }
                     return
                 }
@@ -225,7 +244,12 @@ internal class CryptoWorker(
                             tx.put(
                                 msgPath,
                                 msgBuilder
-                                    .setStatus(if (completelySent) Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT else Model.StoredMessage.DeliveryStatus.PARTIALLY_SENT)
+                                    .setStatus(
+                                        if (completelySent)
+                                            Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
+                                        else
+                                            Model.StoredMessage.DeliveryStatus.PARTIALLY_SENT
+                                    )
                                     .build()
                             )
                         }
@@ -360,7 +384,9 @@ internal class CryptoWorker(
                                 // re-read message to make sure we're updating the latest
                                 tx.get<Model.OutboundMessage>(out.dbPath)?.let {
                                     val completelySent =
-                                        it.subDeliveryStatusesMap.count { (_, status) -> status != Model.OutboundMessage.SubDeliveryStatus.SENT } == 1
+                                        it.subDeliveryStatusesMap.count { (_, status) ->
+                                            status != Model.OutboundMessage.SubDeliveryStatus.SENT
+                                        } == 1
                                     if (completelySent) {
                                         // we're done
                                         tx.delete(out.dbPath)
@@ -395,7 +421,8 @@ internal class CryptoWorker(
         out: Model.OutboundMessage.Builder,
         msg: Model.StoredMessage,
         id: Int,
-        attachment: Model.StoredAttachment
+        attachment: Model.StoredAttachment,
+        isThumbnail: Boolean
     ) {
         if (out.expired) {
             out.deleteFailed()
@@ -410,7 +437,8 @@ internal class CryptoWorker(
                     out,
                     msg,
                     id,
-                    attachment
+                    attachment,
+                    isThumbnail
                 )
             }
             return
@@ -421,22 +449,34 @@ internal class CryptoWorker(
                 val msgPath = out.msgPath
                 tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
                     val msgBuilder = msg.toBuilder()
+                    msgBuilder.attachmentsMap[id]?.let { readAttachment ->
+                        val attachmentBuilder = if (isThumbnail)
+                            readAttachment.thumbnail.toBuilder()
+                        else
+                            readAttachment.toBuilder()
+                        if (success) {
+                            attachmentBuilder.status = Model.StoredAttachment.Status.DONE
+                            attachmentBuilder.attachment = attachmentBuilder.attachment.toBuilder()
+                                .setDownloadUrl(auth.downloadURL).build()
+                        } else {
+                            attachmentBuilder.status = Model.StoredAttachment.Status.FAILED
+                            if (!isThumbnail) {
+                                // mark the message as failed
+                                msgBuilder.status =
+                                    Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED
+                            }
+                            // delete the outgoing short message
+                            tx.delete(out.dbPath)
+                            // TODO: would be nice to be able to cancel other in-flight attachment uploads to avoid wasting bandwidth here, but it's a very edge case
+                        }
 
-                    val attachmentBuilder = attachment.toBuilder()
-                    if (success) {
-                        attachmentBuilder.status = Model.StoredAttachment.Status.DONE
-                        attachmentBuilder.attachment = attachmentBuilder.attachment.toBuilder()
-                            .setDownloadUrl(auth.downloadURL).build()
-                    } else {
-                        attachmentBuilder.status = Model.StoredAttachment.Status.FAILED
-                        // mark the message as failed
-                        msgBuilder.status = Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED
-                        // delete the outgoing short message
-                        tx.delete(out.dbPath)
-                        // TODO: would be nice to be able to cancel other in-flight attachment uploads to avoid wasting bandwidth here, but it's a very edge case
+                        val finalAttachmentBuilder = if (isThumbnail)
+                            readAttachment.toBuilder().setThumbnail(attachmentBuilder.build())
+                        else
+                            attachmentBuilder
+                        msgBuilder.putAttachments(id, finalAttachmentBuilder.build())
                     }
 
-                    msgBuilder.putAttachments(id, attachmentBuilder.build())
                     val updatedMsg = msgBuilder.build()
                     tx.put(msgPath, updatedMsg)
 
@@ -447,7 +487,9 @@ internal class CryptoWorker(
             }
         }
 
-        if (AttachmentCipherOutputStream.getCiphertextLength(attachment.attachment.plaintextLength) > auth.maxUploadSize) {
+        val ciphertextLength =
+            AttachmentCipherOutputStream.getCiphertextLength(attachment.attachment.plaintextLength)
+        if (ciphertextLength > auth.maxUploadSize) {
             // TODO: cleanly handle case when attachment exceeds allowed size, including proper notification to user
             logger.error("attachment size exceeds allowed size of ${auth.maxUploadSize}, failing")
             updateStatus(false)
@@ -471,7 +513,7 @@ internal class CryptoWorker(
                     try {
                         val success = response.code == 204
                         if (!success) {
-                            logger.error("upload failed with unretriable status ${response.code}: ${response.body?.string()}")
+                            logger.error("upload failed with unretriable status ${response.code}: ${response.body?.string()}") // ktlint-disable max-line-length
                         }
                         updateStatus(success)
                     } finally {
@@ -482,7 +524,7 @@ internal class CryptoWorker(
 
             override fun onFailure(call: Call, e: IOException) {
                 logger.error("failed to upload attachment, will try again: ${e.message}")
-                retryFailed { uploadAttachment(out, msg, id, attachment) }
+                retryFailed { uploadAttachment(out, msg, id, attachment, isThumbnail) }
             }
         })
     }
@@ -518,7 +560,9 @@ internal class CryptoWorker(
     private fun removeExpiredUploadAuthorizations() {
         // the 30 minute fudge factor ensures that we don't take chances with using authorizations that are near expiration
         val activeAuthorizations =
-            uploadAuthorizations.filter { it.authorizationExpiresAt > nowUnixNano + 30L.minutesToMillis.millisToNanos }
+            uploadAuthorizations.filter {
+                it.authorizationExpiresAt > nowUnixNano + 30L.minutesToMillis.millisToNanos
+            }
         uploadAuthorizations.clear()
         uploadAuthorizations.addAll(activeAuthorizations)
     }
@@ -585,16 +629,32 @@ internal class CryptoWorker(
         }
         val storedMsgBuilder = msg.inbound(senderId)
         // save inbound attachments and trigger downloads
-        msg.attachmentsMap.forEach { (id, attachment) ->
-            val inboundAttachment =
+
+        msg.attachmentsMap.forEach { (id, attachmentWithThumbnail) ->
+            // this is a full size attachment, store it on the message
+            val fullSizeInboundAttachment =
                 Model.InboundAttachment.newBuilder().setSenderId(senderId)
                     .setTs(storedMsgBuilder.ts)
                     .setMessageId(storedMsgBuilder.id).setAttachmentId(id).build()
-            tx.put(inboundAttachment.dbPath, inboundAttachment)
-            val storedAttachment =
-                messaging.newStoredAttachment.setAttachment(attachment).build()
-            storedMsgBuilder.putAttachments(id, storedAttachment)
-            downloadAttachment(inboundAttachment, storedAttachment)
+            tx.put(fullSizeInboundAttachment.dbPath, fullSizeInboundAttachment)
+            val fullSizeAttachmentBuilder =
+                messaging.newStoredAttachment.setAttachment(attachmentWithThumbnail.attachment)
+            if (attachmentWithThumbnail.hasThumbnail()) {
+                // look for thumbnail
+                val inboundThumbnail =
+                    Model.InboundAttachment.newBuilder().setSenderId(senderId)
+                        .setTs(storedMsgBuilder.ts)
+                        .setMessageId(storedMsgBuilder.id).setAttachmentId(id).build()
+                tx.put(inboundThumbnail.dbPath, inboundThumbnail)
+                val thumbnail =
+                    messaging.newStoredAttachment
+                        .setAttachment(attachmentWithThumbnail.thumbnail).build()
+                fullSizeAttachmentBuilder.thumbnail = thumbnail
+                downloadAttachment(inboundThumbnail, thumbnail)
+            }
+            val fullSizeAttachment = fullSizeAttachmentBuilder.build()
+            storedMsgBuilder.putAttachments(id, fullSizeAttachment)
+            downloadAttachment(fullSizeInboundAttachment, fullSizeAttachment)
         }
 
         // save the stored message
@@ -611,16 +671,18 @@ internal class CryptoWorker(
         if (!tx.contains(senderId.directContactPath)) {
             throw UnknownSenderException(senderId, reaction.reactingToMessageId.base32)
         }
-        tx.get<Model.StoredMessage>(reaction.reactingToSenderId.base32.storedMessagePath(reaction.reactingToMessageId.base32))
-            ?.let { msg ->
-                val builder = msg.toBuilder()
-                if (reaction.emoticon.isBlank()) {
-                    builder.removeReactions(senderId)
-                } else {
-                    builder.putReactions(senderId, reaction)
-                }
-                tx.put(msg.dbPath, builder.build())
+        tx.get<Model.StoredMessage>(
+            reaction.reactingToSenderId.base32
+                .storedMessagePath(reaction.reactingToMessageId.base32)
+        )?.let { msg ->
+            val builder = msg.toBuilder()
+            if (reaction.emoticon.isBlank()) {
+                builder.removeReactions(senderId)
+            } else {
+                builder.putReactions(senderId, reaction)
             }
+            tx.put(msg.dbPath, builder.build())
+        }
     }
 
     private fun storeDisappearSettings(
@@ -633,7 +695,9 @@ internal class CryptoWorker(
             tx.put(
                 contactPath,
                 contact.toBuilder()
-                    .setMessagesDisappearAfterSeconds(disappearSettings.messagesDisappearAfterSeconds)
+                    .setMessagesDisappearAfterSeconds(
+                        disappearSettings.messagesDisappearAfterSeconds
+                    )
                     .build()
             )
         }
@@ -650,14 +714,14 @@ internal class CryptoWorker(
                     val success = response.code == 200
                     try {
                         if (!success) {
-                            logger.error("download failed with un-retriable status ${response.code}: ${response.body?.string()}")
+                            logger.error("download failed with un-retriable status ${response.code}: ${response.body?.string()}") // ktlint-disable max-line-length
                         } else {
                             try {
                                 FileOutputStream(attachment.encryptedFilePath).use { out ->
                                     Util.copy(response.body!!.byteStream(), out)
                                 }
                             } catch (t: Throwable) {
-                                logger.error("error downloading attachment data, will try again: ${t.message}")
+                                logger.error("error downloading attachment data, will try again: ${t.message}") // ktlint-disable max-line-length
                                 retryFailed { downloadAttachment(inbound, attachment) }
                                 return
                             }
@@ -671,6 +735,7 @@ internal class CryptoWorker(
                             val msgPath = inbound.msgPath
                             db.mutate { tx ->
                                 tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
+                                    // update status
                                     val status =
                                         if (!success) {
                                             Model.StoredAttachment.Status.FAILED
@@ -678,10 +743,33 @@ internal class CryptoWorker(
                                             Model.StoredAttachment.Status.DONE
                                         }
                                     val updatedMsgBuilder = msg.toBuilder()
-                                    updatedMsgBuilder.putAttachments(
-                                        inbound.attachmentId,
-                                        attachment.toBuilder().setStatus(status).build()
-                                    )
+                                    val fullSizeId =
+                                        updatedMsgBuilder.thumbnailsMap[inbound.attachmentId]
+                                    if (fullSizeId == null) {
+                                        // this is a regular attachment
+                                        val updatedAttachment = msg
+                                            .attachmentsMap[inbound.attachmentId]!!.toBuilder()
+                                            .setStatus(status).build()
+                                        updatedMsgBuilder.putAttachments(
+                                            inbound.attachmentId,
+                                            updatedAttachment
+                                        )
+                                    } else {
+                                        // this is a thumbnail
+                                        // associate thumbnail with the corresponding full-size attachment
+                                        updatedMsgBuilder.attachmentsMap[fullSizeId]
+                                            ?.let { fullSizeAttachment ->
+                                                val updatedAttachment = fullSizeAttachment
+                                                    .thumbnail
+                                                    .toBuilder()
+                                                    .setStatus(status).build()
+                                                updatedMsgBuilder.putAttachments(
+                                                    fullSizeId,
+                                                    fullSizeAttachment.toBuilder()
+                                                        .setThumbnail(updatedAttachment).build()
+                                                )
+                                            }
+                                    }
                                     tx.put(msgPath, updatedMsgBuilder.build())
                                     tx.delete(inbound.dbPath)
                                 } ?: {

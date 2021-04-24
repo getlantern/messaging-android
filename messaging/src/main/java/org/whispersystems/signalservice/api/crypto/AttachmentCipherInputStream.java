@@ -23,6 +23,7 @@ import java.security.InvalidKeyException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
+import java.util.concurrent.Callable;
 
 import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
@@ -52,14 +53,25 @@ public class AttachmentCipherInputStream extends FilterInputStream {
   private byte[]  overflowBuffer;
 
   public static InputStream createForAttachment(File file, long plaintextLength, byte[] combinedKeyMaterial, byte[] digest)
-      throws InvalidMessageException, IOException
+          throws InvalidMessageException, IOException, Exception
+  {
+    return createForAttachment(new Callable<InputStream>() {
+      @Override
+      public InputStream call() throws Exception {
+        return new FileInputStream(file);
+      }
+    }, file.length(), plaintextLength, combinedKeyMaterial, digest);
+  }
+
+  public static InputStream createForAttachment(Callable<InputStream> openInputStream, long ciphertextLength, long plaintextLength, byte[] combinedKeyMaterial, byte[] digest)
+      throws InvalidMessageException, IOException, Exception
   {
     try {
       byte[][] parts = Util.split(combinedKeyMaterial, CIPHER_KEY_SIZE, MAC_KEY_SIZE);
       Mac      mac   = Mac.getInstance("HmacSHA256");
       mac.init(new SecretKeySpec(parts[1], "HmacSHA256"));
 
-      if (file.length() <= BLOCK_SIZE + mac.getMacLength()) {
+      if (ciphertextLength <= BLOCK_SIZE + mac.getMacLength()) {
         throw new InvalidMessageException("Message shorter than crypto overhead!");
       }
 
@@ -67,11 +79,11 @@ public class AttachmentCipherInputStream extends FilterInputStream {
         throw new InvalidMacException("Missing digest!");
       }
 
-      try (FileInputStream fin = new FileInputStream(file)) {
-        verifyMac(fin, file.length(), mac, digest);
+      try (InputStream fin = openInputStream.call()) {
+        verifyMac(fin, ciphertextLength, mac, digest);
       }
 
-      InputStream inputStream = new AttachmentCipherInputStream(new FileInputStream(file), parts[0], file.length() - BLOCK_SIZE - mac.getMacLength());
+      InputStream inputStream = new AttachmentCipherInputStream(openInputStream.call(), parts[0], ciphertextLength - BLOCK_SIZE - mac.getMacLength());
 
       if (plaintextLength != 0) {
         inputStream = new ContentLengthInputStream(inputStream, plaintextLength);

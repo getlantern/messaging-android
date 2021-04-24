@@ -3,6 +3,7 @@ package io.lantern.messaging
 import com.google.protobuf.ByteString
 import io.lantern.db.DB
 import io.lantern.db.Transaction
+import io.lantern.messaging.metadata.Metadata
 import io.lantern.messaging.store.MessagingProtocolStore
 import io.lantern.messaging.tassis.Callback
 import io.lantern.messaging.tassis.Messages
@@ -16,11 +17,13 @@ import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherInputStream
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
 import org.whispersystems.signalservice.internal.util.Util
+import java.io.ByteArrayInputStream
 import java.io.Closeable
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.security.SecureRandom
 import java.util.UUID
@@ -281,9 +284,13 @@ class Messaging(
                 .setSenderId(myId.id)
                 .setRecipientId(recipientId)
         var attachmentId = 0
-        attachments?.forEach {
-            msgBuilder.putAttachments(attachmentId, it)
+        attachments?.forEach { attachment ->
+            msgBuilder.putAttachments(attachmentId, attachment)
             attachmentId++
+            if (attachment.hasThumbnail()) {
+                msgBuilder.putThumbnails(attachmentId, attachmentId - 1)
+                attachmentId++
+            }
         }
         replyToSenderId?.let { msgBuilder.setReplyToSenderId(it) }
         replyToId?.let { msgBuilder.setReplyToId(it) }
@@ -456,13 +463,26 @@ class Messaging(
         metadata: Map<String, String>? = null,
         lazy: Boolean = true,
     ): Model.StoredAttachment {
-        val attachment = Model.Attachment.newBuilder().setMimeType(mimeType)
+        val md = try {
+            Metadata.analyze(file, mimeType)
+        } catch (t: Throwable) {
+            logger.error("couldn't analyze metadata: ${t.message}")
+            null
+        }
+        val attachment = Model.Attachment.newBuilder().setMimeType(md?.mimeType ?: mimeType)
         if (metadata != null) {
             attachment.putAllMetadata(metadata)
         }
         val storedAttachment =
             newStoredAttachment.setPlainTextFilePath(file.absolutePath)
                 .setAttachment(attachment.build())
+        if (md?.thumbnail != null) {
+            storedAttachment.thumbnail = createAttachment(
+                md.thumbnailMimeType,
+                md.thumbnail.size.toLong(),
+                ByteArrayInputStream(md.thumbnail)
+            )
+        }
         if (!lazy) {
             encryptAttachment(storedAttachment)
         }
@@ -495,12 +515,26 @@ class Messaging(
         if (inputStream == null && !plainTextFile.exists()) {
             throw AttachmentPlainTextMissingException()
         }
-        (inputStream ?: FileInputStream(plainTextFile)).use { input ->
+        val attachmentBuilder = storedAttachment.attachment.toBuilder()
+        encryptAttachment(
+            attachmentBuilder,
+            inputStream ?: FileInputStream(plainTextFile),
+            FileOutputStream(storedAttachment.encryptedFilePath),
+            length ?: plainTextFile.length()
+        )
+        storedAttachment.attachment = attachmentBuilder.build()
+        storedAttachment.status = Model.StoredAttachment.Status.PENDING_UPLOAD
+    }
+
+    fun encryptAttachment(
+        attachmentBuilder: Model.Attachment.Builder,
+        inputStream: InputStream,
+        outputStream: OutputStream,
+        length: Long
+    ) {
+        inputStream.use { input ->
             val maxLength = cfg.get().maxAttachmentSize
-            if (AttachmentCipherOutputStream.getCiphertextLength(
-                    length ?: plainTextFile.length()
-                ) > maxLength
-            ) {
+            if (AttachmentCipherOutputStream.getCiphertextLength(length) > maxLength) {
                 val maxPlainTextLength =
                     maxLength - AttachmentCipherOutputStream.MAXIMUM_ENCRYPTION_OVERHEAD
                 throw AttachmentTooBigException(maxPlainTextLength)
@@ -511,16 +545,12 @@ class Messaging(
             val output =
                 AttachmentCipherOutputStream(
                     keyMaterial,
-                    FileOutputStream(storedAttachment.encryptedFilePath)
+                    outputStream
                 )
             val plaintextLength = Util.copy(input, output)
-            val attachmentBuilder =
-                storedAttachment.attachment.toBuilder()
-                    .setKeyMaterial(keyMaterial.byteString())
-                    .setPlaintextLength(plaintextLength)
-                    .setDigest(output.transmittedDigest.byteString())
-            storedAttachment.attachment = attachmentBuilder.build()
-            storedAttachment.status = Model.StoredAttachment.Status.PENDING_UPLOAD
+            attachmentBuilder.keyMaterial = keyMaterial.byteString()
+            attachmentBuilder.plaintextLength = plaintextLength
+            attachmentBuilder.digest = output.transmittedDigest.byteString()
         }
     }
 

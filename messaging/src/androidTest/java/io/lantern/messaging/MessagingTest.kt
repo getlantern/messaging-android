@@ -230,12 +230,14 @@ class MessagingTest : BaseMessagingTest() {
                             val sentMsgFromDB =
                                 dog.waitFor<Model.StoredMessage>(
                                     sentMsg.dbPath,
-                                    "message from dog to cat should have successfully sent once Cat registered pre keys"
-                                ) { it.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT }
+                                    "message from dog to cat should have successfully sent once Cat registered pre keys" // ktlint-disable max-line-length
+                                ) {
+                                    it.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
+                                }
                             assertEquals(
                                 Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT,
                                 sentMsgFromDB.status,
-                                "once cat has started registering preKeys, pending message should successfully send"
+                                "once cat has started registering preKeys, pending message should successfully send" // ktlint-disable max-line-length
                             )
 
                             // now have cat add dog as a contact
@@ -247,8 +249,10 @@ class MessagingTest : BaseMessagingTest() {
                                     Schema.PATH_MESSAGES.path("%"),
                                     "cat should have recent message"
                                 ) {
-                                    it.attachmentsMap.filter { (_, attachment) -> attachment.status == Model.StoredAttachment.Status.DONE }
-                                        .count() == 1
+                                    it.attachmentsMap
+                                        .filter { (_, attachment) ->
+                                            attachment.status == Model.StoredAttachment.Status.DONE
+                                        }.count() == 1
                                 }
                             assertEquals(
                                 dogId,
@@ -363,6 +367,7 @@ class MessagingTest : BaseMessagingTest() {
                                     )
                                 )
                             )
+                            val imageAttachment = dog.createAttachment(assetToFile("image.jpg"))
                             val sentMsg = dog.sendToDirectContact(
                                 catId,
                                 "hello cat",
@@ -370,7 +375,8 @@ class MessagingTest : BaseMessagingTest() {
                                     badAttachment,
                                     lazyAttachment,
                                     eagerAttachment,
-                                    streamAttachment
+                                    streamAttachment,
+                                    imageAttachment
                                 )
                             )
                             val recvMsg = cat.waitFor<Model.StoredMessage>(
@@ -384,27 +390,52 @@ class MessagingTest : BaseMessagingTest() {
                                 "cat should have received correct message text"
                             )
                             assertEquals(
-                                3,
+                                4,
                                 recvMsg.attachmentsCount,
-                                "cat should have received 3 attachments"
+                                "cat should have received 4 attachments"
                             )
 
-                            suspend fun readAttachment(id: Int): String {
+                            suspend fun getAttachment(id: Int): Model.StoredAttachment? {
                                 dog.waitFor<Model.StoredMessage>(
                                     recvMsg.dbPath,
                                     "waiting for attachment to download"
                                 ) {
-                                    it.attachmentsMap[id]?.status == Model.StoredAttachment.Status.DONE
+                                    it.attachmentsMap[id]?.status ==
+                                        Model.StoredAttachment.Status.DONE
                                 }.let { storedMsg ->
-                                    val out = ByteArrayOutputStream()
-                                    storedMsg.attachmentsMap[id]?.inputStream?.use { Util.copy(it, out) }
-                                    return out.toString(Charsets.UTF_8.name())
+                                    return storedMsg.attachmentsMap[id]
                                 }
                             }
 
-                            assertEquals("lazy attachment", readAttachment(1))
-                            assertEquals("eager attachment", readAttachment(2))
-                            assertEquals("stream attachment", readAttachment(3))
+                            fun text(attachment: Model.StoredAttachment?): String {
+                                val out = ByteArrayOutputStream()
+                                attachment?.inputStream?.use { Util.copy(it, out) }
+                                return out.toString(Charsets.UTF_8.name())
+                            }
+
+                            val receivedLazyAttachment = getAttachment(1)
+                            val receivedEagerAttachment = getAttachment(2)
+                            val receivedStreamAttachment = getAttachment(3)
+                            val receivedImageAttachment = getAttachment(4)
+
+                            assertEquals(
+                                "lazy attachment",
+                                text(receivedLazyAttachment)
+                            )
+                            assertEquals(
+                                "eager attachment",
+                                text(receivedEagerAttachment)
+                            )
+                            assertEquals(
+                                "stream attachment",
+                                text(receivedStreamAttachment)
+                            )
+
+                            assertEquals(
+                                "image/jpeg",
+                                receivedImageAttachment?.attachment?.mimeType
+                            )
+                            assertNotNull(receivedImageAttachment?.thumbnail)
                         }
                     }
                 }
@@ -446,7 +477,7 @@ class MessagingTest : BaseMessagingTest() {
                             assertEquals(
                                 0,
                                 dog.db.list<Any>(Schema.PATH_OUTBOUND.path("%")).size,
-                                "there should be no queued outbound messages once deliveries have succeeded and failed"
+                                "there should be no queued outbound messages once deliveries have succeeded and failed" // ktlint-disable max-line-length
                             )
                         }
                     }
@@ -591,15 +622,15 @@ class MessagingTest : BaseMessagingTest() {
                                     assertEquals(
                                         initialMsgs.received.ts,
                                         dogContact.mostRecentMessageTs,
-                                        "mostRecentMessageTs for dog should have reverted to prior message"
+                                        "mostRecentMessageTs for dog should have reverted to prior message" // ktlint-disable max-line-length
                                     )
                                     assertEquals(
                                         initialMsgs.received.text,
                                         dogContact.mostRecentMessageText,
-                                        "mostRecentMessageText for dog should have reverted to prior message"
+                                        "mostRecentMessageText for dog should have reverted to prior message" // ktlint-disable max-line-length
                                     )
                                     assertEquals(
-                                        initialMsgs.received.attachmentsMap.values.first().attachment.mimeType,
+                                        initialMsgs.received.attachmentsMap.values.first().attachment.mimeType, // ktlint-disable max-line-length
                                         dogContact.mostRecentAttachmentMimeType,
                                         "mostRecentAttachmentMimeType for dog should be blank"
                                     )
@@ -620,17 +651,17 @@ class MessagingTest : BaseMessagingTest() {
                                     assertEquals(
                                         initialMsgs.sent.ts,
                                         catContact.mostRecentMessageTs,
-                                        "mostRecentMessageTs for cat should have reverted to prior message"
+                                        "mostRecentMessageTs for cat should have reverted to prior message" // ktlint-disable max-line-length
                                     )
                                     assertEquals(
                                         initialMsgs.sent.text,
                                         catContact.mostRecentMessageText,
-                                        "mostRecentMessageText for cat should have reverted to prior message"
+                                        "mostRecentMessageText for cat should have reverted to prior message" // ktlint-disable max-line-length
                                     )
                                     assertEquals(
-                                        initialMsgs.sent.attachmentsMap.values.first().attachment.mimeType,
+                                        initialMsgs.sent.attachmentsMap.values.first().attachment.mimeType, // ktlint-disable max-line-length
                                         catContact.mostRecentAttachmentMimeType,
-                                        "mostRecentAttachmentMimeType for cat should have reverted to prior message"
+                                        "mostRecentAttachmentMimeType for cat should have reverted to prior message" // ktlint-disable max-line-length
                                     )
                                 }
 
@@ -661,7 +692,7 @@ class MessagingTest : BaseMessagingTest() {
                                     assertEquals(
                                         "",
                                         catContact.mostRecentAttachmentMimeType,
-                                        "cat contact should have no most recent message attachment mime type"
+                                        "cat contact should have no most recent message attachment mime type" // ktlint-disable max-line-length
                                     )
                                 }
                         }
@@ -719,18 +750,19 @@ class MessagingTest : BaseMessagingTest() {
                                 it.messagesDisappearAfterSeconds == 86400
                             }
 
-                            val disappearAfter =
-                                1 // this is a very short value to allow us to test that messages don't disappear before they're sent
+                            // this is a very short value to allow us to test that messages don't disappear before they're sent
+                            val disappearAfter = 1
                             dog.setDisappearSettings(catId.directContactPath, disappearAfter)
                             assertEquals(
                                 disappearAfter,
-                                dog.db.get<Model.Contact>(catContact.dbPath)?.messagesDisappearAfterSeconds,
+                                dog.db.get<Model.Contact>(catContact.dbPath)
+                                    ?.messagesDisappearAfterSeconds,
                                 "messagesDisappearAfterSeconds should have changed locally"
                             )
 
                             cat.waitFor<Model.Contact>(
                                 dogContact.dbPath,
-                                "cat should have gotten updated messagesDisappearAfterSeconds for dog contact"
+                                "cat should have gotten updated messagesDisappearAfterSeconds for dog contact" // ktlint-disable max-line-length
                             ) {
                                 it.messagesDisappearAfterSeconds == disappearAfter
                             }
@@ -759,7 +791,7 @@ class MessagingTest : BaseMessagingTest() {
                                 remoteMsg = theCat.db.get(msgs.received.dbPath)
                                 assertNotNull(
                                     remoteMsg,
-                                    "message should still not have disappeared remotely after reopening messaging"
+                                    "message should still not have disappeared remotely after reopening messaging" // ktlint-disable max-line-length
                                 )
                                 assertTrue(
                                     remoteMsg!!.firstViewedAt > 0,
@@ -890,7 +922,8 @@ class MessagingTest : BaseMessagingTest() {
                 )
                 assertEquals(
                     File(attachment.encryptedFilePath).length(),
-                    AttachmentCipherOutputStream.getCiphertextLength(attachment.attachment.plaintextLength),
+                    AttachmentCipherOutputStream
+                        .getCiphertextLength(attachment.attachment.plaintextLength),
                     testCase
                 )
             }
@@ -952,7 +985,9 @@ class MessagingTest : BaseMessagingTest() {
             // wait for all attachments to download
             recipientStoredMsg =
                 to.waitFor(recipientStoredMsg.dbPath, testCase) { storedMsg ->
-                    storedMsg.attachmentsMap.values.count { it.status != Model.StoredAttachment.Status.DONE } == 0
+                    storedMsg.attachmentsMap.values.count {
+                        it.status != Model.StoredAttachment.Status.DONE
+                    } == 0
                 }
             recipientStoredMsg.attachmentsMap.forEach { (id, attachment) ->
                 // make sure metadata matches expected
@@ -1048,7 +1083,7 @@ internal fun DB.dump() {
     val dumpString = this.list<Any>("%").sortedBy { it.path }.joinToString("\n") {
         "${it.path}: ${it.value}"
     }
-    println("DB Dump for ${this.get<Model.Contact>(Schema.PATH_ME)?.displayName}\n===============================================\n\n${dumpString}\n\n======================================")
+    println("DB Dump for ${this.get<Model.Contact>(Schema.PATH_ME)?.displayName}\n===============================================\n\n${dumpString}\n\n======================================") // ktlint-disable max-line-length
 }
 
 internal suspend fun Messaging.with(fn: suspend (messaging: Messaging) -> Unit) = this.use {

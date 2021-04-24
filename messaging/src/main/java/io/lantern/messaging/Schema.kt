@@ -53,7 +53,7 @@ val Model.OutboundMessage.Builder.dbPath: String
     get() = Schema.PATH_OUTBOUND.path(sent, id)
 
 val Model.InboundAttachment.dbPath: String
-    get() = Schema.PATH_INBOUND_ATTACHMENTS.path(ts, senderId, messageId, attachmentId)
+    get() = Schema.PATH_INBOUND_ATTACHMENTS.path(ts, senderId, messageId, attachmentId, isThumbnail)
 
 val Model.InboundAttachment.msgPath: String
     get() = Schema.PATH_MESSAGES.path(senderId, messageId)

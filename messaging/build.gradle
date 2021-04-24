@@ -35,7 +35,8 @@ android {
     sourceSets {
         main {
             proto.srcDirs += 'src/main/protos'
-            java.srcDirs += 'build/generated/source/proto/main/java' // this is a hack to get Android Studio to recognize the generated protocol buffer classes
+            java.srcDirs += 'build/generated/source/proto/main/java'
+            // this is a hack to get Android Studio to recognize the generated protocol buffer classes
         }
     }
 
@@ -50,8 +51,8 @@ android {
         exclude 'META-INF/ASL2.0'
         exclude 'META-INF/INDEX.LIST'
         exclude 'META-INF/io.netty.versions.properties'
-        pickFirst'META-INF/library_release.kotlin_module'
-        pickFirst'META-INF/lib_release.kotlin_module'
+        pickFirst 'META-INF/library_release.kotlin_module'
+        pickFirst 'META-INF/lib_release.kotlin_module'
     }
 }
 
@@ -68,8 +69,10 @@ dependencies {
 
     implementation 'com.google.protobuf:protobuf-javalite:3.10.0'
 
+    implementation 'com.j256.simplemagic:simplemagic:1.16'
+
     implementation 'com.github.getlantern:secrets-android:3ac588e'
-    implementation 'com.github.getlantern:db-android:7949495a48'
+    api 'com.github.getlantern:db-android:7949495a48'
     implementation 'com.github.getlantern:libsignal-protocol-java:5c7d676'
     implementation 'com.github.getlantern:libsignal-metadata-java:2aed184'
 

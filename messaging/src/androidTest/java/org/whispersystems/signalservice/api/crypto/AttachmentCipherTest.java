@@ -20,7 +20,7 @@ import static org.junit.Assert.assertEquals;
 public final class AttachmentCipherTest {
 
   @Test
-  public void attachment_encryptDecrypt() throws IOException, InvalidMessageException {
+  public void attachment_encryptDecrypt() throws IOException, InvalidMessageException, Exception {
     byte[]        key             = Util.getSecretBytes(64);
     byte[]        plaintextInput  = "Peter Parker".getBytes();
     EncryptResult encryptResult   = encryptData(plaintextInput, key);
@@ -34,7 +34,7 @@ public final class AttachmentCipherTest {
   }
 
   @Test
-  public void attachment_encryptDecryptEmpty() throws IOException, InvalidMessageException {
+  public void attachment_encryptDecryptEmpty() throws IOException, InvalidMessageException, Exception {
     byte[]        key             = Util.getSecretBytes(64);
     byte[]        plaintextInput  = "".getBytes();
     EncryptResult encryptResult   = encryptData(plaintextInput, key);
@@ -48,7 +48,7 @@ public final class AttachmentCipherTest {
   }
 
   @Test
-  public void attachment_decryptFailOnBadKey() throws IOException{
+  public void attachment_decryptFailOnBadKey() throws IOException, Exception {
     File    cipherFile          = null;
     boolean hitCorrectException = false;
 
@@ -73,7 +73,7 @@ public final class AttachmentCipherTest {
   }
 
   @Test
-  public void attachment_decryptFailOnBadDigest() throws IOException{
+  public void attachment_decryptFailOnBadDigest() throws IOException, Exception {
     File    cipherFile          = null;
     boolean hitCorrectException = false;
 
@@ -98,7 +98,7 @@ public final class AttachmentCipherTest {
   }
 
   @Test
-  public void attachment_decryptFailOnNullDigest() throws IOException {
+  public void attachment_decryptFailOnNullDigest() throws IOException, Exception {
     File    cipherFile          = null;
     boolean hitCorrectException = false;
 
@@ -122,7 +122,7 @@ public final class AttachmentCipherTest {
   }
 
   @Test
-  public void attachment_decryptFailOnBadMac() throws IOException {
+  public void attachment_decryptFailOnBadMac() throws IOException, Exception {
     File    cipherFile          = null;
     boolean hitCorrectException = false;
 
