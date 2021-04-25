@@ -88,7 +88,6 @@ class Metadata(val mimeType: String?, val thumbnail: ByteArray?, val thumbnailMi
                 matrix,
                 true
             )
-            bmp.recycle()
             return bmpRotated
         }
 
@@ -112,7 +111,6 @@ class Metadata(val mimeType: String?, val thumbnail: ByteArray?, val thumbnailMi
             val out = ByteArrayOutputStream()
             // We use WEBP for backward compatibility with older Android versions
             scaled.compress(Bitmap.CompressFormat.WEBP, 90, out)
-            bmp.recycle()
             return out.toByteArray()
         }
     }
