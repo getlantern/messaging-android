@@ -16,7 +16,7 @@ class MetadataTest : BaseTest() {
         assertEquals("image/jpeg", md.mimeType)
         assertNotNull(md.thumbnail)
         assertTrue(md.thumbnail!!.size < file.length())
-        assertEquals("image/jpeg", md.thumbnailMimeType)
+        assertEquals("image/webp", md.thumbnailMimeType)
     }
 
     @Test
@@ -35,7 +35,7 @@ class MetadataTest : BaseTest() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             assertNotNull(md.thumbnail)
             assertTrue(md.thumbnail!!.size < file.length())
-            assertEquals("image/jpeg", md.thumbnailMimeType)
+            assertEquals("image/webp", md.thumbnailMimeType)
         } else {
             assertNull(md.thumbnail)
         }
@@ -47,7 +47,7 @@ class MetadataTest : BaseTest() {
         val md = Metadata.analyze(file)
         assertEquals("video/mp4", md.mimeType)
         assertNotNull(md.thumbnail)
-        assertTrue(md.thumbnail!!.size < file.length())
-        assertEquals("image/jpeg", md.thumbnailMimeType)
+        assertTrue(md.thumbnail!!.size <= file.length())
+        assertEquals("image/webp", md.thumbnailMimeType)
     }
 }
