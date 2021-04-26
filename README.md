@@ -1,3 +1,5 @@
+# messaging-android
+
 ## Data Model
 
 ### /me
@@ -21,7 +23,7 @@ it's a type 4 UUID).
 An index of all messages for a given Contact, by the sent timestamp of the message.
 
 ### /dm/[disappearAt]/[senderIdentityKey]/[messageId]
-An index of all messages that are supposed to auto disappear by some time (in unix nanos)
+An index of all messages that are supposed to auto disappear by some time (in unix milliseconds)
 
 ### /spam/[senderIdentityKey]/[timestamp]/[messageId]
 Messages that aren't worth showing to the user for one reason or another.

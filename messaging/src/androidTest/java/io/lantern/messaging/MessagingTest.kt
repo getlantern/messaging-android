@@ -52,7 +52,7 @@ class MessagingTest : BaseMessagingTest() {
                             val dogId = dog.myId.id
                             val catId = cat.myId.id
 
-                            val now = nowUnixNano
+                            val now = now
                             var catContact =
                                 dog.addOrUpdateDirectContact(catId, "Cat")
                             val createdTs = catContact.createdTs
@@ -871,7 +871,7 @@ class MessagingTest : BaseMessagingTest() {
         assertEquals(Model.MessageDirection.OUT, senderStoredMsg.direction, testCase)
         assertEquals(fromId, senderStoredMsg.senderId, testCase)
         assertTrue(senderStoredMsg.ts > 0, testCase)
-        assertTrue(senderStoredMsg.ts < nowUnixNano, testCase)
+        assertTrue(senderStoredMsg.ts < now, testCase)
         if (replyToId != null) {
             assertEquals(toId, senderStoredMsg.replyToSenderId)
             assertEquals(replyToId, senderStoredMsg.replyToId)

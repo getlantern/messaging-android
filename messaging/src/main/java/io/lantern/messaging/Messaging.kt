@@ -10,7 +10,6 @@ import io.lantern.messaging.tassis.Messages
 import io.lantern.messaging.tassis.TransportFactory
 import io.lantern.messaging.tassis.byteString
 import io.lantern.messaging.time.hoursToMillis
-import io.lantern.messaging.time.millisToNanos
 import io.lantern.messaging.time.secondsToMillis
 import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
@@ -179,7 +178,7 @@ class Messaging(
                     .setContactId(contactId)
                 val isNew = existingContact == null
                 if (isNew) {
-                    contactBuilder.createdTs = nowUnixNano
+                    contactBuilder.createdTs = now
                     contactBuilder.messagesDisappearAfterSeconds =
                         defaultMessagesDisappearAfterSeconds
                 }
@@ -265,7 +264,7 @@ class Messaging(
             ?: throw IllegalArgumentException("Unknown recipient")
 
         val base32Id = randomMessageId.base32
-        val sent = nowUnixNano
+        val sent = now
         val msgBuilder =
             Model.StoredMessage.newBuilder().setId(base32Id)
                 .setContactId(recipientId.directContactId)
@@ -320,11 +319,11 @@ class Messaging(
     internal fun markViewed(tx: Transaction, builder: Model.StoredMessage.Builder) {
         val msgPath = builder.dbPath
         if (builder.firstViewedAt == 0L) {
-            builder.firstViewedAt = nowUnixNano
+            builder.firstViewedAt = now
             if (builder.disappearAfterSeconds > 0) {
                 // set message to disappear now that it's been viewed
                 builder.disappearAt = builder.firstViewedAt +
-                    builder.disappearAfterSeconds.toLong().secondsToMillis.millisToNanos
+                    builder.disappearAfterSeconds.toLong().secondsToMillis
                 tx.put(
                     builder.disappearingMessagePath,
                     msgPath
@@ -359,7 +358,7 @@ class Messaging(
                 val out =
                     Model.OutboundMessage.newBuilder()
                         .setReaction(reaction.toByteString())
-                        .setSent(nowUnixNano)
+                        .setSent(now)
                         .setSenderId(myId.id)
                         .setRecipientId(msg.contactId.id) // TODO: this will need to change for groups
                 tx.put(out.dbPath, out.build())
@@ -393,7 +392,7 @@ class Messaging(
         val out =
             Model.OutboundMessage.newBuilder()
                 .setDisappearSettings(disappearSettings.toByteString())
-                .setSent(nowUnixNano)
+                .setSent(now)
                 .setSenderId(myId.id)
                 .setRecipientId(contactId) // TODO: this will need to change for groups
         tx.put(out.dbPath, out.build())
@@ -406,7 +405,7 @@ class Messaging(
                 val out =
                     Model.OutboundMessage.newBuilder()
                         .setDeleteMessageId(msg.id.fromBase32.byteString())
-                        .setSent(nowUnixNano)
+                        .setSent(now)
                         .setSenderId(myId.id)
                         .setRecipientId(msg.contactId.id) // TODO: this will need to change for groups
                 tx.put(out.dbPath, out.build())
@@ -664,8 +663,8 @@ private val randomMessageId: ByteString
         return ByteString.copyFrom(bytes)
     }
 
-val nowUnixNano: Long
-    get() = System.currentTimeMillis().millisToNanos
+val now: Long
+    get() = System.currentTimeMillis()
 
 val Model.StoredAttachment.inputStream: InputStream
     get() = AttachmentCipherInputStream.createForAttachment(

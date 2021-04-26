@@ -25,7 +25,7 @@ fun Model.Message.inbound(senderId: String): Model.StoredMessage.Builder {
     val builder = Model.StoredMessage.newBuilder().setContactId(senderId.directContactId)
         .setSenderId(senderId)
         .setId(id.base32)
-        .setTs(nowUnixNano)
+        .setTs(now)
         .setDirection(Model.MessageDirection.IN)
         .setText(text)
         .setDisappearAfterSeconds(disappearAfterSeconds)

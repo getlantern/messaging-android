@@ -145,7 +145,7 @@ message RequestUploadAuthorizations {
 message UploadAuthorization {
   string              uploadURL              = 1; // The URL to which to upload
   map<string, string> uploadFormData         = 2; // This form data needs to be included with the upload in order to authorize it
-  int64               authorizationExpiresAt = 3; // The unix timestamp in nanoseconds when this authorization expires and can no longer be used
+  int64               authorizationExpiresAt = 3; // The unix timestamp in milliseconds when this authorization expires and can no longer be used
   int64               maxUploadSize          = 4; // The maxmimum number of bytes that are allowed to be uploaded
   string              downloadURL            = 5; // The URL from which the attachment may be downloaded once it has been uploaded
 }
@@ -180,6 +180,6 @@ message Message {
 // Used internally by tassis for messages that are to be forwarded to a federated tassis
 message ForwardedMessage {
   OutboundMessage message     = 1;  // The message that's being forwarded
-  int64           firstFailed = 2;  // The unix timestamp in nanoseconds for when the message first failed to forward
-  int64           lastFailed  = 3;  // The unix timestamp in nanoseconds for when the message most recently failed to forward
+  int64           firstFailed = 2;  // The unix timestamp in milliseconds for when the message first failed to forward
+  int64           lastFailed  = 3;  // The unix timestamp in milliseconds for when the message most recently failed to forward
 }

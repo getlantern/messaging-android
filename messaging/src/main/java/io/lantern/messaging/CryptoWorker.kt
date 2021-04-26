@@ -8,9 +8,7 @@ import io.lantern.messaging.tassis.InboundMessage
 import io.lantern.messaging.tassis.Messages
 import io.lantern.messaging.tassis.Padding
 import io.lantern.messaging.tassis.byteString
-import io.lantern.messaging.time.millisToNanos
 import io.lantern.messaging.time.minutesToMillis
-import io.lantern.messaging.time.nanosToMillis
 import okhttp3.Call
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -56,8 +54,8 @@ internal class CryptoWorker(
             ) {
                 override fun onChanges(changes: ChangeSet<String>) {
                     changes.updates.forEach { (path, msgPath) ->
-                        val scheduledTimeNanos = path.split("/")[2].toLong()
-                        val delayNanos = scheduledTimeNanos - nowUnixNano
+                        val scheduledTimeMillis = path.split("/")[2].toLong()
+                        val delayMillis = scheduledTimeMillis - now
                         executor.schedule(
                             {
                                 try {
@@ -69,7 +67,7 @@ internal class CryptoWorker(
                                     logger.error("failed to delete disappearing message: ${t.message}") // ktlint-disable max-line-length
                                 }
                             },
-                            delayNanos, TimeUnit.NANOSECONDS
+                            delayMillis, TimeUnit.MILLISECONDS
                         )
                     }
                 }
@@ -79,7 +77,7 @@ internal class CryptoWorker(
     }
 
     private val Model.OutboundMessage.Builder.expired: Boolean
-        get() = (nowUnixNano - sent).nanosToMillis > stopSendRetryAfterMillis
+        get() = (now - sent) > stopSendRetryAfterMillis
 
     private val Model.StoredMessage.attachmentsPendingEncryption: Map<Int, Model.StoredAttachment>
         get() = attachmentsMap.filter {
@@ -561,7 +559,7 @@ internal class CryptoWorker(
         // the 30 minute fudge factor ensures that we don't take chances with using authorizations that are near expiration
         val activeAuthorizations =
             uploadAuthorizations.filter {
-                it.authorizationExpiresAt > nowUnixNano + 30L.minutesToMillis.millisToNanos
+                it.authorizationExpiresAt > now + 30L.minutesToMillis
             }
         uploadAuthorizations.clear()
         uploadAuthorizations.addAll(activeAuthorizations)
@@ -581,7 +579,7 @@ internal class CryptoWorker(
             logger.error("message from unknown sender, saving to spam")
             db.mutate { tx ->
                 tx.put(
-                    spamPath(e.senderId, e.messageId, nowUnixNano),
+                    spamPath(e.senderId, e.messageId, now),
                     unidentifiedSenderMessage
                 )
             }
