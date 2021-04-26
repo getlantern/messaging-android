@@ -38,9 +38,6 @@ re-queued here for a limited period of time until they either send successfully 
 ## Included Signal Code
 The included Signal code (like AttachmentCipherInputStream) comes from https://github.com/signalapp/Signal-Android, not from https://github.com/signalapp/libsignal-service-java
 
-## Included Apache Tika Library
-We use Apache Tika, but is contains a class that
-
 ## ktlint
 This project is formatted and linted with ktlint using the [ktlint-gradle plugin](https://github.com/JLLeitschuh/ktlint-gradle).
 

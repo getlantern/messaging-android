@@ -30,7 +30,7 @@ class MessagingProtocolStoreTest : BaseMessagingTest() {
             assertEquals(
                 kp1.publicKey,
                 ECPublicKey(
-                    db.withSchema("messaging_store")
+                    db.withSchema("messaging_protocol_store")
                         .get<String>(MessagingProtocolStore.PATH_IDENTITY_KEY_PUBLIC_BASE32)
                 )
             )
@@ -38,7 +38,7 @@ class MessagingProtocolStoreTest : BaseMessagingTest() {
                 Arrays.equals(
                     kp1.privateKey.bytes,
                     ECPrivateKey(
-                        db.withSchema("messaging_store")
+                        db.withSchema("messaging_protocol_store")
                             .get<String>(MessagingProtocolStore.PATH_IDENTITY_KEY_PRIVATE_BASE32)
                     ).bytes
                 )

@@ -28,7 +28,7 @@ class ClientTest {
             assertTrue(delegate.connected.get(5000), "client should have connected")
             client.close()
         }.start()
-        assertTrue(delegate.closed.get(10000))
+        assertTrue(delegate.closed.get(30000))
     }
 
     @Test
@@ -56,7 +56,7 @@ class ClientTest {
             assertTrue(delegate.connected.get(5000), "client should have connected")
             client.close()
         }.start()
-        assertTrue(delegate.closed.get(10000), "client should have closed")
+        assertTrue(delegate.closed.get(30000), "client should have closed")
     }
 
     @Test
@@ -110,7 +110,7 @@ class ClientTest {
                 }
             )
         }.start()
-        assertTrue(delegate.closed.get(10000), "client should have closed")
+        assertTrue(delegate.closed.get(30000), "client should have closed")
     }
 }
 
