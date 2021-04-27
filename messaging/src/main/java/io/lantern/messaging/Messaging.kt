@@ -28,6 +28,7 @@ import java.security.SecureRandom
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.collections.HashSet
 
 /**
  * This exception indicates that a message was received from an unknown sender (i.e. someone not in
@@ -58,6 +59,7 @@ class Messaging(
     stopSendRetryAfterMillis: Long = 24L.hoursToMillis,
     numInitialPreKeysToRegister: Int = 5,
     private val defaultMessagesDisappearAfterSeconds: Int = 86400, // 1 day
+    private val orphanedAttachmentCutoffSeconds: Int = 86400, // 1 day
     internal val name: String = "messaging",
     defaultConfiguration: Messages.Configuration = Messages.Configuration.newBuilder()
         .setMaxAttachmentSize(100000000).build()
@@ -150,6 +152,10 @@ class Messaging(
         // this also has the welcome side effect of starting an authenticated client, which we need
         // in order to receive messages
         cryptoWorker.registerPreKeys(numInitialPreKeysToRegister)
+
+        // on startup, go through all attachments older than a day and delete any that are not in
+        // the database
+        deleteOrphanedAttachments()
     }
 
     fun setMyDisplayName(displayName: String) {
@@ -636,6 +642,48 @@ class Messaging(
         db.mutate { tx ->
             tx.put(Schema.PATH_CONFIG, newCfg)
             this.cfg.set(newCfg)
+        }
+    }
+
+    private fun deleteOrphanedAttachments() {
+        // first build a set of all known attachment paths
+        var knownAttachmentPaths = db
+            .list<Model.StoredMessage>(Schema.PATH_MESSAGES.path("%"))
+            .flatMap { msg ->
+                msg.value.attachmentsMap.values.map { attachment -> attachment.encryptedFilePath }
+            }
+        // the walk the attachments directory tree and delete any old files with no known attachment
+        // path
+        deleteOrphanedAttachments(
+            now,
+            (orphanedAttachmentCutoffSeconds * 1000).toLong(),
+            HashSet(knownAttachmentPaths),
+            attachmentsDirectory
+        )
+    }
+
+    private fun deleteOrphanedAttachments(
+        now: Long,
+        cutoffMillis: Long,
+        knownAttachmentPaths: HashSet<String>,
+        dir: File
+    ) {
+        if (dir.exists()) {
+            val files = dir.listFiles()
+            for (i in files.indices) {
+                val file = files[i]
+                if (file.isDirectory) {
+                    deleteOrphanedAttachments(now, cutoffMillis, knownAttachmentPaths, file)
+                } else {
+                    if (!knownAttachmentPaths.contains(file.absolutePath)) {
+                        val fileOldEnough = now - file.lastModified() > cutoffMillis
+                        if (fileOldEnough) {
+                            logger.debug("deleting orphaned attachment ${file.absolutePath}")
+                            file.delete()
+                        }
+                    }
+                }
+            }
         }
     }
 

@@ -444,6 +444,34 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
+    fun testOrphanedAttachment() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newMessaging(dogDB, "dog").with { dog ->
+                    val attachment = dog.createAttachment(
+                        "text/plain",
+                        5,
+                        "hello".byteInputStream(Charsets.UTF_8)
+                    )
+                    assertTrue(
+                        File(attachment.encryptedFilePath).exists(),
+                        "attachment file should have been created"
+                    )
+                    dog.close()
+                    // wait a couple of seconds
+                    delay(2000)
+                    newMessaging(dogDB, "dog").with { dog2 ->
+                        assertFalse(
+                            File(attachment.encryptedFilePath).exists(),
+                            "orphaned attachment file should have been deleted"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     fun testDeliveryStatus() {
         testInCoroutine {
             newDB.use { dogDB ->
@@ -1015,6 +1043,7 @@ class MessagingTest : BaseMessagingTest() {
         clientTimeoutMillis: Long = 5L.secondsToMillis,
         failedSendRetryDelayMillis: Long = 100,
         stopSendRetryAfterMillis: Long = 5L.minutesToMillis,
+        orphanedAttachmentCutoffSeconds: Int = 1,
     ): Messaging {
         return Messaging(
             db,
@@ -1031,6 +1060,7 @@ class MessagingTest : BaseMessagingTest() {
             maxRedialDelayMillis = 500L,
             failedSendRetryDelayMillis = failedSendRetryDelayMillis,
             stopSendRetryAfterMillis = stopSendRetryAfterMillis,
+            orphanedAttachmentCutoffSeconds = orphanedAttachmentCutoffSeconds,
             name = name
         )
     }
