@@ -48,6 +48,32 @@ class AttachmentTooBigException(val maxAttachmentBytes: Long) : Exception("Attac
  */
 class AttachmentPlainTextMissingException : Exception("Attachment Plaintext File Is Missing")
 
+/**
+ * Messaging provides an API for End to End Encrypted (E2EE) messaging, using a tassis server for
+ * key distribution and message transport. Encryption is performed using a fork of Signal.
+ *
+ * @param parentDB the database in which Messaging will store its data. Signal ProtocolStore data
+ *                 will go into the schema "messaging_protocol_store" and messaging data will go
+ *                 into schema "messaging"
+ * @param attachmentsDirectory the directory where encrypted attachments will be stored
+ * @param transportFactory a source for Transports to connect to tassis
+ * @param clientTimeoutMillis a timeout for dialing tassis and receiving an initial response
+ * @param redialBackoffMillis if connecting to tassis fails, we back off exponentially and wait
+ *                            redialBackoffMillis * 2 ^ numConsecutiveFailures before trying again
+ * @param maxRedialDelayMillis caps how long to wait between redials to tassis
+ * @param failedSendRetryDelayMillis how long to wait before retrying sends of failed messages
+ * @param stopSendRetryAfterMillis if a message has been failing for this long, we stop trying to
+ *                                 resend
+ * @param numInitialPreKeysToRegister upon startup, Messaging will register this many preKeys with
+ *                                    tassis
+ * @param defaultMessagesDisappearAfterSeconds default disappearing message timer
+ * @param orphanedAttachmentCutoffSeconds upon startup, any attachments in attachmentsDirectory that
+ *                                        aren't in the database ("orphaned") and are older than
+ *                                        orphanedAttachmentCutoffSeconds will be deleted from disk
+ * @param name a name to use for this Messaging instance in logs
+ * @param defaultConfiguration the default configuration to use prior to receiving a configuration
+ *                             from tassis
+ */
 class Messaging(
     parentDB: DB,
     private val attachmentsDirectory: File,
@@ -132,7 +158,7 @@ class Messaging(
 
         // on startup, read all pending OutboundMessages to try reprocessing them
         db.list<Model.OutboundMessage>(Schema.PATH_OUTBOUND.path("%")).forEach {
-            cryptoWorker.submit { cryptoWorker.processOutgoing(it.value.toBuilder()) }
+            cryptoWorker.submit { cryptoWorker.processOutbound(it.value.toBuilder()) }
         }
 
         // on startup, read all pending InboundAttachments to try downloading them
@@ -153,11 +179,14 @@ class Messaging(
         // in order to receive messages
         cryptoWorker.registerPreKeys(numInitialPreKeysToRegister)
 
-        // on startup, go through all attachments older than a day and delete any that are not in
-        // the database
+        // on startup, go through all attachments older than orphanedAttachmentCutoffSeconds and
+        // delete any that are not in the database
         deleteOrphanedAttachments()
     }
 
+    /**
+     * Updates the displayName associated with the "me" contact entry.
+     */
     fun setMyDisplayName(displayName: String) {
         db.mutate { tx ->
             tx.put(
@@ -168,7 +197,12 @@ class Messaging(
         }
     }
 
-    // Adds or updates the given direct Contact
+    /**
+     * Adds or updates the given direct contact.
+     *
+     * @param id the base32 encoded public identity key of the contact
+     * @param displayName the human-friendly display name for this contact
+     */
     fun addOrUpdateDirectContact(id: String, displayName: String): Model.Contact =
         addOrUpdateContact(id.directContactId, displayName)
 
@@ -211,7 +245,9 @@ class Messaging(
     }
 
     /**
-     * Deletes the specified contact and all associated data
+     * Deletes the specified contact and all associated data.
+     *
+     * @param id the base32 encoded public identity key of the contact
      */
     fun deleteDirectContact(id: String) {
         deleteContact(id.directContactId)
@@ -247,7 +283,13 @@ class Messaging(
 //    )
 
     /**
-     * Send an outbound message from the user to a direct contact
+     * Send an outbound message from the user to a direct contact.
+     *
+     * @param recipientId the base32 encoded public identity key of the recipient
+     * @param text text for the message
+     * @param replyToSenderId the id of the sender of the message to which we're replying
+     * @param replyToId the id of the message to which we're replying (if replying to a message)
+     * @param attachments any attachments to include with the message
      */
     @Throws(IllegalArgumentException::class)
     fun sendToDirectContact(
@@ -308,12 +350,15 @@ class Messaging(
             // save the message under the relevant contact messages
             tx.put(msg.contactMessagePath, msg.dbPath)
             tx.put(out.dbPath, out.build())
-            // immediately mark message viewed
-            cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
+            cryptoWorker.submit { cryptoWorker.processOutbound(out) }
             msg
         }
     }
 
+    /**
+     * Marks the message at the given path as viewed. This also starts the disappearing message
+     * timer for the message based on the configured disappearingAfterSeconds for the conversation.
+     */
     fun markViewed(msgPath: String) {
         db.mutate { tx ->
             tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
@@ -339,6 +384,13 @@ class Messaging(
         }
     }
 
+    /**
+     * Records a reaction to the message at the given msgPath, including sending the reaction to the
+     * other parties in the conversation.
+     *
+     * @param msgPath path identifying the message to which we're reacting
+     * @param emoticon 1 or 2 byte UTF emoticon for the reaction
+     */
     fun react(msgPath: String, emoticon: String) {
         if (emoticon.length > 2) {
             throw IllegalArgumentException("emoticon must no more than 2 characters in length")
@@ -368,11 +420,19 @@ class Messaging(
                         .setSenderId(myId.id)
                         .setRecipientId(msg.contactId.id) // TODO: this will need to change for groups
                 tx.put(out.dbPath, out.build())
-                cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
+                cryptoWorker.submit { cryptoWorker.processOutbound(out) }
             }
         }
     }
 
+    /**
+     * Updates the disappear settings for the conversation with the given contact, including
+     * transmitting the updated settings to the other parties in the conversation.
+     *
+     * @param contactPath path to the Contact with whom we're conversing
+     * @param disappearAfterSeconds messages in this conversation will automatically disappear after
+     *                              this many seconds
+     */
     fun setDisappearSettings(contactPath: String, disappearAfterSeconds: Int) {
         // TODO: support group contacts
         db.mutate { tx ->
@@ -402,9 +462,15 @@ class Messaging(
                 .setSenderId(myId.id)
                 .setRecipientId(contactId) // TODO: this will need to change for groups
         tx.put(out.dbPath, out.build())
-        cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
+        cryptoWorker.submit { cryptoWorker.processOutbound(out) }
     }
 
+    /**
+     * Deletes the message locally and also notifies other participants in the conversation to
+     * delete the message.
+     *
+     * @param msgPath the path identifying the message to delete.
+     */
     fun deleteGlobally(msgPath: String) {
         db.mutate { tx ->
             deleteLocally(msgPath)?.let { msg ->
@@ -415,11 +481,16 @@ class Messaging(
                         .setSenderId(myId.id)
                         .setRecipientId(msg.contactId.id) // TODO: this will need to change for groups
                 tx.put(out.dbPath, out.build())
-                cryptoWorker.submit { cryptoWorker.processOutgoing(out) }
+                cryptoWorker.submit { cryptoWorker.processOutbound(out) }
             }
         }
     }
 
+    /**
+     * Deletes the message locally only.
+     *
+     * @param msgPath the path identifying the message to delete.
+     */
     fun deleteLocally(msgPath: String): Model.StoredMessage? {
         return db.mutate { tx ->
             doDeleteLocally(tx, msgPath)
@@ -461,7 +532,14 @@ class Messaging(
         }
     }
 
-    // Creates a StoredAttachment from the given File
+    /**
+     * Creates a StoredAttachment from the given File.
+     *
+     * @param file the File from which to create the attachment
+     * @param mimeType the mime type to use if it cannot be auto-detected
+     * @param metadata arbitrary metadata to associate with the attachment
+     * @param lazy if true, we won't encrypt the attachment yet (will be encrypted upon sending)
+     */
     fun createAttachment(
         file: File,
         mimeType: String? = null,
@@ -494,7 +572,15 @@ class Messaging(
         return storedAttachment.build()
     }
 
-    // Creates a StoredAttachment from the given InputStream
+    /**
+     * Creates a StoredAttachment from the given InputStream. The attachment is immediately
+     * encrypted and stored to disk.
+     *
+     * @param mimeType the mime type to use if it cannot be auto-detected
+     * @param length length of data in inputStream
+     * @param inputStream the data to use for the attachment
+     * @param metadata arbitrary metadata to associate with the attachment
+     */
     internal fun createAttachment(
         mimeType: String? = null,
         length: Long,
@@ -511,6 +597,13 @@ class Messaging(
         return storedAttachment.build()
     }
 
+    /**
+     * Encrypts the given attachment and stores it to disk.
+     *
+     * @param storedAttachment the attachment to encrypt
+     * @param inputStream source of data to encrypt (if attachment wasn't created from a file)
+     * @param length length of data in inputStream
+     */
     fun encryptAttachment(
         storedAttachment: Model.StoredAttachment.Builder,
         inputStream: InputStream? = null,
@@ -531,7 +624,7 @@ class Messaging(
         storedAttachment.status = Model.StoredAttachment.Status.PENDING_UPLOAD
     }
 
-    fun encryptAttachment(
+    private fun encryptAttachment(
         attachmentBuilder: Model.Attachment.Builder,
         inputStream: InputStream,
         outputStream: OutputStream,
@@ -623,7 +716,9 @@ class Messaging(
         }
     }
 
-    // unregisters the current identity from tassis
+    /**
+     * Unregisters the current identity from tassis.
+     */
     fun unregister() {
         authenticatedClientWorker.withClient { client ->
             client.unregister(object : Callback<Unit> {
@@ -687,6 +782,9 @@ class Messaging(
         }
     }
 
+    /**
+     * Closes this Messaging instance, including stopping all workers and disconnecting from tassis.
+     */
     override fun close() {
         try {
             cryptoWorker.close()

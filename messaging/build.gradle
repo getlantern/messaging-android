@@ -24,10 +24,12 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
+
     kotlinOptions {
         jvmTarget = '1.8'
     }
@@ -35,8 +37,8 @@ android {
     sourceSets {
         main {
             proto.srcDirs += 'src/main/protos'
-            java.srcDirs += 'build/generated/source/proto/main/java'
             // this is a hack to get Android Studio to recognize the generated protocol buffer classes
+            java.srcDirs += 'build/generated/source/proto/main/java'
         }
     }
 

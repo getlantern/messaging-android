@@ -31,6 +31,13 @@ import java.io.IOException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
+/**
+ * CryptoWorker handles all sending and receiving of messages.
+ *
+ * Outbound messages are modeled as a work queue consisting of OutboundMessages. All encryption of
+ * outbound messages happens on a single worker thread, with another worker thread dedicated to
+ * encrypting attachments.
+ */
 internal class CryptoWorker(
     messaging: Messaging,
     retryDelayMillis: Long,
@@ -153,7 +160,7 @@ internal class CryptoWorker(
         }
     }
 
-    fun processOutgoing(out: Model.OutboundMessage.Builder) {
+    fun processOutbound(out: Model.OutboundMessage.Builder) {
         if (out.expired) {
             out.deleteFailed()
             return
@@ -205,7 +212,7 @@ internal class CryptoWorker(
                                     upToDateMsg.putAttachments(id, storedAttachment.build())
                                 }
                                 tx.put(upToDateMsg.dbPath, upToDateMsg.build())
-                                submit { processOutgoing(out) }
+                                submit { processOutbound(out) }
                             }
                         }
                     }
@@ -323,13 +330,13 @@ internal class CryptoWorker(
                                     )
                                 }
                             }
-                            processOutgoing(out)
+                            processOutbound(out)
                         }
                     }
 
                     override fun onError(err: Throwable) {
                         logger.debug("error retrieving pre keys: ${err.message}")
-                        retryFailed { processOutgoing(out) }
+                        retryFailed { processOutbound(out) }
                     }
                 }
             )
@@ -479,7 +486,7 @@ internal class CryptoWorker(
                     tx.put(msgPath, updatedMsg)
 
                     if (updatedMsg.allAttachmentsUploaded) {
-                        submit { processOutgoing(out) }
+                        submit { processOutbound(out) }
                     }
                 }
             }
