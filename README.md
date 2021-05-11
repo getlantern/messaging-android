@@ -1,6 +1,22 @@
 # messaging-android
+This library provides an API to facilitate secure end-to-end encrypted messaging on Android devices,
+backed by a [fork of libsignal](https://github.com/getlantern/libsignal-protocol-java/) and
+communicating via a [tassis](https://github.com/getlantern/tassis) messaging server.
+
+messaging-android is currently used in [Lantern](https://lantern.io/) but is intended to be usable
+by other parties in their own clients. tassis will eventually support federation, such that 3rd
+parties can host their own back end and interoperate with other messaging clients.
+
+## Protocol Buffers
+messaging-android communicates with Tassis and internally stores data using protocol buffers.
+Messages exchanged with tassis are defined in [Messages.proto](messaging/src/main/protos/Messages.proto),
+which is just a copy of the protocol buffers defined in [tassis](https://github.com/getlantern/tassis/blob/main/model/Messages.proto).
+
+The messaging-android data model is defined in [Model.proto](messaging/src/main/protos/Model.proto).
 
 ## Data Model
+messaging-android stores data in an [encrypted key-value store](https://github.com/getlantern/db-android/)
+using keys that follow the below convention.
 
 ### /me
 The contact entry for the user themselves.
