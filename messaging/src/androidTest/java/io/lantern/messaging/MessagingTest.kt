@@ -666,7 +666,7 @@ class MessagingTest : BaseMessagingTest() {
                                 replyMsgs.received.dbPath,
                                 "message should have been marked deleted for dog too"
                             ) {
-                                it.deletedBySender
+                                it.deletedBySenderAt > 0
                             }
                             assertEquals("", deletedMessage.text)
                             assertEquals(0, deletedMessage.thumbnailsCount)

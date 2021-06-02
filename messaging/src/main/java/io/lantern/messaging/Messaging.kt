@@ -521,7 +521,7 @@ class Messaging(
                 tx.put(
                     msg.dbPath,
                     msg.toBuilder()
-                        .setDeletedBySender(true)
+                        .setDeletedBySenderAt(now)
                         .clearText()
                         .clearThumbnails()
                         .clearAttachments()
@@ -834,6 +834,9 @@ private val randomMessageId: ByteString
         return ByteString.copyFrom(bytes)
     }
 
+/**
+ * The UNIX timestamp corresponding to the current instant in time, in milliseconds
+ */
 val now: Long
     get() = System.currentTimeMillis()
 
