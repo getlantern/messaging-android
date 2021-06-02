@@ -490,17 +490,21 @@ class Messaging(
      * Deletes the message locally only.
      *
      * @param msgPath the path identifying the message to delete.
+     * @param keepMetadata if true, we retain a record of the message and basic metadata, but delete
+     *                     everything else
      */
-    fun deleteLocally(msgPath: String): Model.StoredMessage? {
+    fun deleteLocally(msgPath: String, keepMetadata: Boolean = false): Model.StoredMessage? {
         return db.mutate { tx ->
-            doDeleteLocally(tx, msgPath)
+            doDeleteLocally(tx, msgPath, keepMetadata)
         }
     }
 
-    private fun doDeleteLocally(tx: Transaction, msgPath: String): Model.StoredMessage? {
+    private fun doDeleteLocally(
+        tx: Transaction,
+        msgPath: String,
+        keepMetadata: Boolean = false
+    ): Model.StoredMessage? {
         return db.get<Model.StoredMessage>(msgPath)?.let { msg ->
-            tx.delete(msgPath)
-
             // Delete attachments on disk
             // Note - we only delete attachments locally, not in the cloud, because clients
             // aren't authorized to modify files. They will naturally be deleted once they hit
@@ -511,23 +515,40 @@ class Messaging(
                 }
             }
 
-            // Delete index entries for messages under this Contact's conversation
-            tx.delete(msg.contactMessagePath)
+            if (keepMetadata) {
+                // don't actually physically delete the message yet, just clear the message content
+                // and mark it as deleted
+                tx.put(
+                    msg.dbPath,
+                    msg.toBuilder()
+                        .setDeletedBySender(true)
+                        .clearText()
+                        .clearThumbnails()
+                        .clearAttachments()
+                        .clearReactions()
+                        .build()
+                )
+            } else {
+                // Delete the message
+                tx.delete(msgPath)
 
-            // Update the Contact metadata based on the most recent remaining message
-            tx.listDetails<Model.StoredMessage>(
-                msg.contactMessagesQuery,
-                count = 1,
-                reverseSort = true
-            ).let { storedMessages ->
-                val mostRecentMsg = storedMessages.firstOrNull()
-                if (mostRecentMsg != null) {
-                    updateContactMetaData(tx, mostRecentMsg.value, force = true)
-                } else {
-                    clearContactMetaData(tx, msg.contactId)
+                // Delete index entries for messages under this Contact's conversation
+                tx.delete(msg.contactMessagePath)
+
+                // Update the Contact metadata based on the most recent remaining message
+                tx.listDetails<Model.StoredMessage>(
+                    msg.contactMessagesQuery,
+                    count = 1,
+                    reverseSort = true
+                ).let { storedMessages ->
+                    val mostRecentMsg = storedMessages.firstOrNull()
+                    if (mostRecentMsg != null) {
+                        updateContactMetaData(tx, mostRecentMsg.value, force = true)
+                    } else {
+                        clearContactMetaData(tx, msg.contactId)
+                    }
                 }
             }
-
             return@let msg
         }
     }
@@ -742,7 +763,7 @@ class Messaging(
 
     private fun deleteOrphanedAttachments() {
         // first build a set of all known attachment paths
-        var knownAttachmentPaths = db
+        val knownAttachmentPaths = db
             .list<Model.StoredMessage>(Schema.PATH_MESSAGES.path("%"))
             .flatMap { msg ->
                 msg.value.attachmentsMap.values.map { attachment -> attachment.encryptedFilePath }
@@ -764,17 +785,21 @@ class Messaging(
         dir: File
     ) {
         if (dir.exists()) {
-            val files = dir.listFiles()
-            for (i in files.indices) {
-                val file = files[i]
-                if (file.isDirectory) {
-                    deleteOrphanedAttachments(now, cutoffMillis, knownAttachmentPaths, file)
-                } else {
-                    if (!knownAttachmentPaths.contains(file.absolutePath)) {
-                        val fileOldEnough = now - file.lastModified() > cutoffMillis
-                        if (fileOldEnough) {
-                            logger.debug("deleting orphaned attachment ${file.absolutePath}")
-                            file.delete()
+            dir.listFiles().let { files ->
+                for (i in files.indices) {
+                    files[i].let { file ->
+                        if (file.isDirectory) {
+                            deleteOrphanedAttachments(now, cutoffMillis, knownAttachmentPaths, file)
+                        } else {
+                            if (!knownAttachmentPaths.contains(file.absolutePath)) {
+                                val fileOldEnough = now - file.lastModified() > cutoffMillis
+                                if (fileOldEnough) {
+                                    logger.debug(
+                                        "deleting orphaned attachment ${file.absolutePath}"
+                                    )
+                                    file.delete()
+                                }
+                            }
                         }
                     }
                 }

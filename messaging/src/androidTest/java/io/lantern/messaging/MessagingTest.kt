@@ -39,6 +39,8 @@ import kotlin.time.seconds
 
 private val logger = KotlinLogging.logger {}
 
+private const val smileyFace = "\uD83D\uDE04"
+
 @ExperimentalTime
 class MessagingTest : BaseMessagingTest() {
 
@@ -460,7 +462,7 @@ class MessagingTest : BaseMessagingTest() {
                     dog.close()
                     // wait a couple of seconds
                     delay(2000)
-                    newMessaging(dogDB, "dog").with { dog2 ->
+                    newMessaging(dogDB, "dog").with {
                         assertFalse(
                             File(attachment.encryptedFilePath).exists(),
                             "orphaned attachment file should have been deleted"
@@ -516,7 +518,6 @@ class MessagingTest : BaseMessagingTest() {
 
     @Test
     fun testReactions() {
-        val smileyFace = "\uD83D\uDE04"
         testInCoroutine {
             newDB.use { dogDB ->
                 newDB.use { catDB ->
@@ -618,19 +619,16 @@ class MessagingTest : BaseMessagingTest() {
                                 "cat responds to dog",
                                 cat,
                                 dog,
-                                "howdie",
+                                "howdy",
                                 replyToId = initialMsgs.sent.id,
                                 attachments = arrayOf(
-                                    dog.createAttachment(
-                                        "text/plain",
-                                        "attachment for dog".length.toLong(),
-                                        ByteArrayInputStream(
-                                            "attachment for dog".toByteArray(
-                                                Charsets.UTF_8
-                                            )
-                                        )
-                                    )
+                                    dog.createAttachment(assetToFile("image.jpg"))
                                 )
+                            )
+
+                            dog.react(
+                                replyMsgs.received.dbPath,
+                                smileyFace
                             )
 
                             // globally delete cat's reply
@@ -664,16 +662,30 @@ class MessagingTest : BaseMessagingTest() {
                                     )
                                 }
 
-                            dog.waitForNull(
+                            val deletedMessage = dog.waitFor<Model.StoredMessage>(
                                 replyMsgs.received.dbPath,
-                                "message should have been deleted for dog too"
-                            )
+                                "message should have been marked deleted for dog too"
+                            ) {
+                                it.deletedBySender
+                            }
+                            assertEquals("", deletedMessage.text)
+                            assertEquals(0, deletedMessage.thumbnailsCount)
+                            assertEquals(0, deletedMessage.attachmentsCount)
+                            assertEquals(0, deletedMessage.reactionsCount)
+
                             replyMsgs.received.attachmentsMap.values.forEach { storedAttachment ->
                                 assertFalse(
                                     File(storedAttachment.encryptedFilePath).exists(),
                                     "attachment file should have been deleted for dog too"
                                 )
                             }
+
+                            // dog locally deletes cat's message to clear remaining metadata
+                            dog.deleteLocally(deletedMessage.dbPath)
+                            dog.waitForNull(
+                                replyMsgs.received.dbPath,
+                                "message should have been completely deleted for dog"
+                            )
                             dog.db.get<Model.Contact>(replyMsgs.received.contactId.contactPath)!!
                                 .let { catContact ->
                                     assertEquals(
@@ -887,7 +899,7 @@ class MessagingTest : BaseMessagingTest() {
         }
 
         // send a message
-        val senderStoredMsg = from.sendToDirectContact(
+        var senderStoredMsg = from.sendToDirectContact(
             toId,
             text,
             attachments = attachments,
@@ -932,6 +944,17 @@ class MessagingTest : BaseMessagingTest() {
             testCase
         )
 
+        // wait for attachments to finish sending
+        senderStoredMsg = from.waitFor(
+            senderStoredMsg.dbPath,
+            "wait for attachments to send"
+        ) { storedMsg ->
+            storedMsg.attachmentsMap.values.find {
+                (it.status != Model.StoredAttachment.Status.DONE) ||
+                    (it.hasThumbnail() && it.thumbnail.status != Model.StoredAttachment.Status.DONE)
+            } == null
+        }
+
         if (attachments != null) {
             assertEquals(attachments.size, senderStoredMsg.attachmentsCount, testCase)
             assertEquals(
@@ -949,9 +972,9 @@ class MessagingTest : BaseMessagingTest() {
                     testCase
                 )
                 assertEquals(
-                    File(attachment.encryptedFilePath).length(),
+                    File(storedAttachment.encryptedFilePath).length(),
                     AttachmentCipherOutputStream
-                        .getCiphertextLength(attachment.attachment.plaintextLength),
+                        .getCiphertextLength(storedAttachment.attachment.plaintextLength),
                     testCase
                 )
             }
@@ -1010,24 +1033,28 @@ class MessagingTest : BaseMessagingTest() {
                 storedContact.mostRecentAttachmentMimeType,
                 testCase
             )
-            // wait for all attachments to download
+            // wait for all attachments and thumbnails to download
             recipientStoredMsg =
                 to.waitFor(recipientStoredMsg.dbPath, testCase) { storedMsg ->
-                    storedMsg.attachmentsMap.values.count {
-                        it.status != Model.StoredAttachment.Status.DONE
-                    } == 0
+                    storedMsg.attachmentsMap.values.find {
+                        (it.status != Model.StoredAttachment.Status.DONE) ||
+                            (
+                                it.hasThumbnail() &&
+                                    it.thumbnail.status != Model.StoredAttachment.Status.DONE
+                                )
+                    } == null
                 }
             recipientStoredMsg.attachmentsMap.forEach { (id, attachment) ->
                 // make sure metadata matches expected
                 assertEquals(
-                    attachments[id].attachment.metadataMap,
+                    senderStoredMsg.getAttachmentsOrThrow(id).attachment.metadataMap,
                     attachment.attachment.metadataMap
                 )
                 // make sure decrypted content matches expected
                 assertTrue(
                     Util.streamsEqual(
                         attachment.inputStream,
-                        attachments[id].inputStream,
+                        senderStoredMsg.getAttachmentsOrThrow(id).inputStream,
                     ),
                     testCase
                 )

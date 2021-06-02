@@ -591,7 +591,9 @@ internal class CryptoWorker(
                 )
             }
         } catch (e: Exception) {
-            logger.error("unexpected problem decrypting and storing message, dropping: ${e.message}")
+            logger.error(
+                "unexpected problem decrypting and storing message, dropping: ${e.message}"
+            )
         }
     }
 
@@ -614,7 +616,8 @@ internal class CryptoWorker(
                     Model.Reaction.parseFrom(transferMsg.reaction)
                 )
                 Model.TransferMessage.ContentCase.DELETEMESSAGEID -> messaging.deleteLocally(
-                    senderId.storedMessagePath(transferMsg.deleteMessageId.base32)
+                    senderId.storedMessagePath(transferMsg.deleteMessageId.base32),
+                    keepMetadata = true
                 )
                 Model.TransferMessage.ContentCase.DISAPPEARSETTINGS -> storeDisappearSettings(
                     tx,
@@ -649,7 +652,9 @@ internal class CryptoWorker(
                 val inboundThumbnail =
                     Model.InboundAttachment.newBuilder().setSenderId(senderId)
                         .setTs(storedMsgBuilder.ts)
-                        .setMessageId(storedMsgBuilder.id).setAttachmentId(id).build()
+                        .setIsThumbnail(true)
+                        .setMessageId(storedMsgBuilder.id)
+                        .setAttachmentId(id).build()
                 tx.put(inboundThumbnail.dbPath, inboundThumbnail)
                 val thumbnail =
                     messaging.newStoredAttachment
@@ -748,9 +753,7 @@ internal class CryptoWorker(
                                             Model.StoredAttachment.Status.DONE
                                         }
                                     val updatedMsgBuilder = msg.toBuilder()
-                                    val fullSizeId =
-                                        updatedMsgBuilder.thumbnailsMap[inbound.attachmentId]
-                                    if (fullSizeId == null) {
+                                    if (!inbound.isThumbnail) {
                                         // this is a regular attachment
                                         val updatedAttachment = msg
                                             .attachmentsMap[inbound.attachmentId]!!.toBuilder()
@@ -762,14 +765,14 @@ internal class CryptoWorker(
                                     } else {
                                         // this is a thumbnail
                                         // associate thumbnail with the corresponding full-size attachment
-                                        updatedMsgBuilder.attachmentsMap[fullSizeId]
+                                        updatedMsgBuilder.attachmentsMap[inbound.attachmentId]
                                             ?.let { fullSizeAttachment ->
                                                 val updatedAttachment = fullSizeAttachment
                                                     .thumbnail
                                                     .toBuilder()
                                                     .setStatus(status).build()
                                                 updatedMsgBuilder.putAttachments(
-                                                    fullSizeId,
+                                                    inbound.attachmentId,
                                                     fullSizeAttachment.toBuilder()
                                                         .setThumbnail(updatedAttachment).build()
                                                 )
