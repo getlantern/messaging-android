@@ -14,14 +14,14 @@ internal class AuthenticatedClientWorker(
     redialBackoffMillis: Long,
     maxRedialDelayMillis: Long
 ) : ClientWorker<AuthenticatedClientDelegate, AuthenticatedClient>(
-        transportFactory,
-        messaging,
-        "authenticated",
-        roundTripTimeoutMillis,
-        redialBackoffMillis,
-        maxRedialDelayMillis,
-        autoConnect = true
-    ),
+    transportFactory,
+    messaging,
+    "authenticated",
+    roundTripTimeoutMillis,
+    redialBackoffMillis,
+    maxRedialDelayMillis,
+    autoConnect = true
+),
     AuthenticatedClientDelegate {
     override fun buildClient(): AuthenticatedClient {
         return AuthenticatedClient(
