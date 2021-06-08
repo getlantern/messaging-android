@@ -9,6 +9,11 @@ import io.lantern.messaging.tassis.Messages
 import io.lantern.messaging.tassis.Padding
 import io.lantern.messaging.tassis.byteString
 import io.lantern.messaging.time.minutesToMillis
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import okhttp3.Call
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -25,11 +30,6 @@ import org.whispersystems.libsignal.state.PreKeyRecord
 import org.whispersystems.libsignal.state.SignedPreKeyRecord
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
 import org.whispersystems.signalservice.internal.util.Util
-import java.io.File
-import java.io.FileOutputStream
-import java.io.IOException
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 
 /**
  * CryptoWorker handles all sending and receiving of messages.
