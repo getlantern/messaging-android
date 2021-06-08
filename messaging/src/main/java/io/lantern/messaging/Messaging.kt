@@ -11,11 +11,6 @@ import io.lantern.messaging.tassis.TransportFactory
 import io.lantern.messaging.tassis.byteString
 import io.lantern.messaging.time.hoursToMillis
 import io.lantern.messaging.time.secondsToMillis
-import mu.KotlinLogging
-import org.whispersystems.libsignal.DeviceId
-import org.whispersystems.signalservice.api.crypto.AttachmentCipherInputStream
-import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
-import org.whispersystems.signalservice.internal.util.Util
 import java.io.ByteArrayInputStream
 import java.io.Closeable
 import java.io.File
@@ -29,6 +24,11 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.collections.HashSet
+import mu.KotlinLogging
+import org.whispersystems.libsignal.DeviceId
+import org.whispersystems.signalservice.api.crypto.AttachmentCipherInputStream
+import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
+import org.whispersystems.signalservice.internal.util.Util
 
 /**
  * This exception indicates that a message was received from an unknown sender (i.e. someone not in
@@ -488,19 +488,23 @@ class Messaging(
      * Deletes the message locally only.
      *
      * @param msgPath the path identifying the message to delete.
-     * @param keepMetadata if true, we retain a record of the message and basic metadata, but delete
-     *                     everything else
+     * @param remotelyDeletedBy if this deletion was remotely requested, set the id of the requester
+     *                          here. When remotely requested, we retain a record of the message and
+     *                          basic metadata, but delete everything else.
      */
-    fun deleteLocally(msgPath: String, keepMetadata: Boolean = false): Model.StoredMessage? {
+    fun deleteLocally(
+        msgPath: String,
+        remotelyDeletedBy: Model.ContactId? = null
+    ): Model.StoredMessage? {
         return db.mutate { tx ->
-            doDeleteLocally(tx, msgPath, keepMetadata)
+            doDeleteLocally(tx, msgPath, remotelyDeletedBy)
         }
     }
 
     private fun doDeleteLocally(
         tx: Transaction,
         msgPath: String,
-        keepMetadata: Boolean = false
+        remotelyDeletedBy: Model.ContactId? = null
     ): Model.StoredMessage? {
         return db.get<Model.StoredMessage>(msgPath)?.let { msg ->
             // Delete attachments on disk
@@ -513,20 +517,27 @@ class Messaging(
                 }
             }
 
-            if (keepMetadata) {
+            remotelyDeletedBy?.let {
+                if (remotelyDeletedBy != msg.contactId) {
+                    throw IllegalArgumentException(
+                        "Messages can only be remotely deleted by the original sender"
+                    )
+                }
+
                 // don't actually physically delete the message yet, just clear the message content
                 // and mark it as deleted
                 tx.put(
                     msg.dbPath,
                     msg.toBuilder()
-                        .setDeletedBySenderAt(now)
+                        .setRemotelyDeletedBy(remotelyDeletedBy)
+                        .setRemotelyDeletedAt(now)
                         .clearText()
                         .clearThumbnails()
                         .clearAttachments()
                         .clearReactions()
                         .build()
                 )
-            } else {
+            } ?: run {
                 // Delete the message
                 tx.delete(msgPath)
 

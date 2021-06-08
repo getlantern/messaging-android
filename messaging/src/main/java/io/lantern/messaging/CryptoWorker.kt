@@ -619,7 +619,7 @@ internal class CryptoWorker(
                     senderId.storedMessagePath(transferMsg.deleteMessageId.base32),
                     // We keep metadata so that the recipient's UI still has an empty placeholder for the deleted message.
                     // Once the recipient chooses to delete this message locally, the metadata will be deleted.
-                    keepMetadata = true
+                    remotelyDeletedBy = senderId.directContactId,
                 )
                 Model.TransferMessage.ContentCase.DISAPPEARSETTINGS -> storeDisappearSettings(
                     tx,

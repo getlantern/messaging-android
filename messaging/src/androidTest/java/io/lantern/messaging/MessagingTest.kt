@@ -8,18 +8,6 @@ import io.lantern.messaging.tassis.websocket.WSListener
 import io.lantern.messaging.tassis.websocket.WebSocketTransportFactory
 import io.lantern.messaging.time.minutesToMillis
 import io.lantern.messaging.time.secondsToMillis
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import mu.KotlinLogging
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
-import okio.ByteString
-import org.junit.Test
-import org.whispersystems.libsignal.util.KeyHelper
-import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
-import org.whispersystems.signalservice.internal.util.Util
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -36,6 +24,18 @@ import kotlin.test.fail
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 import kotlin.time.seconds
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import mu.KotlinLogging
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okio.ByteString
+import org.junit.Test
+import org.whispersystems.libsignal.util.KeyHelper
+import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
+import org.whispersystems.signalservice.internal.util.Util
 
 private val logger = KotlinLogging.logger {}
 
@@ -631,6 +631,18 @@ class MessagingTest : BaseMessagingTest() {
                                 smileyFace
                             )
 
+                            // try to remotely delete message with someone other than sender
+                            var bogusContactId = "blahblah".directContactId
+                            try {
+                                dog.deleteLocally(
+                                    replyMsgs.received.dbPath,
+                                    remotelyDeletedBy = bogusContactId
+                                )
+                                fail("deletion by anyone other than sender of message should not have been allowed") // ktlint-disable max-line-length
+                            } catch (e: IllegalArgumentException) {
+                                // okay
+                            }
+
                             // globally delete cat's reply
                             cat.deleteGlobally(replyMsgs.sent.dbPath)
                             assertNull(
@@ -666,8 +678,9 @@ class MessagingTest : BaseMessagingTest() {
                                 replyMsgs.received.dbPath,
                                 "message should have been marked deleted for dog too"
                             ) {
-                                it.deletedBySenderAt > 0
+                                it.remotelyDeletedAt > 0
                             }
+                            assertEquals(deletedMessage.contactId, deletedMessage.remotelyDeletedBy)
                             assertEquals("", deletedMessage.text)
                             assertEquals(0, deletedMessage.thumbnailsCount)
                             assertEquals(0, deletedMessage.attachmentsCount)
