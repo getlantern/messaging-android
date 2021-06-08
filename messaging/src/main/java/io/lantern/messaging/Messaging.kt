@@ -301,9 +301,7 @@ class Messaging(
     ): Model.StoredMessage {
         if (text.isNullOrBlank() && attachments?.size == 0)
             throw IllegalArgumentException("Please specify either text or at least one attachment")
-        else if ((!replyToSenderId.isNullOrBlank() || !replyToId.isNullOrBlank()) &&
-            (replyToSenderId.isNullOrBlank() || replyToId.isNullOrBlank())
-        ) {
+        else if (replyToSenderId.isNullOrBlank() != replyToId.isNullOrBlank()) {
             throw IllegalArgumentException(
                 "If specifying either replyToSenderId and replyToId, please specify both"
             )
