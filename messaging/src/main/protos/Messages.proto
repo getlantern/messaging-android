@@ -48,7 +48,7 @@ option java_package = "io.lantern.messaging.tassis";
 // Acknowledges successful receipt of a Message
 message Ack {}
 
-// Indicates than an error occurred processing a request.
+// Indicates that an error occurred processing a request.
 message Error {
   string name        = 1;  // An identifier for the error, like "unknown_identity"
   string description = 2;  // Optional additional information about the error
@@ -62,7 +62,7 @@ message Address {
 
 // Provides configuration information to clients
 message Configuration {
-  int64 maxAttachmentSize = 1; // The maxmimum allows attachment size (encrypted size, not plaintext)
+  int64 maxAttachmentSize = 1; // The maximum allowed attachment size (encrypted size, not plaintext)
 }
 
 // Login information supplied by clients in response to an AuthChallenge.
@@ -136,6 +136,11 @@ message OutboundMessage {
   bytes   unidentifiedSenderMessage = 2;  // A sealed sender message (opaque to tassis). This is what will be delivered to the recipient.
 }
 
+// An inbound message from another client to the currently authenticated client
+message InboundMessage {
+  bytes unidentifiedSenderMessage = 3; // A sealed sender message (opaque to tassis).
+}
+
 // Requests attachment upload authorizations.
 message RequestUploadAuthorizations {
   int32 numRequested = 1; // the number of authorizations requested. The server may not return the number requested.
@@ -173,7 +178,7 @@ message Message {
     RequestUploadAuthorizations requestUploadAuthorizations = 13;
     UploadAuthorizations        uploadAuthorizations        = 14;
     OutboundMessage             outboundMessage             = 15;
-    bytes                       inboundMessage              = 16;
+    InboundMessage              inboundMessage              = 16;
   }
 }
 

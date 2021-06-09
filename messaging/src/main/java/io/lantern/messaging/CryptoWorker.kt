@@ -88,7 +88,7 @@ internal class CryptoWorker(
 
     private val Model.StoredMessage.attachmentsPendingEncryption: Map<Int, Model.StoredAttachment>
         get() = attachmentsMap.filter {
-            it.value.status == Model.StoredAttachment.Status.PENDING_ENCRYPTION
+            it.value.status == Model.StoredAttachment.Status.PENDING
         }
 
     /**

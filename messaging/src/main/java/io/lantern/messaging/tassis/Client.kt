@@ -4,16 +4,16 @@
 package io.lantern.messaging.tassis
 
 import com.google.protobuf.ByteString
-import mu.KotlinLogging
-import org.whispersystems.libsignal.DeviceId
-import org.whispersystems.libsignal.SignalProtocolAddress
-import org.whispersystems.libsignal.ecc.ECPublicKey
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import mu.KotlinLogging
+import org.whispersystems.libsignal.DeviceId
+import org.whispersystems.libsignal.SignalProtocolAddress
+import org.whispersystems.libsignal.ecc.ECPublicKey
 
 internal val logger = KotlinLogging.logger {}
 
@@ -107,7 +107,7 @@ class InboundMessage internal constructor(
     private val client: AuthenticatedClient
 ) {
     val data: ByteString
-        get() = msg.inboundMessage
+        get() = msg.inboundMessage.unidentifiedSenderMessage
 
     fun ack() {
         try {
@@ -116,7 +116,7 @@ class InboundMessage internal constructor(
                     .setAck(Messages.Ack.newBuilder().build()).build()
             )
         } catch (t: Throwable) {
-            logger.trace("ack failed with error '${t.message}', this can happen if the client connection was closed before we could process the inbound message, in which case we might get the same message again later, which is okay")
+            logger.trace("ack failed with error '${t.message}', this can happen if the client connection was closed before we could process the inbound message, in which case we might get the same message again later, which is okay") // ktlint-disable max-line-length
         }
     }
 }
@@ -320,7 +320,8 @@ class AuthenticatedClient(
             Messages.Message.PayloadCase.AUTHCHALLENGE -> processAuth(msg.authChallenge)
             Messages.Message.PayloadCase.PREKEYS -> pending.remove(msg.sequence)
                 ?.onSuccess(msg.preKeys)
-            Messages.Message.PayloadCase.PREKEYSLOW -> delegate.onPreKeysLow(msg.preKeysLow.keysRequested)
+            Messages.Message.PayloadCase.PREKEYSLOW ->
+                delegate.onPreKeysLow(msg.preKeysLow.keysRequested)
             Messages.Message.PayloadCase.INBOUNDMESSAGE -> delegate.onInboundMessage(
                 InboundMessage(
                     msg,
