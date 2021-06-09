@@ -4,12 +4,15 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.lantern.messaging.ValueMonitor
 import io.lantern.messaging.tassis.MessageHandler
 import io.lantern.messaging.tassis.Transport
-import org.junit.runner.RunWith
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import org.junit.runner.RunWith
+
+// this is a special byte sequence that tassis recognizes and closes the connection on its end
+private val forceClose = "forceclose".toByteArray(Charsets.UTF_8)
 
 @RunWith(AndroidJUnit4::class)
 class WebSocketTransportTest {
@@ -38,7 +41,7 @@ class WebSocketTransportTest {
             factory.connect(handler)
             val transport = handler.transport.get(5000)
             assertNotNull(transport, "handler should have gotten Transport")
-            transport.send("forceclose".toByteArray(Charsets.UTF_8)) // this is a special byte sequence that tassis recognizes and closes the connection on its end
+            transport.send(forceClose)
         }.start()
         assertNotNull(handler.message.get(2000), "should have received message")
         assertTrue(handler.closed.get(2000), "handler should have been notified of close")

@@ -62,9 +62,9 @@ val Model.Contact.pathSegment: String
     get() = contactId.pathSegment
 
 val Model.ContactId.pathSegment: String
-    get() = if (type == Model.ContactType.DIRECT) Schema.CONTACT_DIRECT_PREFIX.path(id) else Schema.CONTACT_GROUP_PREFIX.path(
-        id
-    )
+    get() = if (type == Model.ContactType.DIRECT)
+        Schema.CONTACT_DIRECT_PREFIX.path(id)
+    else Schema.CONTACT_GROUP_PREFIX.path(id)
 
 val Model.Contact.dbPath: String get() = contactId.contactPath
 

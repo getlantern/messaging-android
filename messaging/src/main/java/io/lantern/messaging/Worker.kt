@@ -1,17 +1,21 @@
 package io.lantern.messaging
 
-import mu.KotlinLogging
 import java.io.Closeable
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import mu.KotlinLogging
 
+/**
+ * Worker is a base type for classes that coordinate work using a single-threaded work queue. It
+ * provides facilities for submitting work to the queue for immediate or delayed execution.
+ */
 internal abstract class Worker(
     protected val messaging: Messaging,
     name: String,
-    retryDelayMillis: Long? = null
+    private val retryDelayMillis: Long? = null
 ) : Closeable {
     protected val logger = KotlinLogging.logger("${messaging.logger.name}-$name")
 
@@ -42,7 +46,6 @@ internal abstract class Worker(
                     cmd()
                 } catch (t: Throwable) {
                     logger.error(t.message, t)
-                    retryFailed(cmd)
                 }
             }
         } catch (t: Throwable) {
@@ -59,6 +62,9 @@ internal abstract class Worker(
     }
 
     protected fun retryFailed(cmd: () -> Unit) {
+        if (retryDelayMillis == null) {
+            throw Exception("Attempted to retry but retries are disabled")
+        }
         retries.add(cmd)
     }
 

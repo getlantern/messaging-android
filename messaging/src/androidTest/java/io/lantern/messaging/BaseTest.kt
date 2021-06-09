@@ -1,11 +1,11 @@
 package io.lantern.messaging
 
 import androidx.test.platform.app.InstrumentationRegistry
-import org.junit.After
-import org.junit.Before
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Random
+import org.junit.After
+import org.junit.Before
 
 abstract class BaseTest {
     protected var tempDir: File? = null

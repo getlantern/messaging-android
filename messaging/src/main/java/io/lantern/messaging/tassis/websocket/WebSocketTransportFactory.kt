@@ -3,6 +3,7 @@ package io.lantern.messaging.tassis.websocket
 import io.lantern.messaging.tassis.MessageHandler
 import io.lantern.messaging.tassis.Transport
 import io.lantern.messaging.tassis.TransportFactory
+import java.util.concurrent.TimeUnit
 import mu.KotlinLogging
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -10,7 +11,6 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
-import java.util.concurrent.TimeUnit
 
 private val logger = KotlinLogging.logger {}
 

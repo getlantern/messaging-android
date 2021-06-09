@@ -2,11 +2,11 @@ package io.lantern.messaging.metadata
 
 import android.os.Build
 import io.lantern.messaging.BaseTest
-import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import org.junit.Test
 
 class MetadataTest : BaseTest() {
     @Test

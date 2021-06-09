@@ -18,19 +18,19 @@ The messaging-android data model is defined in [Model.proto](messaging/src/main/
 messaging-android stores data in an [encrypted key-value store](https://github.com/getlantern/db-android/)
 using keys that follow the below convention.
 
-### /me
+### /me (Model.Contact)
 The contact entry for the user themselves.
 
-### /contacts/d/[identityKey]
+### /contacts/d/[identityKey] (Model.Contact)
 A direct contact, identified by their public IdentityKey
 
-### /contacts/g/[groupId]
+### /contacts/g/[groupId] (Model.Contact)
 A group contact, identified by its group id
 
 ### /cba/[timestamp]/[d/[identityKey]|g/[groupId]]
 An index of Contacts by most recent activity. A given Contact will appear only once in this index.
 
-### /m/[senderIdentityKey]/[messageId]
+### /m/[senderIdentityKey]/[messageId] (Model.StoredMessage)
 The full content of all Messages are stored here, including both sent and received messages.
 The messageId is an id that's unique for messages sent from the given senderIdentityKey (in practice
 it's a type 4 UUID).
@@ -41,15 +41,15 @@ An index of all messages for a given Contact, by the sent timestamp of the messa
 ### /dm/[disappearAt]/[senderIdentityKey]/[messageId]
 An index of all messages that are supposed to auto disappear by some time (in unix milliseconds)
 
-### /spam/[senderIdentityKey]/[timestamp]/[messageId]
+### /spam/[senderIdentityKey]/[timestamp]/[messageId] (Model.StoredMessage)
 Messages that aren't worth showing to the user for one reason or another.
 
-### /o/[timestamp]/[messageId]
+### /o/[timestamp]/[messageId] (Model.OutboundMessage)
 A queue of outbound messages that are pending send. If sending to some recipients fails, messages
 will be re-queued here for a limited period of time until they either send successfully or time
 runs out.
 
-### /ia/[senderIdentityKey]/[timestamp]/[messageId]/[attachmentId]
+### /ia/[senderIdentityKey]/[timestamp]/[messageId]/[attachmentId] (Model.InboundAttachment)
 A queue of inbound attachments that are pending download. If downloading fails, downloads will be
 re-queued here for a limited period of time until they either send successfully or time runs out.
 

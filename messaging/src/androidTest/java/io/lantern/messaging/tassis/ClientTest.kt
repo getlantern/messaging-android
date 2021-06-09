@@ -4,16 +4,16 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.lantern.messaging.ValueMonitor
 import io.lantern.messaging.tassis.websocket.WSTransport
 import io.lantern.messaging.tassis.websocket.WebSocketTransportFactory
-import okhttp3.WebSocket
-import org.junit.runner.RunWith
-import org.whispersystems.libsignal.DeviceId
-import org.whispersystems.libsignal.SignalProtocolAddress
-import org.whispersystems.libsignal.util.KeyHelper
 import java.util.concurrent.TimeoutException
 import kotlin.test.Test
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
+import okhttp3.WebSocket
+import org.junit.runner.RunWith
+import org.whispersystems.libsignal.DeviceId
+import org.whispersystems.libsignal.SignalProtocolAddress
+import org.whispersystems.libsignal.util.KeyHelper
 
 @RunWith(AndroidJUnit4::class)
 class ClientTest {
