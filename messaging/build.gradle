@@ -1,0 +1,105 @@
+plugins {
+    id 'com.android.library'
+    id 'kotlin-android'
+    id 'com.google.protobuf' version '0.8.15'
+}
+
+android {
+    compileSdkVersion 30
+    buildToolsVersion "30.0.3"
+
+    defaultConfig {
+        minSdkVersion 19
+        targetSdkVersion 30
+        versionCode 1
+        versionName "1.0"
+        multiDexEnabled true
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+
+    sourceSets {
+        main {
+            proto.srcDirs += 'src/main/protos'
+            // this is a hack to get Android Studio to recognize the generated protocol buffer classes
+            java.srcDirs += 'build/generated/source/proto/main/java'
+        }
+    }
+
+    packagingOptions {
+        exclude 'META-INF/DEPENDENCIES'
+        exclude 'META-INF/LICENSE'
+        exclude 'META-INF/LICENSE.txt'
+        exclude 'META-INF/license.txt'
+        exclude 'META-INF/NOTICE'
+        exclude 'META-INF/NOTICE.txt'
+        exclude 'META-INF/notice.txt'
+        exclude 'META-INF/ASL2.0'
+        exclude 'META-INF/INDEX.LIST'
+        exclude 'META-INF/io.netty.versions.properties'
+        pickFirst 'META-INF/library_release.kotlin_module'
+        pickFirst 'META-INF/lib_release.kotlin_module'
+    }
+}
+
+dependencies {
+
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
+    implementation 'androidx.core:core-ktx:1.3.2'
+    implementation 'org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:0.3.3'
+
+    implementation("com.squareup.okhttp3:okhttp:4.9.1")
+    implementation "ch.qos.logback:logback-classic:1.2.3"
+
+    implementation 'io.github.microutils:kotlin-logging:1.12.5'
+
+    implementation 'com.google.protobuf:protobuf-javalite:3.10.0'
+
+    implementation 'com.j256.simplemagic:simplemagic:1.16'
+
+    implementation 'com.github.getlantern:secrets-android:66a9adb621'
+    api 'com.github.getlantern:db-android:806f292832'
+    implementation 'com.github.getlantern:libsignal-protocol-java:5c7d676'
+    implementation 'com.github.getlantern:libsignal-metadata-java:2aed184'
+
+    testImplementation 'junit:junit:4.13.2'
+
+    androidTestImplementation 'org.jetbrains.kotlin:kotlin-test'
+    androidTestImplementation 'org.jetbrains.kotlin:kotlin-test-junit'
+    androidTestImplementation 'androidx.test:runner:1.3.0'
+    androidTestImplementation 'androidx.test:rules:1.3.0'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.2'
+    androidTestImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.3.8'
+}
+
+protobuf {
+    protoc {
+        artifact = 'com.google.protobuf:protoc:3.10.0'
+    }
+
+    generateProtoTasks {
+        all().each { task ->
+            task.builtins {
+                java {
+                    option "lite"
+                }
+            }
+        }
+    }
+}

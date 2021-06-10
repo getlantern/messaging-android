@@ -1,0 +1,2 @@
+include ':messaging'
+rootProject.name = "messaging-android"

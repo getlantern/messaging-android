@@ -1,0 +1,190 @@
+/**
+ * tassis uses an asynchronous messaging pattern for interacting with the API.
+ *
+ * Clients typically connect to tassis via WebSockets to exchange messages.
+ *
+ * Clients will typically open two separate connections, authenticating on one and leaving
+ * the other unauthenticated.
+ *
+ * The unauthenticated connection is used for retrieving other identities' preKeys and
+ * sending messages to them, so as not to reveal the identityKey of senders.
+ *
+ * The authenticated connection is used for all other operations, including performing key
+ * management and receiving messages from other identities.
+ *
+ * Authentication is performed using a challenge-response pattern in which the server sends
+ * an authentication challenge to the client and the client responds with a signed authentication
+ * response identifying its identityKey and deviceId. On anonymous connections, clients simply ignore the
+ * authentication challenge.
+ *
+ * Messages sent from clients to servers follow a request/response pattern. The server will always
+ * respond to these with either an Ack or a typed response. In the event of an error, it will respond
+ * with an Error message. This includes the following messages:
+ *
+ *  - Register        -> Ack
+ *  - Unregister      -> Ack
+ *  - RequestPreKeys  -> PreKeys
+ *  - OutboundMessage -> Ack
+ *
+ * Some messages sent from the server to the client require an Ack in response:
+ *
+ *  - inboundMessage  -> Ack
+ *
+ * Some messages don't require any response:
+ *
+ *  - PreKeysLow
+ *
+ * All messages sent within a given connection are identified by a unique sequence number (separate sequences
+ * for each direction). When a response message is sent in either direction, its sequence number is set to the
+ * message that triggered the response so that the client or server can correlate responses with requests.
+ */
+syntax = "proto3";
+
+package tassis;
+
+option go_package = "github.com/getlantern/tassis/model";
+option java_package = "io.lantern.messaging.tassis";
+
+// Acknowledges successful receipt of a Message
+message Ack {}
+
+// Indicates that an error occurred processing a request.
+message Error {
+  string name        = 1;  // An identifier for the error, like "unknown_identity"
+  string description = 2;  // Optional additional information about the error
+}
+
+// An Address for a specific client
+message Address {
+  bytes identityKey = 1;  // The 32 byte ed25519 public key that uniquely identifies an identity (e.g. a user)
+  bytes deviceId    = 2;  // Identifier for a specific device, only unique for a given identityKey
+}
+
+// Provides configuration information to clients
+message Configuration {
+  int64 maxAttachmentSize = 1; // The maximum allowed attachment size (encrypted size, not plaintext)
+}
+
+// Login information supplied by clients in response to an AuthChallenge.
+message Login {
+  Address address = 1;  // The Address that's logging in. This will become permanently associated with the current connection
+  bytes   nonce   = 2;  // This echoes back the nonce provided by the server in the AuthChallenge
+}
+
+// A challenge to the client to authenticate. This is sent by the server once and only once, immediately after clients connect.
+message AuthChallenge {
+  bytes nonce = 1;  // A nonce to identify this authentication exchange
+}
+
+// A response to an AuthChallenge that is sent from the client to the server on any connection that the client wishes to authenticate.
+// The server will accept an AuthResponse only once per connection.
+message AuthResponse {
+  bytes login     = 1;  // The serialized form of the Login message
+  bytes signature = 2;  // A signature of the serialized Login message calculated using the private key corresponding to the IdentityKey that's logging in
+}
+
+// Requires authentication
+//
+// A request to register a signed preKey and some set of one-time use preKeys. PreKeys are used by clients to perform X3DH key agreement in order to
+// establish end-to-end encrypted sessions.
+//
+// This information is registered in the database under the client's Address. If multiple registrations are received, if signedPreKey matches the
+// information on file, the new preKeys will be appended to the ones already on file. Otherwise, the existing registration will be replaced by the
+// latest.
+message Register {
+  bytes          signedPreKey   = 1;  // The signedPreKey for this device.
+  repeated bytes oneTimePreKeys = 2;  // Zero, one or more disposable preKeys for this device.
+}
+
+// Requires authentication
+//
+// Removes the recorded registration for the client's Address.
+message Unregister {}
+
+// Requires anonymous connection
+//
+// A request to retrieve preKey information for all registered devices for the given identityKey except those listed in knownDeviceIds.
+message RequestPreKeys {
+  bytes          identityKey    = 1;  // The identityKey for which to retrieve preKeys.
+  repeated bytes knownDeviceIds = 2;  // Devices of this identity which the client already knows about and doesn't need preKeys for.
+}
+
+// Information about a PreKey for a specific Address.
+message PreKey {
+  bytes deviceId       = 1;  // The deviceId that this key material belongs to
+  bytes signedPreKey   = 2;  // The most recent signedPreKey for the device at this Address. See https://crypto.stackexchange.com/questions/72148/signal-protocol-how-is-signed-preKey-created
+  bytes oneTimePreKey  = 3;  // One disposable preKey for the device at this Address. May be empty if none were available (that's okay, Signal can still do an X3DH key agreement without it).
+}
+
+// A list of PreKeys for all of an identityKey's devices, sent in response to RequestPreKeys
+message PreKeys {
+  repeated PreKey preKeys = 1;  // One or more preKeys
+}
+
+// A notification from the server to the client that we're running low on oneTimePreKeys for the Address associated to this connection.
+//
+// Clients may choose to respond to this by sending a Register message with some more preKeys. This does not have to be tied to the initial PreKeysLow message.
+message PreKeysLow {
+  uint32 keysRequested = 1;  // The number of additional oneTimePreKeys that the server is requesting.
+}
+
+// Requires anonymous connection
+//
+// A message from one client to another.
+message OutboundMessage {
+  Address to                        = 1;  // The Address of the message recipient
+  bytes   unidentifiedSenderMessage = 2;  // A sealed sender message (opaque to tassis). This is what will be delivered to the recipient.
+}
+
+// An inbound message from another client to the currently authenticated client
+message InboundMessage {
+  bytes unidentifiedSenderMessage = 3; // A sealed sender message (opaque to tassis).
+}
+
+// Requests attachment upload authorizations.
+message RequestUploadAuthorizations {
+  int32 numRequested = 1; // the number of authorizations requested. The server may not return the number requested.
+}
+
+// Provides authorization to upload an attachment to cloud storage
+message UploadAuthorization {
+  string              uploadURL              = 1; // The URL to which to upload
+  map<string, string> uploadFormData         = 2; // This form data needs to be included with the upload in order to authorize it
+  int64               authorizationExpiresAt = 3; // The unix timestamp in milliseconds when this authorization expires and can no longer be used
+  int64               maxUploadSize          = 4; // The maxmimum number of bytes that are allowed to be uploaded
+  string              downloadURL            = 5; // The URL from which the attachment may be downloaded once it has been uploaded
+}
+
+// Multiple UploadAuthorizations
+message UploadAuthorizations {
+  repeated UploadAuthorization authorizations = 1;
+}
+
+// The envelope for all messages sent to/from clients.
+message Message {
+  uint32 sequence = 1; // the message sequence, either a unique number for request messages or the number of the request message to which a response message corresponds
+
+  oneof payload {
+    Ack                         ack                         =  2;
+    Error                       error                       =  3;
+    Configuration               configuration               =  4;
+    AuthChallenge               authChallenge               =  5;
+    AuthResponse                authResponse                =  6;
+    Register                    register                    =  7;
+    Unregister                  unregister                  =  8;
+    RequestPreKeys              requestPreKeys              =  9;
+    PreKeys                     preKeys                     = 10;
+    PreKeysLow                  preKeysLow                  = 12;
+    RequestUploadAuthorizations requestUploadAuthorizations = 13;
+    UploadAuthorizations        uploadAuthorizations        = 14;
+    OutboundMessage             outboundMessage             = 15;
+    InboundMessage              inboundMessage              = 16;
+  }
+}
+
+// Used internally by tassis for messages that are to be forwarded to a federated tassis
+message ForwardedMessage {
+  OutboundMessage message     = 1;  // The message that's being forwarded
+  int64           firstFailed = 2;  // The unix timestamp in milliseconds for when the message first failed to forward
+  int64           lastFailed  = 3;  // The unix timestamp in milliseconds for when the message most recently failed to forward
+}
