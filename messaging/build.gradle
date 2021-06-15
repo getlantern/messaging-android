@@ -69,7 +69,7 @@ dependencies {
 
     implementation 'io.github.microutils:kotlin-logging:1.12.5'
 
-    implementation 'com.google.protobuf:protobuf-javalite:3.10.0'
+    api 'com.google.protobuf:protobuf-javalite:3.10.0'
 
     implementation 'com.j256.simplemagic:simplemagic:1.16'
 
