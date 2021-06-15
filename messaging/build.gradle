@@ -73,6 +73,8 @@ dependencies {
 
     implementation 'com.j256.simplemagic:simplemagic:1.16'
 
+    implementation 'net.sourceforge.streamsupport:android-retrofuture:1.7.3'
+
     implementation 'com.github.getlantern:secrets-android:66a9adb621'
     api 'com.github.getlantern:db-android:806f292832'
     implementation 'com.github.getlantern:libsignal-protocol-java:5c7d676'
