@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.collections.ArrayList
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -772,6 +773,11 @@ class MessagingTest : BaseMessagingTest() {
                                 catContact.messagesDisappearAfterSeconds,
                                 "messagesDisappearAfterSeconds should have defaulted to 1 day"
                             )
+                            assertEquals(
+                                0L,
+                                catContact.firstReceivedMessageTs,
+                                "contact should initially have no firstReceivedMessageTs"
+                            )
 
                             // immediately hack the disappear settings to something different to make sure that the initial synchronization messages work
                             dog.db.mutate { tx ->
@@ -790,12 +796,14 @@ class MessagingTest : BaseMessagingTest() {
                                     )
                                 }
                             }
-                            dog.waitFor<Model.Contact>(
+                            val updatedCatContact = dog.waitFor<Model.Contact>(
                                 catId.directContactPath,
                                 "cat's initial disappear settings should arrive"
                             ) {
                                 it.messagesDisappearAfterSeconds == 86400
                             }
+                            assertNotEquals(0L, updatedCatContact.firstReceivedMessageTs)
+
                             cat.waitFor<Model.Contact>(
                                 dogId.directContactPath,
                                 "dog's initial disappear settings should arrive"
@@ -1014,6 +1022,7 @@ class MessagingTest : BaseMessagingTest() {
         assertTrue(storedContact != null, testCase)
         assertEquals(fromId, storedContact.contactId.id, testCase)
         assertEquals(recipientStoredMsg.ts, storedContact.mostRecentMessageTs, testCase)
+        assertNotEquals(0L, storedContact.firstReceivedMessageTs)
         assertEquals(
             recipientStoredMsg.direction,
             storedContact.mostRecentMessageDirection,
