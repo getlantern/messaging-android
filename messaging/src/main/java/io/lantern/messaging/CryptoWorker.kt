@@ -825,13 +825,16 @@ internal class CryptoWorker(
     ) {
         val contactPath = senderId.directContactPath
         tx.get<Model.Contact>(contactPath)?.let { contact ->
+            val updatedContactBuilder = contact.toBuilder()
+                .setMessagesDisappearAfterSeconds(
+                    disappearSettings.messagesDisappearAfterSeconds
+                )
+            if (contact.firstReceivedMessageTs == 0L) {
+                updatedContactBuilder.firstReceivedMessageTs = now
+            }
             tx.put(
                 contactPath,
-                contact.toBuilder()
-                    .setMessagesDisappearAfterSeconds(
-                        disappearSettings.messagesDisappearAfterSeconds
-                    )
-                    .build()
+                updatedContactBuilder.build()
             )
         }
     }

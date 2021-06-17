@@ -785,6 +785,9 @@ class Messaging(
             updatedContactBuilder.mostRecentAttachmentMimeType =
                 msg.attachmentsMap.values.iterator().next().attachment.mimeType
         }
+        if (contact.firstReceivedMessageTs == 0L && msg.direction == Model.MessageDirection.IN) {
+            updatedContactBuilder.firstReceivedMessageTs = now
+        }
         val updatedContact = updatedContactBuilder.build()
         tx.put(contactPath, updatedContact)
         // create a new index entry
