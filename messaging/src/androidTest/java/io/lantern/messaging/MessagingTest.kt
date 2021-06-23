@@ -315,6 +315,72 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
+    fun testResend() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newDB.use { catDB ->
+                    // use a relatively short stopSendRetryAfterMillis to make sure message fails
+                    // in a reasonable amount of time
+                    newMessaging(
+                        dogDB,
+                        "dog",
+                        stopSendRetryAfterMillis = 5L.secondsToMillis
+                    ).with { dog ->
+                        val catStore = newStore(catDB)
+                        val dogId = dog.myId.id
+                        val catId = catStore.identityKeyPair.publicKey.toString()
+
+                        dog.addOrUpdateDirectContact(catId, "Cat")
+                        // Immediately try to send message before cat's messaging system has come
+                        // online. At this point, there are not registered pre-keys for cat, so
+                        // sending will fail.
+                        val sentMsg = dog.sendToDirectContact(catId, "hello cat")
+                        val failedMsg = dog.waitFor<Model.StoredMessage>(
+                            sentMsg.dbPath,
+                            "initial send should fail"
+                        ) {
+                            it.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_FAILED
+                        }
+
+                        newMessaging(catDB, "cat").with { cat ->
+                            cat.addOrUpdateDirectContact(dogId, "Dog")
+
+                            // now that cat has come online, we should get pre-keys, so try to
+                            // resend
+                            dog.resendFailedMessage(failedMsg.id)
+                            dog.waitFor<Model.StoredMessage>(
+                                sentMsg.dbPath,
+                                "resend should succeed"
+                            ) {
+                                it.status == Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
+                            }
+
+                            val recvMsg = cat.waitFor<Model.StoredMessage>(
+                                sentMsg.dbPath,
+                                "cat should receive message"
+                            )
+
+                            try {
+                                cat.resendFailedMessage("fakemessageid")
+                                fail("resending non-existing message should fail")
+                            } catch (e: java.lang.IllegalArgumentException) {
+                                assertEquals("Message not found", e.message)
+                            }
+
+                            try {
+                                cat.resendFailedMessage(recvMsg.id)
+                                fail("resending message that wasn't sent by us should fail")
+                            } catch (e: java.lang.IllegalArgumentException) {
+                                assertEquals("Message not found", e.message)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     fun testAttachments() {
         testInCoroutine {
             newDB.use { dogDB ->
@@ -938,6 +1004,16 @@ class MessagingTest : BaseMessagingTest() {
             assertEquals(replyToId, senderStoredMsg.replyToId)
         }
         assertEquals(text, senderStoredMsg.text, testCase)
+
+        if (ignoreSendsForMillis > 0) {
+            // attempt to resend while message is still sending (should not be allowed)
+            try {
+                from.resendFailedMessage(senderStoredMsg.id)
+                fail("Resending while message was still sending should have failed")
+            } catch (e: java.lang.IllegalArgumentException) {
+                assertEquals("Message is still in the process of sending", e.message)
+            }
+        }
 
         // make sure the contact has been updated and that there's only one index entry
         var storedContact =
