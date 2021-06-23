@@ -82,7 +82,7 @@ class Messaging(
     redialBackoffMillis: Long = 500L,
     maxRedialDelayMillis: Long = 15L.secondsToMillis,
     failedSendRetryDelayMillis: Long = 5L.secondsToMillis,
-    stopSendRetryAfterMillis: Long = 24L.hoursToMillis,
+    stopSendRetryAfterMillis: Long = 1000 * 365 * 24L.hoursToMillis, // approximately 1000 years
     numInitialPreKeysToRegister: Int = 5,
     private val defaultMessagesDisappearAfterSeconds: Int = 86400, // 1 day
     private val orphanedAttachmentCutoffSeconds: Int = 86400, // 1 day
