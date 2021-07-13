@@ -85,7 +85,7 @@ class Messaging(
     redialBackoffMillis: Long = 500L,
     maxRedialDelayMillis: Long = 15L.secondsToMillis,
     failedSendRetryDelayMillis: Long = 5L.secondsToMillis,
-    stopSendRetryAfterMillis: Long = 24L.hoursToMillis,
+    stopSendRetryAfterMillis: Long = 1000 * 365 * 24L.hoursToMillis, // approximately 1000 years
     numInitialPreKeysToRegister: Int = 5,
     private val defaultMessagesDisappearAfterSeconds: Int = 86400, // 1 day
     private val orphanedAttachmentCutoffSeconds: Int = 86400, // 1 day
@@ -414,6 +414,39 @@ class Messaging(
         val signal = WebRTCSignal(senderId, senderDeviceId, content.toByteArray())
         webRTCSignalingSubscribers.values.forEach { subscriber ->
             subscriber(signal)
+        }
+    }
+
+    /*
+     * Re-sends the failed message identified by messageId to all recipients to whom we were unable
+     * to send the message.
+     *
+     * throws IllegalArgumentException if the message couldn't be found, wasn't sent by us, is
+     *        already in the process of sending or was already successfully sent.
+     */
+    @Throws(IllegalArgumentException::class)
+    fun resendFailedMessage(messageId: String) {
+        db.mutate { tx ->
+            tx.get<Model.StoredMessage>(myId.id.storedMessagePath(messageId)).let { msg ->
+                if (msg == null) {
+                    throw java.lang.IllegalArgumentException("Message not found")
+                }
+                when (msg.status) {
+                    Model.StoredMessage.DeliveryStatus.SENDING ->
+                        throw IllegalArgumentException("Message is still in the process of sending")
+                    Model.StoredMessage.DeliveryStatus.PARTIALLY_SENT ->
+                        throw IllegalArgumentException("Message is still in the process of sending")
+                    Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT ->
+                        throw IllegalArgumentException("Message was already successfully sent")
+                }
+
+                val out = Model.OutboundMessage.newBuilder().setMessageId(messageId)
+                    .setSent(now)
+                    .setSenderId(myId.id)
+                    .setRecipientId(msg.contactId.id)
+                tx.put(out.dbPath, out.build())
+                cryptoWorker.submit { cryptoWorker.processOutbound(out) }
+            }
         }
     }
 

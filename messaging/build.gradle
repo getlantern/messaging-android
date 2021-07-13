@@ -76,7 +76,7 @@ dependencies {
     implementation 'net.sourceforge.streamsupport:android-retrofuture:1.7.3'
 
     implementation 'com.github.getlantern:secrets-android:66a9adb621'
-    api 'com.github.getlantern:db-android:806f292832'
+    api 'com.github.getlantern:db-android:db23e4a298'
     implementation 'com.github.getlantern:libsignal-protocol-java:5c7d676'
     implementation 'com.github.getlantern:libsignal-metadata-java:2aed184'
 
