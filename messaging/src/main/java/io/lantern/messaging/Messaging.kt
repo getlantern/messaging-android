@@ -3,12 +3,12 @@ package io.lantern.messaging
 import com.google.protobuf.ByteString
 import io.lantern.db.DB
 import io.lantern.db.Transaction
+import io.lantern.messaging.conversions.byteString
 import io.lantern.messaging.metadata.Metadata
 import io.lantern.messaging.store.MessagingProtocolStore
 import io.lantern.messaging.tassis.Callback
 import io.lantern.messaging.tassis.Messages
 import io.lantern.messaging.tassis.TransportFactory
-import io.lantern.messaging.tassis.byteString
 import io.lantern.messaging.time.hoursToMillis
 import io.lantern.messaging.time.secondsToMillis
 import java.io.ByteArrayInputStream
@@ -609,12 +609,7 @@ class Messaging(
         metadata: Map<String, String>? = null,
         lazy: Boolean = true,
     ): Model.StoredAttachment {
-        val md = try {
-            Metadata.analyze(file, mimeType)
-        } catch (t: Throwable) {
-            logger.error("couldn't analyze metadata: ${t.message}")
-            null
-        }
+        val md = Metadata.analyze(file, mimeType)
         val attachment = Model.Attachment.newBuilder().setMimeType(md?.mimeType ?: mimeType)
         if (metadata != null) {
             attachment.putAllMetadata(metadata)

@@ -2,6 +2,7 @@ package io.lantern.messaging.metadata
 
 import android.os.Build
 import io.lantern.messaging.BaseTest
+import io.lantern.messaging.Model
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -49,5 +50,27 @@ class MetadataTest : BaseTest() {
         assertNotNull(md.thumbnail)
         assertTrue(md.thumbnail!!.size <= file.length())
         assertEquals("image/webp", md.thumbnailMimeType)
+    }
+
+    @Test
+    fun testAudio() {
+        val file = assetToFile("clap.opus")
+        val md = Metadata.analyze(file)
+        assertNotNull(md)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            assertNull(md.thumbnail)
+        } else {
+            assertNotNull(md)
+            assertEquals("audio/opus", md.mimeType)
+            assertNotNull(md.thumbnail)
+            assertTrue(md.thumbnail!!.size < file.length())
+            assertEquals("application/x-lantern-waveform", md.thumbnailMimeType)
+
+            // The audio file contains mostly silence and a single loud clap. Make sure that the
+            // waveform reflects this by having a much higher peak than average value.
+            val bars = Model.AudioWaveform.parseFrom(md.thumbnail).bars.toByteArray()
+            val peak = bars.maxOrNull()!!
+            assertTrue(peak.toDouble() / bars.average() > 300)
+        }
     }
 }

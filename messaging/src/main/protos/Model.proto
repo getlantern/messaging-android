@@ -156,3 +156,8 @@ message InboundAttachment {
   int32 attachmentId = 4; // The id of the attachment within the Message
   bool isThumbnail = 5; // indicates if this is a download of a thumbnail
 }
+
+// An audio waveform
+message AudioWaveform {
+  bytes bars = 1; // amplitude bars of the waveform, encoded as bytes.
+}
