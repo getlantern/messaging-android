@@ -3,11 +3,11 @@ package io.lantern.messaging
 import io.lantern.db.ChangeSet
 import io.lantern.db.Subscriber
 import io.lantern.db.Transaction
+import io.lantern.messaging.conversions.byteString
 import io.lantern.messaging.tassis.Callback
 import io.lantern.messaging.tassis.InboundMessage
 import io.lantern.messaging.tassis.Messages
 import io.lantern.messaging.tassis.Padding
-import io.lantern.messaging.tassis.byteString
 import io.lantern.messaging.time.minutesToMillis
 import java.io.File
 import java.io.FileOutputStream

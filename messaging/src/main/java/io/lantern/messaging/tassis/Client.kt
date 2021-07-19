@@ -1,6 +1,7 @@
 package io.lantern.messaging.tassis
 
 import com.google.protobuf.ByteString
+import io.lantern.messaging.conversions.byteString
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -463,10 +464,6 @@ class AnonymousClient(
 
 fun ByteArray.message(): Messages.Message {
     return Messages.Message.parseFrom(this)
-}
-
-fun ByteArray.byteString(): ByteString {
-    return ByteString.copyFrom(this)
 }
 
 class ClientClosedException : Exception("Client closed")
