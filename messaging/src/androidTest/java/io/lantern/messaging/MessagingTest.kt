@@ -89,7 +89,24 @@ class MessagingTest : BaseMessagingTest() {
                             )
 
                             cat.addOrUpdateDirectContact(dogId, "Dog")
-                            val msgs = sendAndVerify("cat sends message to dog", cat, dog, "hi dog")
+                            sendAndVerify(
+                                "cat sends a message to dog",
+                                cat,
+                                dog,
+                                "hi dog"
+                            )
+                            sendAndVerify(
+                                "dog sends a message to cat",
+                                dog,
+                                cat,
+                                "hi cat"
+                            )
+                            val msgs = sendAndVerify(
+                                "cat sends another message to dog",
+                                cat,
+                                dog,
+                                "hello again dog"
+                            )
 
                             dog.deleteDirectContact(catId)
                             assertFalse(dog.db.contains(catId.directContactId.contactPath))

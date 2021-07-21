@@ -256,13 +256,12 @@ class Messaging(
     private fun deleteContact(contactId: Model.ContactId) {
         return cryptoWorker.submitForValue {
             db.mutate { tx ->
-                tx.delete(contactId.contactPath)
+                tx.list<String>(contactId.contactMessagesQuery)
+                    .forEach { doDeleteLocally(tx, it.value) }
                 db.listPaths(contactId.contactByActivityQuery).forEach {
                     tx.delete(it)
                 }
                 tx.listPaths(contactId.spamQuery).forEach { path -> tx.delete(path) }
-                tx.list<String>(contactId.contactMessagesQuery)
-                    .forEach { doDeleteLocally(tx, it.value) }
                 when (contactId.type) {
                     Model.ContactType.DIRECT -> {
                         store.deleteAllSessions(contactId.id)
@@ -271,6 +270,7 @@ class Messaging(
                         // TODO: support group contacts
                     }
                 }
+                tx.delete(contactId.contactPath)
             }
         }
     }
