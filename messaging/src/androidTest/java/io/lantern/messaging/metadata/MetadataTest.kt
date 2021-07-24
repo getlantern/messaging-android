@@ -8,6 +8,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.Test
+import java.lang.StringBuilder
 
 class MetadataTest : BaseTest() {
     @Test
@@ -69,8 +70,29 @@ class MetadataTest : BaseTest() {
             // The audio file contains mostly silence and a single loud clap. Make sure that the
             // waveform reflects this by having a much higher peak than average value.
             val bars = Model.AudioWaveform.parseFrom(md.thumbnail).bars.toByteArray()
-            val peak = bars.maxOrNull()!!
-            assertTrue(peak.toDouble() / bars.average() > 300)
+            val average = bars.average() + 128
+            val peak = bars.maxOrNull()!! + 128
+            assertEquals(255, peak)
+            assertTrue(peak.toDouble() / average > 100)
+
+            // print out the waveform for visual inspection
+            val builder = StringBuilder()
+            for (i in 0..255) {
+                val referenceLevel = 255-i
+                builder.append("$referenceLevel    ")
+                bars.forEach {
+                    val level = it + 128
+                    if (level >= referenceLevel) {
+                        builder.append('A')
+                    } else {
+                        builder.append(' ')
+                    }
+                }
+                builder.append('\n')
+            }
+
+            println("Waveform display")
+            println(builder.toString())
         }
     }
 }

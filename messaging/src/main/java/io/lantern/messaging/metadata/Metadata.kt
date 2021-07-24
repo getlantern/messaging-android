@@ -18,6 +18,8 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
 import mu.KotlinLogging
+import kotlin.math.abs
+import kotlin.math.floor
 
 private val logger = KotlinLogging.logger {}
 
@@ -120,8 +122,8 @@ class Metadata(val mimeType: String?, val thumbnail: ByteArray?, val thumbnailMi
                 bmp,
                 0,
                 0,
-                bmp.getWidth(),
-                bmp.getHeight(),
+                bmp.width,
+                bmp.height,
                 matrix,
                 true
             )
@@ -249,7 +251,7 @@ class Metadata(val mimeType: String?, val thumbnail: ByteArray?, val thumbnailMi
                         var i = 0
                         while (i < info.size) {
                             val aShort = buf.getShort(i)
-                            total += Math.abs(aShort.toInt()).toLong()
+                            total += abs(aShort.toInt()).toLong()
                             i += 2 * 4
                         }
                         if (barIndex >= 0 && barIndex < wave.size) {
@@ -282,7 +284,7 @@ class Metadata(val mimeType: String?, val thumbnail: ByteArray?, val thumbnailMi
             }
             for (i in 0 until BAR_COUNT) {
                 val normalized = floats[i] / max
-                bytes[i] = (255 * normalized).toByte()
+                bytes[i] = (floor(255 * normalized.toDouble()) - 128).toInt().toByte()
             }
 
             return Metadata(
