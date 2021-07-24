@@ -3,11 +3,15 @@ package io.lantern.messaging.metadata
 import android.os.Build
 import io.lantern.messaging.BaseTest
 import io.lantern.messaging.Model
+import mu.KotlinLogging
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.Test
+import java.lang.StringBuilder
+
+private val logger = KotlinLogging.logger {}
 
 class MetadataTest : BaseTest() {
     @Test
@@ -69,8 +73,30 @@ class MetadataTest : BaseTest() {
             // The audio file contains mostly silence and a single loud clap. Make sure that the
             // waveform reflects this by having a much higher peak than average value.
             val bars = Model.AudioWaveform.parseFrom(md.thumbnail).bars.toByteArray()
-            val peak = bars.maxOrNull()!!
-            assertTrue(peak.toDouble() / bars.average() > 300)
+            val min = bars.minOrNull()!! + 128
+            val max = bars.maxOrNull()!! + 128
+            val average = bars.average() + 128
+            assertEquals(0, min)
+            assertEquals(255, max)
+            assertTrue(max.toDouble() / average > 5)
+
+            // print out the waveform for visual inspection
+            val builder = StringBuilder()
+            for (i in 0..255) {
+                val level = 255-i
+                builder.append("$level    ")
+                bars.forEach {
+                    if (it > level) {
+                        builder.append('A')
+                    } else {
+                        builder.append(' ')
+                    }
+                }
+                builder.append('\n')
+            }
+
+            println("Waveform display")
+            println(builder.toString())
         }
     }
 }

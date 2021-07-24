@@ -18,8 +18,11 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
 import mu.KotlinLogging
+import kotlin.math.log
 
 private val logger = KotlinLogging.logger {}
+private const val byteRange = 256
+private const val minByte = -128
 
 /**
  * Provides a facility for extracting content metadata while copying it
@@ -135,8 +138,8 @@ class Metadata(val mimeType: String?, val thumbnail: ByteArray?, val thumbnailMi
             if (bmp == null) {
                 return null
             }
-            val targetRatio = maxHeight.toFloat() / maxWidth.toFloat()
-            val actualRatio = bmp.height.toFloat() / bmp.width.toFloat()
+            val targetRatio = maxHeight.toDouble() / maxWidth.toDouble()
+            val actualRatio = bmp.height.toDouble() / bmp.width.toDouble()
             val scaled = if (bmp.height <= maxHeight && bmp.width <= maxWidth)
                 bmp
             else if (actualRatio > targetRatio)
@@ -270,19 +273,36 @@ class Metadata(val mimeType: String?, val thumbnail: ByteArray?, val thumbnailMi
             codec.stop()
             codec.release()
             extractor.release()
-            val floats = FloatArray(BAR_COUNT)
+            val floats = DoubleArray(BAR_COUNT)
             val bytes = ByteArray(BAR_COUNT)
-            var max = 0f
+            var max = 0.0
+            var min = Double.MAX_VALUE
             for (i in 0 until BAR_COUNT) {
-                if (waveSamples[i] == 0) continue
-                floats[i] = wave[i] / waveSamples[i].toFloat()
+                if (waveSamples[i] == 0) {
+                    continue
+                }
+                floats[i] = wave[i] / waveSamples[i].toDouble()
                 if (floats[i] > max) {
                     max = floats[i]
                 }
+                if (floats[i] < min) {
+                    min = floats[i]
+                }
             }
+
+
+            val dbfsRange = 0-dbfs(min, max)
             for (i in 0 until BAR_COUNT) {
-                val normalized = floats[i] / max
-                bytes[i] = (255 * normalized).toByte()
+                if (floats[i] == 0.0) {
+                    bytes[i] = minByte.toByte()
+                    continue
+                }
+
+                // by scaling to a dbfs range, we eliminate the noise floor and provide improve the
+                // resolution of the waveform
+                val normalized = (dbfs(floats[i], max) + dbfsRange) / dbfsRange * byteRange
+                bytes[i] = (normalized.toInt() + minByte).toByte()
+//                bytes[i] = ((floats[i] / (max-min) * byteRange) + minByte).toInt().toByte()
             }
 
             return Metadata(
@@ -291,5 +311,10 @@ class Metadata(val mimeType: String?, val thumbnail: ByteArray?, val thumbnailMi
                 "application/x-lantern-waveform"
             )
         }
+
+        fun dbfs(v: Double, max: Double): Double {
+            val nonZeroV = v + 0.000000000000001
+            return 10 * log(nonZeroV/max, 10.0)
+        }
     }
-}
+ }
