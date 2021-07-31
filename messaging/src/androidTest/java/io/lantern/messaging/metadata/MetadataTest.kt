@@ -54,6 +54,17 @@ class MetadataTest : BaseTest() {
     }
 
     @Test
+    fun testMusicDuration() {
+        val file = assetToFile("wotw.mp3")
+        val md = Metadata.analyze(file)
+        assertNotNull(md)
+        assertEquals("audio/mpeg", md.mimeType)
+        assertNotNull(md.duration)
+        assertTrue(md.duration!! > 0)
+        assertTrue(md.duration!! == 337008.0)
+    }
+
+    @Test
     fun testAudio() {
         val file = assetToFile("clap.opus")
         val md = Metadata.analyze(file)

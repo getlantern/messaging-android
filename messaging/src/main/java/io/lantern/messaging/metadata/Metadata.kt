@@ -25,7 +25,7 @@ private val logger = KotlinLogging.logger {}
 /**
  * Provides a facility for extracting content metadata while copying it
  */
-class Metadata(val mimeType: String?, val thumbnail: ByteArray?, val thumbnailMimeType: String?) {
+class Metadata(val mimeType: String?, val duration: Double?, val thumbnail: ByteArray?, val thumbnailMimeType: String?) {
 
     companion object {
         private const val BAR_COUNT = 1000
@@ -62,7 +62,7 @@ class Metadata(val mimeType: String?, val thumbnail: ByteArray?, val thumbnailMi
                 }
             } catch (t: Throwable) {
                 logger.error("couldn't extract thumbnail: ${t.message}")
-                return Metadata(mimeType, null, null)
+                return Metadata(mimeType, null, null, null)
             }
         }
 
@@ -81,7 +81,7 @@ class Metadata(val mimeType: String?, val thumbnail: ByteArray?, val thumbnailMi
                 else -> null
             }
             val thumbnail = scaledThumbnail(bmp)
-            return Metadata(mimeType, thumbnail, thumbnail.let { "image/webp" })
+            return Metadata(mimeType, null, thumbnail, thumbnail.let { "image/webp" })
         }
 
         /**
@@ -153,9 +153,12 @@ class Metadata(val mimeType: String?, val thumbnail: ByteArray?, val thumbnailMi
         }
 
         private fun audioMetadata(file: File, defaultMimeType: String): Metadata {
+            val duration = MediaMetadataRetriever().apply {
+                setDataSource(file.absolutePath)
+            }.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toDoubleOrNull()
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
                 // waveform generation not supported on older Android versions, return null
-                return Metadata(defaultMimeType, null, null)
+                return Metadata(defaultMimeType, duration, null, null)
             }
 
             // The below code is based on AudioWaveForm.java from Signal-Android.
@@ -289,6 +292,7 @@ class Metadata(val mimeType: String?, val thumbnail: ByteArray?, val thumbnailMi
 
             return Metadata(
                 mimeType,
+                duration,
                 Model.AudioWaveform.newBuilder().addAllBars(ints.toList()).build().toByteArray(),
                 "application/x-lantern-waveform"
             )
