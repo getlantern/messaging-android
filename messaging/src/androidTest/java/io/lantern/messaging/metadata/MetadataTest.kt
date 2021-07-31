@@ -3,12 +3,12 @@ package io.lantern.messaging.metadata
 import android.os.Build
 import io.lantern.messaging.BaseTest
 import io.lantern.messaging.Model
+import java.lang.StringBuilder
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.Test
-import java.lang.StringBuilder
 
 class MetadataTest : BaseTest() {
     @Test
@@ -74,11 +74,12 @@ class MetadataTest : BaseTest() {
             val peak = bars.maxOrNull()!! + 128
             assertEquals(255, peak)
             assertTrue(peak.toDouble() / average > 100)
+            assertEquals("8.853", md.additionalMetadata?.get("duration"))
 
             // print out the waveform for visual inspection
             val builder = StringBuilder()
             for (i in 0..255) {
-                val referenceLevel = 255-i
+                val referenceLevel = 255 - i
                 builder.append("$referenceLevel    ")
                 bars.forEach {
                     val level = it + 128

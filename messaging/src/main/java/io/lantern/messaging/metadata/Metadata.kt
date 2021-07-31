@@ -17,16 +17,22 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
-import mu.KotlinLogging
+import java.math.RoundingMode
 import kotlin.math.abs
 import kotlin.math.floor
+import mu.KotlinLogging
 
 private val logger = KotlinLogging.logger {}
 
 /**
  * Provides a facility for extracting content metadata while copying it
  */
-class Metadata(val mimeType: String?, val thumbnail: ByteArray?, val thumbnailMimeType: String?) {
+class Metadata(
+    val mimeType: String?,
+    val thumbnail: ByteArray?,
+    val thumbnailMimeType: String?,
+    val additionalMetadata: Map<String, String>? = null
+) {
 
     companion object {
         private const val BAR_COUNT = 1000
@@ -287,10 +293,15 @@ class Metadata(val mimeType: String?, val thumbnail: ByteArray?, val thumbnailMi
                 bytes[i] = (floor(255 * normalized.toDouble()) - 128).toInt().toByte()
             }
 
+            // convert duration from microseconds to seconds
+            val durationSeconds = (totalDurationUs.toDouble() / 1000000.0)
+                .toBigDecimal()
+                .setScale(3, RoundingMode.HALF_EVEN)
             return Metadata(
                 mimeType,
                 Model.AudioWaveform.newBuilder().setBars(bytes.byteString()).build().toByteArray(),
-                "application/x-lantern-waveform"
+                "application/x-lantern-waveform",
+                mapOf("duration" to durationSeconds.toString())
             )
         }
     }

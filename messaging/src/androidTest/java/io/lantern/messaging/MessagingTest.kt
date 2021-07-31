@@ -453,7 +453,22 @@ class MessagingTest : BaseMessagingTest() {
                                     )
                                 )
                             )
-                            val imageAttachment = dog.createAttachment(assetToFile("image.jpg"))
+                            val imageAttachment = dog.createAttachment(
+                                assetToFile("image.jpg")
+                            )
+                            val audioAttachment = dog.createAttachment(
+                                assetToFile("clap.opus"),
+                            )
+                            assertEquals(
+                                "8.853",
+                                audioAttachment.attachment.metadataMap["duration"],
+                                "audio attachment should include duration metadata"
+                            )
+                            assertEquals(
+                                "application/x-lantern-waveform",
+                                audioAttachment.thumbnail?.attachment?.mimeType,
+                                "audio attachment should include waveform thumbnail"
+                            )
                             val sentMsg = dog.sendToDirectContact(
                                 catId,
                                 "hello cat",
@@ -462,7 +477,8 @@ class MessagingTest : BaseMessagingTest() {
                                     lazyAttachment,
                                     eagerAttachment,
                                     streamAttachment,
-                                    imageAttachment
+                                    imageAttachment,
+                                    audioAttachment
                                 )
                             )
                             val recvMsg = cat.waitFor<Model.StoredMessage>(
@@ -476,9 +492,9 @@ class MessagingTest : BaseMessagingTest() {
                                 "cat should have received correct message text"
                             )
                             assertEquals(
-                                4,
+                                5,
                                 recvMsg.attachmentsCount,
-                                "cat should have received 4 attachments"
+                                "cat should have received 5 attachments"
                             )
 
                             suspend fun getAttachment(id: Int): Model.StoredAttachment? {
@@ -503,6 +519,7 @@ class MessagingTest : BaseMessagingTest() {
                             val receivedEagerAttachment = getAttachment(2)
                             val receivedStreamAttachment = getAttachment(3)
                             val receivedImageAttachment = getAttachment(4)
+                            val receivedAudioAttachment = getAttachment(6)
 
                             assertEquals(
                                 "lazy attachment",
@@ -516,10 +533,13 @@ class MessagingTest : BaseMessagingTest() {
                                 "stream attachment",
                                 text(receivedStreamAttachment)
                             )
-
                             assertEquals(
                                 "image/jpeg",
                                 receivedImageAttachment?.attachment?.mimeType
+                            )
+                            assertEquals(
+                                "audio/opus",
+                                receivedAudioAttachment?.attachment?.mimeType
                             )
                             assertNotNull(receivedImageAttachment?.thumbnail)
                         }

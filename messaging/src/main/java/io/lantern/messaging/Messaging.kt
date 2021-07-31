@@ -611,6 +611,9 @@ class Messaging(
     ): Model.StoredAttachment {
         val md = Metadata.analyze(file, mimeType)
         val attachment = Model.Attachment.newBuilder().setMimeType(md?.mimeType ?: mimeType)
+        if (md.additionalMetadata != null) {
+            attachment.putAllMetadata(md.additionalMetadata)
+        }
         if (metadata != null) {
             attachment.putAllMetadata(metadata)
         }
