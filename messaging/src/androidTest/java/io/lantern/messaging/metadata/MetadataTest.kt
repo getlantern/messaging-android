@@ -74,6 +74,7 @@ class MetadataTest : BaseTest() {
             val peak = bars.maxOrNull()!!
             assertEquals(255, peak)
             assertTrue(peak.toDouble() / average > 100)
+            assertEquals("8.853", md.additionalMetadata?.get("duration"))
 
             // print out the waveform for visual inspection
             val builder = StringBuilder()
