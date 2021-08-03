@@ -195,7 +195,6 @@ class Metadata(
             codec.start()
             extractor.selectTrack(0)
             val kTimeOutUs: Long = 5000 // 5000 microseconds (5 milliseconds)
-            val info = MediaCodec.BufferInfo()
 
             audioDecoderExecutor.submit {
                 var sawInputEOS = false
@@ -211,13 +210,6 @@ class Metadata(
                         } else {
                             presentationTimeUs = extractor.sampleTime
                         }
-                        codec.queueInputBuffer(
-                            inputBufIndex,
-                            0,
-                            sampleSize,
-                            presentationTimeUs,
-                            if (sawInputEOS) MediaCodec.BUFFER_FLAG_END_OF_STREAM else 0
-                        )
                         if (!sawInputEOS) {
                             val barSampleIndex =
                                 (
@@ -241,10 +233,19 @@ class Metadata(
                                 }
                             }
                         }
+
+                        codec.queueInputBuffer(
+                            inputBufIndex,
+                            0,
+                            sampleSize,
+                            presentationTimeUs,
+                            if (sawInputEOS) MediaCodec.BUFFER_FLAG_END_OF_STREAM else 0
+                        )
                     }
                 }
             }
 
+            val info = MediaCodec.BufferInfo()
             var sawOutputEOS = false
             while (!sawOutputEOS) {
                 var outputBufferIndex = 0
@@ -265,10 +266,10 @@ class Metadata(
                             wave[barIndex] += total
                             waveSamples[barIndex] += info.size / 2
                         }
-                        codec.releaseOutputBuffer(outputBufferIndex, false)
                         if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
                             sawOutputEOS = true
                         }
+                        codec.releaseOutputBuffer(outputBufferIndex, false)
                     } else if (outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                         logger.debug("output format has changed to " + codec.outputFormat)
                     }
