@@ -69,9 +69,9 @@ class MetadataTest : BaseTest() {
 
             // The audio file contains mostly silence and a single loud clap. Make sure that the
             // waveform reflects this by having a much higher peak than average value.
-            val bars = Model.AudioWaveform.parseFrom(md.thumbnail).bars.toByteArray()
-            val average = bars.average() + 128
-            val peak = bars.maxOrNull()!! + 128
+            val bars = Model.AudioWaveform.parseFrom(md.thumbnail).barsList
+            val average = bars.average()
+            val peak = bars.maxOrNull()!!
             assertEquals(255, peak)
             assertTrue(peak.toDouble() / average > 100)
             assertEquals("8.853", md.additionalMetadata?.get("duration"))
@@ -82,7 +82,7 @@ class MetadataTest : BaseTest() {
                 val referenceLevel = 255 - i
                 builder.append("$referenceLevel    ")
                 bars.forEach {
-                    val level = it + 128
+                    val level = it
                     if (level >= referenceLevel) {
                         builder.append('A')
                     } else {

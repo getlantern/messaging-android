@@ -12,7 +12,6 @@ import android.os.Build
 import androidx.core.graphics.scale
 import com.j256.simplemagic.ContentInfoUtil
 import io.lantern.messaging.Model
-import io.lantern.messaging.conversions.byteString
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -37,6 +36,7 @@ class Metadata(
     companion object {
         private const val BAR_COUNT = 1000
         private const val SAMPLES_PER_BAR = 4
+        private const val MAX_QUANTIZED_VALUE = 255
 
         private val util = ContentInfoUtil()
 
@@ -279,7 +279,7 @@ class Metadata(
             codec.release()
             extractor.release()
             val floats = FloatArray(BAR_COUNT)
-            val bytes = ByteArray(BAR_COUNT)
+            val ints = IntArray(BAR_COUNT)
             var max = 0f
             for (i in 0 until BAR_COUNT) {
                 if (waveSamples[i] == 0) continue
@@ -290,7 +290,7 @@ class Metadata(
             }
             for (i in 0 until BAR_COUNT) {
                 val normalized = floats[i] / max
-                bytes[i] = (floor(255 * normalized.toDouble()) - 128).toInt().toByte()
+                ints[i] = (floor(MAX_QUANTIZED_VALUE * normalized.toDouble())).toInt()
             }
 
             // convert duration from microseconds to seconds
@@ -299,7 +299,7 @@ class Metadata(
                 .setScale(3, RoundingMode.HALF_EVEN)
             return Metadata(
                 mimeType,
-                Model.AudioWaveform.newBuilder().setBars(bytes.byteString()).build().toByteArray(),
+                Model.AudioWaveform.newBuilder().addAllBars(ints.toList()).build().toByteArray(),
                 "application/x-lantern-waveform",
                 mapOf("duration" to durationSeconds.toString())
             )
