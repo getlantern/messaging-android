@@ -76,24 +76,7 @@ class MetadataTest : BaseTest() {
             assertTrue(peak.toDouble() / average > 100)
             assertEquals("8.853", md.additionalMetadata?.get("duration"))
 
-            // print out the waveform for visual inspection
-            val builder = StringBuilder()
-            for (i in 0..255) {
-                val referenceLevel = 255 - i
-                builder.append("$referenceLevel    ")
-                bars.forEach {
-                    val level = it
-                    if (level >= referenceLevel) {
-                        builder.append('A')
-                    } else {
-                        builder.append(' ')
-                    }
-                }
-                builder.append('\n')
-            }
-
-            println("Waveform display")
-            println(builder.toString())
+            printWaveform(bars)
         }
     }
 
@@ -115,8 +98,32 @@ class MetadataTest : BaseTest() {
             // calculate metadata again to make sure waveform generation is repeatable on the same
             // device
             val nextMd = Metadata.analyze(file)
-            val actual = Model.AudioWaveform.parseFrom(nextMd!!.thumbnail).barsList.joinToString()
+            val bars = Model.AudioWaveform.parseFrom(nextMd.thumbnail).barsList
+            val actual = bars.joinToString()
             assertEquals(expected, actual)
+
+            printWaveform(bars)
         }
+    }
+
+    private fun printWaveform(bars: List<Int>) {
+        // print out the waveform for visual inspection
+        val builder = StringBuilder()
+        for (i in 0..255) {
+            val referenceLevel = 255 - i
+            builder.append("$referenceLevel    ")
+            bars.forEach {
+                val level = it
+                if (level >= referenceLevel) {
+                    builder.append('A')
+                } else {
+                    builder.append(' ')
+                }
+            }
+            builder.append('\n')
+        }
+
+        println("Waveform display")
+        println(builder.toString())
     }
 }
