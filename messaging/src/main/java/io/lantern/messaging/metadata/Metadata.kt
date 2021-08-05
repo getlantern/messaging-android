@@ -3,13 +3,13 @@ package io.lantern.messaging.metadata
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
-import android.media.ExifInterface
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import androidx.core.graphics.scale
+import androidx.exifinterface.media.ExifInterface
 import com.j256.simplemagic.ContentInfoUtil
 import io.lantern.messaging.Model
 import java.io.ByteArrayOutputStream
@@ -35,9 +35,11 @@ class Metadata(
 ) {
 
     companion object {
-        private const val BAR_COUNT = 1000
-        private const val SAMPLES_PER_BAR = 4
-        private const val MAX_QUANTIZED_VALUE = 255
+        private const val barCount = 1000
+        private const val maxQuantizedValue = 255
+        private const val bytesPerSample = 2
+        private const val microsecondsPerSecond = 1000000.0
+
         private val audioDecoderExecutor = Executors.newSingleThreadExecutor {
             Thread(it, "Metadata-audioDecoder")
         }
@@ -176,8 +178,8 @@ class Metadata(
             if (extractor.trackCount == 0) {
                 throw IOException("No audio track")
             }
-            val wave = LongArray(BAR_COUNT)
-            val waveSamples = IntArray(BAR_COUNT)
+            val wave = LongArray(barCount)
+            val waveSamples = IntArray(barCount)
             val format = extractor.getTrackFormat(0)
             if (!format.containsKey(MediaFormat.KEY_DURATION)) {
                 throw IOException("Unknown duration")
@@ -197,6 +199,8 @@ class Metadata(
             val kTimeOutUs: Long = 5000 // 5000 microseconds (5 milliseconds)
 
             audioDecoderExecutor.submit {
+                // read all encoded samples (mp3, opus, whatever) and submit them to the MediaCodec
+                // for decoding
                 var sawInputEOS = false
                 while (!sawInputEOS) {
                     val inputBufIndex = codec.dequeueInputBuffer(kTimeOutUs)
@@ -210,29 +214,8 @@ class Metadata(
                         } else {
                             presentationTimeUs = extractor.sampleTime
                         }
-                        if (!sawInputEOS) {
-                            val barSampleIndex =
-                                (
-                                    SAMPLES_PER_BAR * (BAR_COUNT * extractor.sampleTime) /
-                                        totalDurationUs
-                                    ).toInt()
-                            sawInputEOS = !extractor.advance()
-                            var nextBarSampleIndex =
-                                (
-                                    SAMPLES_PER_BAR * (BAR_COUNT * extractor.sampleTime) /
-                                        totalDurationUs
-                                    ).toInt()
-                            while (!sawInputEOS && nextBarSampleIndex == barSampleIndex) {
-                                sawInputEOS = !extractor.advance()
-                                if (!sawInputEOS) {
-                                    nextBarSampleIndex =
-                                        (
-                                            SAMPLES_PER_BAR * (BAR_COUNT * extractor.sampleTime) /
-                                                totalDurationUs
-                                            ).toInt()
-                                }
-                            }
-                        }
+
+                        extractor.advance()
 
                         codec.queueInputBuffer(
                             inputBufIndex,
@@ -245,6 +228,8 @@ class Metadata(
                 }
             }
 
+            // read all decoded samples (assumed to be in 16 bit PCM format, possibly multiple
+            // channels
             val info = MediaCodec.BufferInfo()
             var sawOutputEOS = false
             while (!sawOutputEOS) {
@@ -253,18 +238,22 @@ class Metadata(
                     outputBufferIndex = codec.dequeueOutputBuffer(info, kTimeOutUs)
                     if (outputBufferIndex >= 0) {
                         val buf = codec.getOutputBuffer(outputBufferIndex)!!
-                        val barIndex =
-                            (BAR_COUNT * info.presentationTimeUs / totalDurationUs).toInt()
-                        var total: Long = 0
+                        val format = codec.getOutputFormat(outputBufferIndex)
+                        val offsetPerSampleUs = (
+                            microsecondsPerSecond /
+                                format.getInteger(MediaFormat.KEY_SAMPLE_RATE).toDouble() /
+                                format.getInteger(MediaFormat.KEY_CHANNEL_COUNT).toDouble()
+                            ).toLong()
                         var i = 0
                         while (i < info.size) {
-                            val aShort = buf.getShort(i)
-                            total += abs(aShort.toInt()).toLong()
-                            i += 2 * 4
-                        }
-                        if (barIndex >= 0 && barIndex < BAR_COUNT) {
-                            wave[barIndex] += total
-                            waveSamples[barIndex] += info.size / 2
+                            var ts = info.presentationTimeUs + offsetPerSampleUs * i
+                            val barIndex = (barCount * ts / totalDurationUs).toInt()
+                            if (barIndex in 0 until barCount) {
+                                val aShort = buf.getShort(i)
+                                wave[barIndex] += abs(aShort.toInt()).toLong()
+                                waveSamples[barIndex] += 1
+                            }
+                            i += bytesPerSample
                         }
                         if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
                             sawOutputEOS = true
@@ -272,6 +261,8 @@ class Metadata(
                         codec.releaseOutputBuffer(outputBufferIndex, false)
                     } else if (outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                         logger.debug("output format has changed to " + codec.outputFormat)
+                    } else if (outputBufferIndex != MediaCodec.INFO_TRY_AGAIN_LATER) {
+                        logger.error("got unexpected result $outputBufferIndex")
                     }
                 }
             }
@@ -279,23 +270,23 @@ class Metadata(
             codec.stop()
             codec.release()
             extractor.release()
-            val floats = FloatArray(BAR_COUNT)
-            val ints = IntArray(BAR_COUNT)
+            val floats = FloatArray(barCount)
+            val ints = IntArray(barCount)
             var max = 0f
-            for (i in 0 until BAR_COUNT) {
+            for (i in 0 until barCount) {
                 if (waveSamples[i] == 0) continue
                 floats[i] = wave[i] / waveSamples[i].toFloat()
                 if (floats[i] > max) {
                     max = floats[i]
                 }
             }
-            for (i in 0 until BAR_COUNT) {
+            for (i in 0 until barCount) {
                 val normalized = floats[i] / max
-                ints[i] = (floor(MAX_QUANTIZED_VALUE * normalized.toDouble())).toInt()
+                ints[i] = (floor(maxQuantizedValue * normalized.toDouble())).toInt()
             }
 
             // convert duration from microseconds to seconds
-            val durationSeconds = (totalDurationUs.toDouble() / 1000000.0)
+            val durationSeconds = (totalDurationUs.toDouble() / microsecondsPerSecond)
                 .toBigDecimal()
                 .setScale(3, RoundingMode.HALF_EVEN)
             return Metadata(
