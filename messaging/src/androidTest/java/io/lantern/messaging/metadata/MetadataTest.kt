@@ -76,24 +76,54 @@ class MetadataTest : BaseTest() {
             assertTrue(peak.toDouble() / average > 100)
             assertEquals("8.853", md.additionalMetadata?.get("duration"))
 
-            // print out the waveform for visual inspection
-            val builder = StringBuilder()
-            for (i in 0..255) {
-                val referenceLevel = 255 - i
-                builder.append("$referenceLevel    ")
-                bars.forEach {
-                    val level = it
-                    if (level >= referenceLevel) {
-                        builder.append('A')
-                    } else {
-                        builder.append(' ')
-                    }
-                }
-                builder.append('\n')
-            }
-
-            println("Waveform display")
-            println(builder.toString())
+            printWaveform(bars)
         }
+    }
+
+    @Test
+    fun testAudioLargeMp3() {
+        val file = assetToFile("test.mp3")
+        val md = Metadata.analyze(file)
+        assertNotNull(md)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            assertNull(md.thumbnail)
+        } else {
+            assertNotNull(md)
+            assertEquals("audio/mpeg", md.mimeType)
+            assertNotNull(md.thumbnail)
+            assertTrue(md.thumbnail!!.size < file.length())
+            assertEquals("application/x-lantern-waveform", md.thumbnailMimeType)
+
+            val expected = Model.AudioWaveform.parseFrom(md.thumbnail).barsList.joinToString()
+            // calculate metadata again to make sure waveform generation is repeatable on the same
+            // device
+            val nextMd = Metadata.analyze(file)
+            val bars = Model.AudioWaveform.parseFrom(nextMd.thumbnail).barsList
+            val actual = bars.joinToString()
+            assertEquals(expected, actual)
+
+            printWaveform(bars)
+        }
+    }
+
+    private fun printWaveform(bars: List<Int>) {
+        // print out the waveform for visual inspection
+        val builder = StringBuilder()
+        for (i in 0..255) {
+            val referenceLevel = 255 - i
+            builder.append("$referenceLevel    ")
+            bars.forEach {
+                val level = it
+                if (level >= referenceLevel) {
+                    builder.append('A')
+                } else {
+                    builder.append(' ')
+                }
+            }
+            builder.append('\n')
+        }
+
+        println("Waveform display")
+        println(builder.toString())
     }
 }
