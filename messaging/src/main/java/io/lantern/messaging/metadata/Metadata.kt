@@ -62,22 +62,17 @@ class Metadata(
                 null
             } ?: defaultMimeType
 
-            try {
-                return when (mimeType) {
-                    "application/ogg" -> audioMetadata(file, mimeType)
-                    "audio/ogg" -> audioMetadata(file, mimeType)
-                    "audio/opus" -> audioMetadata(file, mimeType)
-                    "audio/mp4" -> audioMetadata(file, mimeType)
-                    "audio/m4a" -> audioMetadata(file, mimeType)
-                    "audio/mkv" -> audioMetadata(file, mimeType)
-                    "audio/mp3" -> audioMetadata(file, mimeType)
-                    "audio/flac" -> audioMetadata(file, mimeType)
-                    "audio/mpeg" -> audioMetadata(file, mimeType)
-                    else -> visualMetadata(file, mimeType)
+            return try {
+                if (mimeType != null &&
+                    (mimeType == "application/ogg" || mimeType.startsWith("audio/"))
+                ) {
+                    audioMetadata(file, mimeType)
+                } else {
+                    visualMetadata(file, mimeType)
                 }
             } catch (t: Throwable) {
                 logger.error("couldn't extract thumbnail: ${t.message}")
-                return Metadata(mimeType, null, null)
+                Metadata(mimeType, null, null)
             }
         }
 
