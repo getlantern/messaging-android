@@ -153,6 +153,9 @@ class Messaging(
         }
         myId = me.contactId
 
+        // add myself as a contact user to start "talking"
+        addOrUpdateContact(myId, "Me")
+
         // immediately request some upload authorizations so that we're ready to upload attachments
         cryptoWorker.submit { cryptoWorker.getMoreUploadAuthorizationsIfNecessary() }
 
