@@ -154,7 +154,7 @@ class Messaging(
         myId = me.contactId
 
         // add myself as a contact user to start "talking"
-        addOrUpdateContact(myId, "Me")
+        addOrUpdateContact(myId, "Note to self")
 
         // immediately request some upload authorizations so that we're ready to upload attachments
         cryptoWorker.submit { cryptoWorker.getMoreUploadAuthorizationsIfNecessary() }
@@ -326,11 +326,13 @@ class Messaging(
         if (recipient.messagesDisappearAfterSeconds > 0) {
             msgBuilder.disappearAfterSeconds = recipient.messagesDisappearAfterSeconds
         }
-        val out =
-            Model.OutboundMessage.newBuilder().setMessageId(base32Id)
+        var out: Model.OutboundMessage.Builder? = null
+        if(recipientId !== myId.id){
+            out = Model.OutboundMessage.newBuilder().setMessageId(base32Id)
                 .setSent(sent)
                 .setSenderId(myId.id)
                 .setRecipientId(recipientId)
+        }
         var attachmentId = 0
         attachments?.forEach { attachment ->
             msgBuilder.putAttachments(attachmentId, attachment)
@@ -350,8 +352,10 @@ class Messaging(
             updateContactMetaData(tx, msg)
             // save the message under the relevant contact messages
             tx.put(msg.contactMessagePath, msg.dbPath)
-            tx.put(out.dbPath, out.build())
-            cryptoWorker.submit { cryptoWorker.processOutbound(out) }
+            out?.let { tx.put(it.dbPath, it.build()) }
+            out?.let {
+                cryptoWorker.submit { cryptoWorker.processOutbound(it) }
+            }
             msg
         }
     }
