@@ -327,7 +327,7 @@ class Messaging(
             msgBuilder.disappearAfterSeconds = recipient.messagesDisappearAfterSeconds
         }
         var out: Model.OutboundMessage.Builder? = null
-        if(recipientId !== myId.id){
+        if(recipientId.directContactId.id !== myId.id){
             out = Model.OutboundMessage.newBuilder().setMessageId(base32Id)
                 .setSent(sent)
                 .setSenderId(myId.id)
