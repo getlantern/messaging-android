@@ -335,6 +335,9 @@ class Messaging(
         }
         var attachmentId = 0
         attachments?.forEach { attachment ->
+            if(out == null){
+                attachment.toBuilder().status = Model.StoredAttachment.Status.DONE
+            }
             msgBuilder.putAttachments(attachmentId, attachment)
             attachmentId++
             if (attachment.hasThumbnail()) {
@@ -352,9 +355,9 @@ class Messaging(
             updateContactMetaData(tx, msg)
             // save the message under the relevant contact messages
             tx.put(msg.contactMessagePath, msg.dbPath)
-            out?.let { tx.put(it.dbPath, it.build()) }
-            out?.let {
-                cryptoWorker.submit { cryptoWorker.processOutbound(it) }
+            if(out !== null){
+                tx.put(out.dbPath, out.build())
+                cryptoWorker.submit { cryptoWorker.processOutbound(out) }
             }
             msg
         }
