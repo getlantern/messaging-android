@@ -352,10 +352,10 @@ class Messaging(
             updateContactMetaData(tx, msg)
             // save the message under the relevant contact messages
             tx.put(msg.contactMessagePath, msg.dbPath)
-//            out?.let { tx.put(it.dbPath, it.build()) }
-//            out?.let {
-//                cryptoWorker.submit { cryptoWorker.processOutbound(it) }
-//            }
+            out?.let { tx.put(it.dbPath, it.build()) }
+            out?.let {
+                cryptoWorker.submit { cryptoWorker.processOutbound(it) }
+            }
             msg
         }
     }
