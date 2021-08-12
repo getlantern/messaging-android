@@ -116,8 +116,9 @@ class MessagingTest : BaseMessagingTest() {
                                 dog.db.listPaths(Schema.PATH_CONTACT_MESSAGES.path("%")).count()
                             )
                             assertEquals(
-                                0,
-                                dog.db.listPaths(Schema.PATH_CONTACTS.path("%")).count()
+                                1,
+                                dog.db.listPaths(Schema.PATH_CONTACTS.path("%")).count(),
+                                "dog now have a permanent contact"
                             )
                             assertEquals(
                                 0,
