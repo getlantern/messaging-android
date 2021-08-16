@@ -41,7 +41,7 @@ import org.whispersystems.signalservice.internal.util.Util
 internal class CryptoWorker(
     messaging: Messaging,
     retryDelayMillis: Long,
-    private val stopSendRetryAfterMillis: Long
+    private val stopSendRetryAfterMillis: Long,
 ) :
     Worker(messaging, "crypto", retryDelayMillis = retryDelayMillis) {
     private val db = messaging.db
@@ -134,11 +134,16 @@ internal class CryptoWorker(
                     msgBuilder.putAttachments(id, attachmentWithThumbnail.build())
                 }
             }
+            if (hasIntroduction()) {
+                msgBuilder.introduction = Model.Introduction.newBuilder()
+                    .setId(introduction.to.id.fromBase32.byteString())
+                    .setDisplayName(introduction.displayName).build()
+            }
             return msgBuilder.build()
         }
 
     private fun Model.OutboundMessage.Builder.deleteFailed() {
-        logger.debug("deleting failed message")
+        logger.debug("deleting failed messages")
         db.mutate { tx ->
             tx.delete(this.dbPath)
             val msgPath = this.msgPath
@@ -638,8 +643,43 @@ internal class CryptoWorker(
             throw UnknownSenderException(senderId, msg.id.base32)
         }
         val storedMsgBuilder = msg.inbound(senderId)
-        // save inbound attachments and trigger downloads
 
+        // save the introduction if one was included
+        if (msg.hasIntroduction()) {
+            val matchingContact = tx.findOne<Model.Contact>(
+                msg.introduction.id.directContactID.contactPath
+            )
+            if (matchingContact != null) {
+                logger.debug("received introduction to known contact, ignoring")
+                return
+            }
+
+            val introduction = Model.IntroductionDetails.newBuilder()
+                .setTo(msg.introduction.id.directContactID)
+                .setDisplayName(msg.introduction.displayName)
+                .setOriginalDisplayName(msg.introduction.displayName).build()
+            storedMsgBuilder.introduction = introduction
+
+            // Delete any existing introduction message of this kind
+            // This ensures that at any given time, we have at most one introduction message for
+            // a given combination of from/to (i.e. each the conversation only has one introduction
+            // message per distinct contact)
+            tx.introductionMessage(senderId, introduction.to.id)?.let {
+                tx.delete(it.path)
+            }
+
+            // Add index entries pointing to the introduction
+            tx.put(
+                senderId.introductionIndexPathByFrom(introduction.to.id),
+                storedMsgBuilder.dbPath
+            )
+            tx.put(
+                introduction.to.id.introductionIndexPathByTo(senderId),
+                storedMsgBuilder.dbPath
+            )
+        }
+
+        // save inbound attachments and trigger downloads
         msg.attachmentsMap.forEach { (id, attachmentWithThumbnail) ->
             // this is a full size attachment, store it on the message
             val fullSizeInboundAttachment =
