@@ -123,9 +123,21 @@ class MessagingTest : BaseMessagingTest() {
                                 0,
                                 dog.db.listPaths(Schema.PATH_CONTACTS_BY_ACTIVITY.path("%")).count()
                             )
+                            val dogDbString = dog.db.dumpToString()
+                            assertFalse(
+                                dogDbString.contains(catId),
+                                "dog's db should have no mention of cat's ID"
+                            )
+                            val dogStoreDbString = dog.store.db.dumpToString()
+                            assertFalse(
+                                dogStoreDbString.contains(catId),
+                                "dog's MessagingProtocolStore.db should have no mention of cat's ID"
+                            )
+
                             cat.sendToDirectContact(dogId, "cat sent this while not a contact")
 
-                            // hack dog's disappear settings to make sure we get hello message with new settings
+                            // hack dog's disappear settings to make sure we get hello message with
+                            // new settings
                             cat.db.mutate { tx ->
                                 tx.get<Model.Contact>(dogId.directContactPath)?.let {
                                     tx.put(
@@ -1424,11 +1436,18 @@ internal suspend fun Messaging.waitForNull(
 }
 
 internal fun DB.dump() {
-    val dumpString = this.list<Any>("%").sortedBy { it.path }.joinToString("\n") {
-        "${it.path}: ${it.value}"
-    }
+    val dumpString = dumpToString()
     println("DB Dump for ${this.get<Model.Contact>(Schema.PATH_ME)?.displayName}\n===============================================\n\n${dumpString}\n\n======================================") // ktlint-disable max-line-length
 }
+
+internal fun DB.dumpToString(): String =
+    this.list<Any>("%").sortedBy { it.path }.joinToString("\n") {
+        val valueString = when (val value = it.value) {
+            is ByteArray -> value.base32
+            else -> value.toString()
+        }
+        "${it.path}: $valueString"
+    }
 
 internal suspend fun Messaging.with(fn: suspend (messaging: Messaging) -> Unit) = this.use {
     try {

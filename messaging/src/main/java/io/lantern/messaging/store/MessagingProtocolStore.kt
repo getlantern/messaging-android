@@ -17,7 +17,7 @@ import org.whispersystems.libsignal.util.KeyHelper
 class MessagingProtocolStore(
     parentDB: DB
 ) : SignalProtocolStore {
-    private val db = parentDB.withSchema("messaging_protocol_store")
+    val db = parentDB.withSchema("messaging_protocol_store")
 
     override fun getIdentityKeyPair(): ECKeyPair {
         return db.mutate { tx ->
