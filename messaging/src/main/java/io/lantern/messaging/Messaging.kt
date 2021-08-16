@@ -358,7 +358,7 @@ class Messaging(
         }
         var attachmentId = 0
         attachments?.forEach { attachment ->
-            if(recipientId != myId.id){
+            if(recipientId == myId.id){
                 attachment.toBuilder().status = Model.StoredAttachment.Status.DONE
             }
             msgBuilder.putAttachments(attachmentId, attachment)

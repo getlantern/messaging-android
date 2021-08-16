@@ -636,6 +636,106 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
+    fun testMyselfAttachments() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                    newMessaging(dogDB, "dog").with { dog ->
+                            val dogId = dog.myId.id
+                            dog.addOrUpdateDirectContact(dogId, "Note to self")
+                            // lazy attachment to a non-existent file
+                            val badPlainTextFile = File(tempDir, UUID.randomUUID().toString())
+                            val badAttachment = dog.createAttachment(
+                                badPlainTextFile,
+                                "text/plain"
+                            )
+                            val lazyPlainTextFile = File(tempDir, UUID.randomUUID().toString())
+                            FileOutputStream(lazyPlainTextFile).use { output ->
+                                Util.copy(
+                                    ByteArrayInputStream(
+                                        "lazy attachment".toByteArray(
+                                            Charsets.UTF_8
+                                        )
+                                    ),
+                                    output
+                                )
+                            }
+                            val lazyAttachment = dog.createAttachment(
+                                lazyPlainTextFile,
+                                "text/plain"
+                            )
+                            val eagerPlainTextFile = File(tempDir, UUID.randomUUID().toString())
+                            FileOutputStream(eagerPlainTextFile).use { output ->
+                                Util.copy(
+                                    ByteArrayInputStream(
+                                        "eager attachment".toByteArray(
+                                            Charsets.UTF_8
+                                        )
+                                    ),
+                                    output
+                                )
+                            }
+                            val eagerAttachment = dog.createAttachment(
+                                eagerPlainTextFile,
+                                "text/plain"
+                            )
+                            val streamAttachment = dog.createAttachment(
+                                "text/plain",
+                                "stream attachment".length.toLong(),
+                                ByteArrayInputStream(
+                                    "stream attachment".toByteArray(
+                                        Charsets.UTF_8
+                                    )
+                                )
+                            )
+                            val imageAttachment = dog.createAttachment(
+                                assetToFile("image.jpg")
+                            )
+                            val audioAttachment = dog.createAttachment(
+                                assetToFile("clap.opus"),
+                            )
+                            assertEquals(
+                                "8.853",
+                                audioAttachment.attachment.metadataMap["duration"],
+                                "audio attachment should include duration metadata"
+                            )
+                            assertEquals(
+                                "application/x-lantern-waveform",
+                                audioAttachment.thumbnail?.attachment?.mimeType,
+                                "audio attachment should include waveform thumbnail"
+                            )
+                            val sentMsg = dog.sendToDirectContact(
+                                dogId,
+                                "hello dog",
+                                attachments = arrayOf(
+                                    badAttachment,
+                                    lazyAttachment,
+                                    eagerAttachment,
+                                    streamAttachment,
+                                    imageAttachment,
+                                    audioAttachment
+                                )
+                            )
+                            val recvMsg = dog.waitFor<Model.StoredMessage>(
+                                sentMsg.dbPath,
+                                "dog should receive message"
+                            )
+
+                            assertEquals(
+                                "hello dog",
+                                recvMsg.text,
+                                "dog should have received correct message text"
+                            )
+                            assertEquals(
+                                6,
+                                recvMsg.attachmentsCount,
+                                "dog should have received 6 attachments"
+                            )
+                    }
+            }
+        }
+    }
+
+    @Test
     fun testReactions() {
         testInCoroutine {
             newDB.use { dogDB ->
