@@ -622,6 +622,20 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
+    fun testMyself() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newMessaging(dogDB, "dog").with { dog ->
+                    val dogId = dog.myId.id
+                    dog.addOrUpdateDirectContact(dogId, "Note to self")
+                    val msgs = sendAndVerify("dog sends note to dog", dog, dog, "hi myself")
+                    assertNotNull(msgs.received)
+                }
+            }
+        }
+    }
+
+    @Test
     fun testReactions() {
         testInCoroutine {
             newDB.use { dogDB ->
@@ -1184,9 +1198,15 @@ class MessagingTest : BaseMessagingTest() {
             replyToSenderId = replyToId?.let { toId }
         )
         assertFalse(senderStoredMsg.id.isNullOrBlank())
-        assertEquals(Model.StoredMessage.DeliveryStatus.SENDING, senderStoredMsg.status, testCase)
-        assertEquals(Model.MessageDirection.OUT, senderStoredMsg.direction, testCase)
-        assertEquals(fromId, senderStoredMsg.senderId, testCase)
+        if(fromId == toId){
+            assertEquals(Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT, senderStoredMsg.status, testCase)
+            assertEquals(Model.MessageDirection.IN, senderStoredMsg.direction, testCase)
+            assertEquals(fromId, senderStoredMsg.senderId, testCase)
+        }else{
+            assertEquals(Model.StoredMessage.DeliveryStatus.SENDING, senderStoredMsg.status, testCase)
+            assertEquals(Model.MessageDirection.OUT, senderStoredMsg.direction, testCase)
+            assertEquals(fromId, senderStoredMsg.senderId, testCase)
+        }
         assertTrue(senderStoredMsg.ts > 0, testCase)
         assertTrue(senderStoredMsg.ts < now, testCase)
         if (replyToId != null) {
@@ -1268,12 +1288,17 @@ class MessagingTest : BaseMessagingTest() {
         }
 
         // ensure that recipient has received the message
+
         var recipientStoredMsg =
             to.waitFor<Model.StoredMessage>(senderStoredMsg.dbPath, testCase)
         assertEquals(senderStoredMsg.id, recipientStoredMsg.id)
         assertEquals(Model.MessageDirection.IN, recipientStoredMsg.direction, testCase)
         assertEquals(fromId, recipientStoredMsg.senderId, testCase)
-        assertTrue(senderStoredMsg.ts < recipientStoredMsg.ts, testCase)
+        if(fromId == toId){
+            assertTrue(senderStoredMsg.ts <= recipientStoredMsg.ts, testCase)
+        }else{
+            assertTrue(senderStoredMsg.ts < recipientStoredMsg.ts, testCase)
+        }
         assertEquals(Model.MessageDirection.IN, recipientStoredMsg.direction)
         if (replyToId != null) {
             assertEquals(toId, recipientStoredMsg.replyToSenderId)

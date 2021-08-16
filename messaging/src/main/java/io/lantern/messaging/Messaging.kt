@@ -347,15 +347,18 @@ class Messaging(
         replyToSenderId?.let { msgBuilder.setReplyToSenderId(it) }
         replyToId?.let { msgBuilder.setReplyToId(it) }
         var out: Model.OutboundMessage.Builder? = null
-        if(recipientId.directContactId.id !== myId.id){
+        if(recipientId != myId.id){
             out = Model.OutboundMessage.newBuilder().setMessageId(base32Id)
                 .setSent(sent)
                 .setSenderId(myId.id)
                 .setRecipientId(recipientId)
+        }else{
+            msgBuilder.status = Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
+            msgBuilder.direction = Model.MessageDirection.IN
         }
         var attachmentId = 0
         attachments?.forEach { attachment ->
-            if(out == null){
+            if(recipientId != myId.id){
                 attachment.toBuilder().status = Model.StoredAttachment.Status.DONE
             }
             msgBuilder.putAttachments(attachmentId, attachment)
@@ -371,12 +374,13 @@ class Messaging(
         return db.mutate { tx ->
             // save the message in a list of all messages
             tx.put(msg.dbPath, msg)
+
             // update the relevant contact
             updateContactMetaData(tx, msg)
             // save the message under the relevant contact messages
             tx.put(msg.contactMessagePath, msg.dbPath)
-            if(out !== null){
-                tx.put(out.dbPath, out.build())
+            if(recipientId != myId.id){
+                tx.put(out!!.dbPath, out.build())
                 cryptoWorker.submit { cryptoWorker.processOutbound(out) }
             }
             msg
