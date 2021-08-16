@@ -986,6 +986,158 @@ class MessagingTest : BaseMessagingTest() {
         }
     }
 
+    @Test
+    fun testIntroductions() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newDB.use { catDB ->
+                    newDB.use { fishDB ->
+                        newDB.use { ownerDB ->
+                            newMessaging(dogDB, "dog").with { dog ->
+                                newMessaging(catDB, "cat").with { cat ->
+                                    newMessaging(fishDB, "fish").with { fish ->
+                                        newMessaging(ownerDB, "owner").with { owner ->
+                                            doTestIntroductions(dog, cat, fish, owner)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun doTestIntroductions(
+        dog: Messaging,
+        cat: Messaging,
+        fish: Messaging,
+        owner: Messaging
+    ) {
+        val dogId = dog.myId.id
+        val catId = cat.myId.id
+        val fishId = fish.myId.id
+        val ownerId = owner.myId.id
+
+        // first connect owner with all the pets
+        owner.addOrUpdateDirectContact(dogId, "Dog")
+        dog.addOrUpdateDirectContact(ownerId, "Owner")
+        owner.addOrUpdateDirectContact(catId, "Cat")
+        cat.addOrUpdateDirectContact(ownerId, "Owner")
+        owner.addOrUpdateDirectContact(fishId, "Fish")
+        fish.addOrUpdateDirectContact(ownerId, "Owner")
+
+        // call introduce with too few arguments
+        try {
+            owner.introduce(listOf(dogId))
+            fail("Introducing only one contact should not work")
+        } catch (e: java.lang.IllegalArgumentException) {
+            // okay
+        }
+
+        // introduce all the pets to each other
+        owner.introduce(listOf(dogId, catId, fishId))
+
+        // introduce them again to make sure we can handle duplicate introductions
+        owner.introduce(listOf(dogId, catId, fishId))
+
+        // make sure everyone received an introduction to everyone
+        val introducedParties = listOf(dog, cat, fish)
+        introducedParties.forEach { me ->
+            introducedParties.forEach { them ->
+                if (me != them) {
+                    val msgPath = me.waitFor<String>(
+                        ownerId.introductionIndexPathByFrom(them.myId.id),
+                        "${me.myId.id} should have gotten an introduction to ${them.myId.id}",
+                        duration = 60.seconds,
+                    )
+                    val msg = me.db.get<Model.StoredMessage>(msgPath)
+                    assertNotNull(msg)
+                    assertTrue(msg.hasIntroduction())
+                    assertEquals(
+                        owner.introductionsDisappearAfterSeconds,
+                        msg.disappearAfterSeconds
+                    )
+                }
+            }
+        }
+
+        // test accepting introductions
+        dog.acceptIntroduction(ownerId, catId)
+        val catContact = dog.db.get<Model.Contact>(catId.directContactPath)
+        assertNotNull(catContact, "dog should have a cat contact now")
+        assertEquals(catId, catContact.contactId.id)
+        assertEquals("Cat", catContact.displayName)
+        assertEquals(
+            Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
+            dog.db.introductionMessage(ownerId, catId)?.value?.introduction?.status
+        )
+
+        dog.acceptIntroduction(ownerId, fishId)
+        cat.acceptIntroduction(ownerId, dogId)
+
+        // send a duplicate introduction for fish from dog to cat (but with a different displayName)
+        dog.addOrUpdateDirectContact(fishId, "Dogfish")
+        dog.introduce(listOf(catId, fishId))
+        cat.waitFor<String>(
+            dogId.introductionIndexPathByFrom(fishId),
+            "cat should have gotten an introduction to fish from dog"
+        )
+        cat.waitFor<String>(
+            ownerId.introductionIndexPathByFrom(fishId),
+            "cat should have gotten an introduction to fish from owner"
+        )
+
+        // accept the introduction and make sure status on both introduction messages is updated
+        cat.acceptIntroduction(dogId, fishId)
+        assertEquals(
+            Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
+            cat.db.introductionMessage(dogId, fishId)?.value?.introduction?.status
+        )
+        var catToFishFromDog =
+            cat.db.introductionMessage(ownerId, fishId)?.value
+        assertEquals(
+            Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
+            catToFishFromDog?.introduction?.status
+        )
+        assertEquals(
+            "Fish",
+            catToFishFromDog?.introduction?.originalDisplayName,
+            "originalDisplayName on introduction should be retained"
+        )
+        assertEquals(
+            "Dogfish",
+            catToFishFromDog?.introduction?.displayName,
+            "introduction should have updated to reflect accepted displayName"
+        )
+        val fishContact = cat.db.get<Model.Contact>(fishId.directContactPath)
+        assertEquals(
+            "Dogfish",
+            fishContact?.displayName,
+            "displayName on Contact should match version from accepted introduction"
+        )
+
+        // test deleting introduction messages
+        fish.rejectIntroduction(ownerId, dogId)
+        fish.rejectIntroduction(ownerId, catId)
+        assertNull(
+            fish.db.findOne(Schema.PATH_INTRODUCTIONS_BY_TO.path("%")),
+            "all introductions by to index entries should be deleted"
+        )
+        assertNull(
+            fish.db.findOne(Schema.PATH_INTRODUCTIONS_BY_FROM.path("%")),
+            "all introductions by from index entries should be deleted"
+        )
+
+        try {
+            fish.acceptIntroduction(ownerId, dogId)
+            fail("accepting deleted introduction should not work")
+        } catch (e: java.lang.IllegalArgumentException) {
+            // okay
+        }
+    }
+
     private fun testInCoroutine(fn: suspend () -> Unit) {
         var thrown: Throwable? = null
         runBlocking {
