@@ -194,8 +194,8 @@ class MessagingTest : BaseMessagingTest() {
                             dog.setMyDisplayName("The Dog")
                             cat.setMyDisplayName("The Cat")
 
-                            dog.addProvisionalContact(catId)
-                            cat.addProvisionalContact(dogId)
+                            assertTrue(dog.addProvisionalContact(catId))
+                            assertTrue(cat.addProvisionalContact(dogId))
 
                             val catContact = dog.waitFor<Model.Contact>(
                                 catId.directContactPath,
@@ -233,14 +233,14 @@ class MessagingTest : BaseMessagingTest() {
                                 "cat should have no remaining provisional contacts"
                             )
 
-                            dog.addProvisionalContact(catId)
+                            assertFalse(dog.addProvisionalContact(catId))
                             assertFalse(
                                 dog.db.contains(catId.provisionalContactPath),
                                 "no provisional contact should be stored for an existing contact"
                             )
 
                             cat.deleteDirectContact(dogId)
-                            cat.addProvisionalContact(dogId)
+                            assertTrue(cat.addProvisionalContact(dogId))
                             cat.waitFor<Model.Contact>(
                                 dogId.directContactPath,
                                 "cat should end up with dog contact again after having deleted dog"

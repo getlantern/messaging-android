@@ -263,18 +263,24 @@ class Messaging(
     //
     // If they're already a contact, this simply sends them a hello but doesn't add a provisional
     // contact.
-    fun addProvisionalContact(contactId: String) {
+    //
+    // @return true if a provisional contact was added, false if not (i.e. we already have the
+    //         Contact)
+    fun addProvisionalContact(contactId: String): Boolean {
         val provisionalContact = Model.ProvisionalContact.newBuilder()
             .setContactId(contactId)
             .setExpiresAt(now + provisionalContactsExpireAfterSeconds.secondsToMillis)
             .build()
 
+        var addedProvisionalContact = false
         db.mutate { tx ->
             if (!db.contains(contactId.directContactPath)) {
                 tx.put(contactId.provisionalContactPath, provisionalContact)
+                addedProvisionalContact = true
             }
             sendHello(tx, contactId)
         }
+        return addedProvisionalContact
     }
 
     fun deleteProvisionalContact(contactId: String) {
