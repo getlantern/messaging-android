@@ -239,6 +239,13 @@ class MessagingTest : BaseMessagingTest() {
                                 "no provisional contact should be stored for an existing contact"
                             )
 
+                            cat.deleteDirectContact(dogId)
+                            cat.addProvisionalContact(dogId)
+                            cat.waitFor<Model.Contact>(
+                                dogId.directContactPath,
+                                "cat should end up with dog contact again after having deleted dog"
+                            )
+
                             newDB.use { mouseDB ->
                                 newMessaging(mouseDB, "mouse").with { mouse ->
                                     val mouseId = mouse.myId.id
