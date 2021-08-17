@@ -261,9 +261,8 @@ class Messaging(
 
     // Adds a provisional contact.
     //
-    // @throws ContactAlreadyExistsException if the contact we're trying to add provisionally is
-    //         already in the address book
-    @Throws(ContactAlreadyExistsException::class)
+    // If they're already a contact, this simply sends them a hello but doesn't add a provisional
+    // contact.
     fun addProvisionalContact(contactId: String) {
         val provisionalContact = Model.ProvisionalContact.newBuilder()
             .setContactId(contactId)
@@ -271,11 +270,9 @@ class Messaging(
             .build()
 
         db.mutate { tx ->
-            if (db.contains(contactId.directContactPath)) {
-                throw ContactAlreadyExistsException()
+            if (!db.contains(contactId.directContactPath)) {
+                tx.put(contactId.provisionalContactPath, provisionalContact)
             }
-
-            tx.put(contactId.provisionalContactPath, provisionalContact)
             sendHello(tx, contactId)
         }
     }

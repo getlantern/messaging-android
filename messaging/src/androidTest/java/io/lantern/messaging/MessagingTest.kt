@@ -233,12 +233,11 @@ class MessagingTest : BaseMessagingTest() {
                                 "cat should have no remaining provisional contacts"
                             )
 
-                            try {
-                                dog.addProvisionalContact(catId)
-                                fail("Should not be allowed to add provisional contact for existing contact") // ktlint-disable max-line-length
-                            } catch (e: ContactAlreadyExistsException) {
-                                // okay
-                            }
+                            dog.addProvisionalContact(catId)
+                            assertFalse(
+                                dog.db.contains(catId.provisionalContactPath),
+                                "no provisional contact should be stored for an existing contact"
+                            )
 
                             newDB.use { mouseDB ->
                                 newMessaging(mouseDB, "mouse").with { mouse ->
