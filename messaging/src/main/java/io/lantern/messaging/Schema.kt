@@ -22,6 +22,7 @@ object Schema {
     const val PATH_SPAM = "/spam"
     const val PATH_INTRODUCTIONS_BY_FROM = "/intro/from"
     const val PATH_INTRODUCTIONS_BY_TO = "/intro/to"
+    const val PATH_PROVISIONAL_CONTACTS = "/pc"
 }
 
 fun Model.Message.inbound(senderId: String): Model.StoredMessage.Builder {
@@ -49,6 +50,9 @@ val String.directContactId: Model.ContactId
 
 val ByteString.directContactID: Model.ContactId
     get() = base32.directContactId
+
+val String.provisionalContactPath: String
+    get() = Schema.PATH_PROVISIONAL_CONTACTS.path(this)
 
 fun String.storedMessagePath(messageId: String) =
     Schema.PATH_MESSAGES.path(this, messageId)

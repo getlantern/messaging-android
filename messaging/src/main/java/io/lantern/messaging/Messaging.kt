@@ -87,6 +87,7 @@ class Messaging(
     private val defaultMessagesDisappearAfterSeconds: Int = 86400, // 1 day
     private val orphanedAttachmentCutoffSeconds: Int = 86400, // 1 day
     internal val introductionsDisappearAfterSeconds: Int = 86400 * 7, // 7 days
+    internal val provisionalContactsExpireAfterSeconds: Long = 300, // 5 minutes
     internal val name: String = "messaging",
     defaultConfiguration: Messages.Configuration = Messages.Configuration.newBuilder()
         .setMaxAttachmentSize(100000000).build()
@@ -103,6 +104,7 @@ class Messaging(
         db.registerType(22, Model.StoredMessage::class.java)
         db.registerType(23, Model.OutboundMessage::class.java)
         db.registerType(24, Model.InboundAttachment::class.java)
+        db.registerType(25, Model.ProvisionalContact::class.java)
     }
 
     private val cfg = AtomicReference<Messages.Configuration>()
@@ -207,6 +209,7 @@ class Messaging(
      *
      * @param id the base32 encoded public identity key of the contact
      * @param displayName the human-friendly display name for this contact
+     * @return the created or updated Contact
      */
     fun addOrUpdateDirectContact(id: String, displayName: String): Model.Contact =
         addOrUpdateContact(id.directContactId, displayName)
@@ -220,7 +223,7 @@ class Messaging(
         }
     }
 
-    private fun doAddOrUpdateContact(
+    internal fun doAddOrUpdateContact(
         contactId: Model.ContactId,
         displayName: String
     ): Model.Contact {
@@ -253,6 +256,34 @@ class Messaging(
                 )
             }
             contact
+        }
+    }
+
+    // Adds a provisional contact.
+    //
+    // @throws ContactAlreadyExistsException if the contact we're trying to add provisionally is
+    //         already in the address book
+    @Throws(ContactAlreadyExistsException::class)
+    fun addProvisionalContact(contactId: String) {
+        val provisionalContact = Model.ProvisionalContact.newBuilder()
+            .setContactId(contactId)
+            .setExpiresAt(now + provisionalContactsExpireAfterSeconds.secondsToMillis)
+            .build()
+
+        db.mutate { tx ->
+            if (db.contains(contactId.directContactPath)) {
+                throw ContactAlreadyExistsException()
+            }
+
+            tx.put(contactId.provisionalContactPath, provisionalContact)
+            sendHello(tx, contactId)
+        }
+    }
+
+    fun deleteProvisionalContact(contactId: String) {
+        db.mutate { tx ->
+            store.deleteAllSessions(contactId)
+            tx.delete(contactId.provisionalContactPath)
         }
     }
 
@@ -505,13 +536,40 @@ class Messaging(
         disappearAfterSeconds: Int
     ) {
         val disappearSettings = Model.DisappearSettings.newBuilder()
-            .setMessagesDisappearAfterSeconds(disappearAfterSeconds).build()
+            .setMessagesDisappearAfterSeconds(disappearAfterSeconds)
+            .build().toByteString()
+        send(tx, contactId) { out ->
+            out.disappearSettings = disappearSettings
+        }
+    }
+
+    internal fun sendHello(
+        tx: Transaction,
+        contactId: String,
+        final: Boolean = false,
+    ) {
+        tx.get<Model.Contact>(Schema.PATH_ME).let { me ->
+            val hello = Model.Hello.newBuilder()
+                .setDisplayName(me!!.displayName)
+                .setFinal(final)
+                .build().toByteString()
+            send(tx, contactId) { out ->
+                out.hello = hello
+            }
+        }
+    }
+
+    internal fun send(
+        tx: Transaction,
+        to: String,
+        build: (Model.OutboundMessage.Builder) -> Unit,
+    ) {
         val out =
             Model.OutboundMessage.newBuilder()
-                .setDisappearSettings(disappearSettings.toByteString())
                 .setSent(now)
                 .setSenderId(myId.id)
-                .setRecipientId(contactId) // TODO: this will need to change for groups
+                .setRecipientId(to) // TODO: this will need to change for groups
+        build(out)
         tx.put(out.dbPath, out.build())
         cryptoWorker.submit { cryptoWorker.processOutbound(out) }
     }

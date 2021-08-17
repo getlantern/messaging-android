@@ -174,6 +174,123 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
+    fun testProvisionalContacts() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newDB.use { catDB ->
+                    newMessaging(dogDB, "dog").with { dog ->
+                        newMessaging(catDB, "cat").with { cat ->
+                            val dogId = dog.myId.id
+                            val catId = cat.myId.id
+
+                            dog.setMyDisplayName("The Dog")
+                            cat.setMyDisplayName("The Cat")
+
+                            dog.addProvisionalContact(catId)
+                            cat.addProvisionalContact(dogId)
+
+                            val catContact = dog.waitFor<Model.Contact>(
+                                catId.directContactPath,
+                                "dog should end up with cat contact"
+                            )
+                            assertEquals(
+                                "The Cat",
+                                catContact.displayName,
+                                "Cat contact should have the right display name"
+                            )
+
+                            val dogContact = cat.waitFor<Model.Contact>(
+                                dogId.directContactPath,
+                                "cat should end up with dog contact"
+                            )
+                            assertEquals(
+                                "The Dog",
+                                dogContact.displayName,
+                                "Dog contact should have the right display name"
+                            )
+
+                            assertEquals(
+                                0,
+                                dog.db.listPaths(
+                                    Schema.PATH_PROVISIONAL_CONTACTS.path("%")
+                                ).size,
+                                "dog should have no remaining provisional contacts"
+                            )
+
+                            assertEquals(
+                                0,
+                                cat.db.listPaths(
+                                    Schema.PATH_PROVISIONAL_CONTACTS.path("%")
+                                ).size,
+                                "cat should have no remaining provisional contacts"
+                            )
+
+                            try {
+                                dog.addProvisionalContact(catId)
+                                fail("Should not be allowed to add provisional contact for existing contact") // ktlint-disable max-line-length
+                            } catch (e: ContactAlreadyExistsException) {
+                                // okay
+                            }
+
+                            newDB.use { mouseDB ->
+                                newMessaging(mouseDB, "mouse").with { mouse ->
+                                    val mouseId = mouse.myId.id
+
+                                    dog.addProvisionalContact(mouseId)
+                                    assertEquals(
+                                        1,
+                                        dog.db.listPaths(
+                                            Schema.PATH_PROVISIONAL_CONTACTS.path("%")
+                                        ).size,
+                                        "dog should have one provisional contact"
+                                    )
+
+                                    // wait for provisional contact to expire
+                                    delay(15000)
+
+                                    assertEquals(
+                                        0,
+                                        dog.db.listPaths(
+                                            Schema.PATH_PROVISIONAL_CONTACTS.path("%")
+                                        ).size,
+                                        "dog should have no provisional contacts"
+                                    )
+
+                                    val dogDbString = dog.db.dumpToString()
+                                    assertFalse(
+                                        dogDbString.contains(mouseId),
+                                        "dog's db should have no mention of mouse's ID"
+                                    )
+                                    val dogStoreDbString = dog.store.db.dumpToString()
+                                    assertFalse(
+                                        dogStoreDbString.contains(mouseId),
+                                        "dog's MessagingProtocolStore.db should have no mention of mouse's ID" // ktlint-disable max-line-length
+                                    )
+                                }
+                            }
+
+                            // make sure that we can successfully send messages even after the
+                            // provisional contact deletion job has run
+                            sendAndVerify(
+                                "cat sends a message to dog",
+                                cat,
+                                dog,
+                                "hi dog"
+                            )
+                            sendAndVerify(
+                                "dog sends a message to cat",
+                                dog,
+                                cat,
+                                "hi cat"
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     fun testBasicFlowWithConnectivityIssues() {
         newDB.use { dogDB ->
             newDB.use { catDB ->
@@ -1370,6 +1487,7 @@ class MessagingTest : BaseMessagingTest() {
         failedSendRetryDelayMillis: Long = 100,
         stopSendRetryAfterMillis: Long = 5L.minutesToMillis,
         orphanedAttachmentCutoffSeconds: Int = 1,
+        provisionalContactsExpireAfterSeconds: Long = 14
     ): Messaging {
         return Messaging(
             db,
@@ -1387,6 +1505,7 @@ class MessagingTest : BaseMessagingTest() {
             failedSendRetryDelayMillis = failedSendRetryDelayMillis,
             stopSendRetryAfterMillis = stopSendRetryAfterMillis,
             orphanedAttachmentCutoffSeconds = orphanedAttachmentCutoffSeconds,
+            provisionalContactsExpireAfterSeconds = provisionalContactsExpireAfterSeconds,
             name = name
         )
     }
