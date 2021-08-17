@@ -809,15 +809,24 @@ internal class CryptoWorker(
     ) {
         val provisionalContactPath = senderId.provisionalContactPath
         tx.get<Model.ProvisionalContact>(provisionalContactPath)?.let {
-            messaging.doAddOrUpdateContact(senderId.directContactId, hello.displayName)
+            messaging.doAddOrUpdateContact(
+                senderId.directContactId,
+                hello.displayName,
+                mostRecentHelloTs = now
+            )
             tx.delete(senderId.provisionalContactPath)
             if (!hello.final) {
                 // send a hello just in case they couldn't process our first one
                 messaging.sendHello(tx, senderId, final = true)
             }
         } ?: tx.get<Model.Contact>(senderId.directContactPath)?.let {
-            // also reply with a hello for existing contacts
-            messaging.sendHello(tx, senderId, final = true)
+            // just update teh mostRecentHelloTs
+            tx.put(
+                senderId.directContactPath, it.toBuilder().setMostRecentHelloTs(now).build()
+            )
+            if (!hello.final) {
+                messaging.sendHello(tx, senderId, final = true)
+            }
         }
     }
 

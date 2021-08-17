@@ -225,7 +225,8 @@ class Messaging(
 
     internal fun doAddOrUpdateContact(
         contactId: Model.ContactId,
-        displayName: String
+        displayName: String,
+        mostRecentHelloTs: Long? = null,
     ): Model.Contact {
         val path = contactId.contactPath
         return db.mutate { tx ->
@@ -238,6 +239,7 @@ class Messaging(
                 contactBuilder.messagesDisappearAfterSeconds =
                     defaultMessagesDisappearAfterSeconds
             }
+            mostRecentHelloTs?.let { contactBuilder.setMostRecentHelloTs(it) }
             val contact =
                 contactBuilder.setContactId(contactId).setDisplayName(displayName).build()
             tx.put(path, contact)
@@ -264,23 +266,23 @@ class Messaging(
     // If they're already a contact, this simply sends them a hello but doesn't add a provisional
     // contact.
     //
-    // @return true if a provisional contact was added, false if not (i.e. we already have the
-    //         Contact)
-    fun addProvisionalContact(contactId: String): Boolean {
+    // @return the timestamp of the most recent hello received from this contact.
+    fun addProvisionalContact(contactId: String): Long {
         val provisionalContact = Model.ProvisionalContact.newBuilder()
             .setContactId(contactId)
             .setExpiresAt(now + provisionalContactsExpireAfterSeconds.secondsToMillis)
             .build()
 
-        var addedProvisionalContact = false
+        var mostRecentHelloTs = 0L
         db.mutate { tx ->
-            if (!db.contains(contactId.directContactPath)) {
+            db.get<Model.Contact>(contactId.directContactPath)?.let {
+                mostRecentHelloTs = it.mostRecentHelloTs
+            } ?: run {
                 tx.put(contactId.provisionalContactPath, provisionalContact)
-                addedProvisionalContact = true
             }
             sendHello(tx, contactId)
         }
-        return addedProvisionalContact
+        return mostRecentHelloTs
     }
 
     fun deleteProvisionalContact(contactId: String) {
