@@ -41,7 +41,7 @@ message Contact {
 // protocol store, ensuring no trace is left of this contact.
 message ProvisionalContact {
   string contactId = 1; // the ID of the contact (base32 encoded)
-  int64 expiresAt = 2; // the unix timestamp in milliseconds of when this invitation expires
+  int64 expiresAt = 2; // the unix timestamp in milliseconds of when this provisional contact expires
 }
 
 // An attachment to a Message
