@@ -101,6 +101,14 @@ class MessagingTest : BaseMessagingTest() {
                                 cat,
                                 "hi cat"
                             )
+
+                            dog.waitFor<Model.Contact>(
+                                catId.directContactPath,
+                                "cat contact shows that a message has been received (in this case, the disappear settings message, since we haven't sent anything yet)" // ktlint-disable max-line-length
+                            ) {
+                                it.hasReceivedMessage
+                            }
+
                             val msgs = sendAndVerify(
                                 "cat sends another message to dog",
                                 cat,

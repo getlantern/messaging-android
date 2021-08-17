@@ -830,8 +830,11 @@ class Messaging(
         // delete existing index entry
         tx.delete(contact.timestampedIdxPath)
         // update the contact
-        val updatedContactBuilder = contact.toBuilder().setMostRecentMessageTs(msg.ts)
-            .setMostRecentMessageDirection(msg.direction).setMostRecentMessageText(msg.text)
+        val updatedContactBuilder = contact.toBuilder()
+            .setMostRecentMessageTs(msg.ts)
+            .setMostRecentMessageDirection(msg.direction)
+            .setMostRecentMessageText(msg.text)
+            .setHasReceivedMessage(true)
         if (msg.attachmentsCount > 0) {
             updatedContactBuilder.mostRecentAttachmentMimeType =
                 msg.attachmentsMap.values.iterator().next().attachment.mimeType

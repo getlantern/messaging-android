@@ -31,7 +31,8 @@ message Contact {
   string mostRecentMessageText = 7; // the text of the most recent message with this contact
   string mostRecentAttachmentMimeType = 8; // the mime type of the most recent attachment with this contact
   int32 messagesDisappearAfterSeconds = 9; // the number of seconds after which new messages will automatically disappear. <=0 means they won't disappear.
-  int64 firstReceivedMessageTs = 10; // the timestamp of when the first message was received from this contact (including control messages)
+  int64 firstReceivedMessageTs = 10; // the timestamp of when the first message was received from this contact (excluding control messages)
+  bool hasReceivedMessage = 11; // boolean indicating whether or not the contact has received any message (including control messages)
 }
 
 // A provisional direct contact that is not yet in the address book. If we receive a Hello from that

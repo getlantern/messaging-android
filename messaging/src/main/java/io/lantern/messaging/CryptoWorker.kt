@@ -97,7 +97,7 @@ internal class CryptoWorker(
                                 try {
                                     db.mutate { tx ->
                                         val provisionalContact =
-                                            db.get<Model.ProvisionalContact>(path)
+                                            tx.get<Model.ProvisionalContact>(path)
                                         provisionalContact?.let { it ->
                                             // check the expiration again in case the provisional
                                             // contact's expiration was extended
@@ -639,35 +639,44 @@ internal class CryptoWorker(
             val transferMsg = Model.TransferMessage.parseFrom(plainText)
             val senderAddress = decryptionResult.senderAddress
             val senderId = senderAddress.identityKey.toString()
-            when (transferMsg.contentCase) {
-                Model.TransferMessage.ContentCase.MESSAGE -> storeMessage(
+            if (transferMsg.contentCase == Model.TransferMessage.ContentCase.MESSAGE) {
+                storeMessage(
                     tx,
                     senderId,
                     Model.Message.parseFrom(transferMsg.message)
                 )
-                Model.TransferMessage.ContentCase.REACTION -> storeReaction(
-                    tx,
-                    senderId,
-                    Model.Reaction.parseFrom(transferMsg.reaction)
-                )
-                Model.TransferMessage.ContentCase.DELETEMESSAGEID -> messaging.deleteLocally(
-                    senderId.storedMessagePath(transferMsg.deleteMessageId.base32),
-                    // We keep metadata so that the recipient's UI still has an empty placeholder for the deleted message.
-                    // Once the recipient chooses to delete this message locally, the metadata will be deleted.
-                    remotelyDeletedBy = senderId.directContactId,
-                )
-                Model.TransferMessage.ContentCase.DISAPPEARSETTINGS -> storeDisappearSettings(
-                    tx,
-                    senderId,
-                    Model.DisappearSettings.parseFrom(transferMsg.disappearSettings)
-                )
-                Model.TransferMessage.ContentCase.HELLO -> storeHello(
-                    tx,
-                    senderId,
-                    Model.Hello.parseFrom(transferMsg.hello)
-                )
-                else -> {
-                    logger.debug("received currently unsupported message type")
+            } else {
+                tx.get<Model.Contact>(senderId.directContactPath)?.let {
+                    val updatedContact = it.toBuilder()
+                        .setHasReceivedMessage(true).build()
+                    tx.put(senderId.directContactPath, updatedContact)
+                }
+
+                when (transferMsg.contentCase) {
+                    Model.TransferMessage.ContentCase.REACTION -> storeReaction(
+                        tx,
+                        senderId,
+                        Model.Reaction.parseFrom(transferMsg.reaction)
+                    )
+                    Model.TransferMessage.ContentCase.DELETEMESSAGEID -> messaging.deleteLocally(
+                        senderId.storedMessagePath(transferMsg.deleteMessageId.base32),
+                        // We keep metadata so that the recipient's UI still has an empty placeholder for the deleted message.
+                        // Once the recipient chooses to delete this message locally, the metadata will be deleted.
+                        remotelyDeletedBy = senderId.directContactId,
+                    )
+                    Model.TransferMessage.ContentCase.DISAPPEARSETTINGS -> storeDisappearSettings(
+                        tx,
+                        senderId,
+                        Model.DisappearSettings.parseFrom(transferMsg.disappearSettings)
+                    )
+                    Model.TransferMessage.ContentCase.HELLO -> storeHello(
+                        tx,
+                        senderId,
+                        Model.Hello.parseFrom(transferMsg.hello)
+                    )
+                    else -> {
+                        logger.debug("received currently unsupported message type")
+                    }
                 }
             }
         }
