@@ -968,10 +968,10 @@ class Messaging(
     fun acceptIntroduction(fromId: String, toId: String) {
         cryptoWorker.submitForValue {
             db.mutate { tx ->
-                val introductionMessage = tx.introductionMessage(fromId, toId)
+                val introductionMessage = tx.introductionMessage(fromId, toId)?.value?.value
                     ?: throw IllegalArgumentException("Introduction not found")
 
-                val introduction = introductionMessage.value.introduction
+                val introduction = introductionMessage.introduction
                 doAddOrUpdateContact(introduction.to.id.directContactId, introduction.displayName)
 
                 // Update status on all introductions

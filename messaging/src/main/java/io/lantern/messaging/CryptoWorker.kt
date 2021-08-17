@@ -709,7 +709,7 @@ internal class CryptoWorker(
             // a given combination of from/to (i.e. each the conversation only has one introduction
             // message per distinct contact)
             tx.introductionMessage(senderId, introduction.to.id)?.let {
-                tx.delete(it.path)
+                messaging.deleteLocally(it.detailPath)
             }
 
             // Add index entries pointing to the introduction

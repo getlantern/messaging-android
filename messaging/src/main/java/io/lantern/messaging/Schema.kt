@@ -3,6 +3,7 @@ package io.lantern.messaging
 import com.google.protobuf.ByteString
 import io.lantern.db.Detail
 import io.lantern.db.Queryable
+import io.lantern.db.Raw
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.ecc.ECPublicKey
 import org.whispersystems.libsignal.util.Base32
@@ -154,5 +155,5 @@ fun String.path(vararg elements: Any): String {
 fun Queryable.introductionMessagesTo(to: String): List<Detail<Model.StoredMessage>> =
     listDetails(Schema.PATH_INTRODUCTIONS_BY_TO.path(to, "%"))
 
-fun Queryable.introductionMessage(from: String, to: String): Detail<Model.StoredMessage>? =
-    listDetails<Model.StoredMessage>(from.introductionIndexPathByFrom(to)).firstOrNull()
+fun Queryable.introductionMessage(from: String, to: String): Detail<Raw<Model.StoredMessage>>? =
+    listDetailsRaw<Model.StoredMessage>(from.introductionIndexPathByFrom(to)).firstOrNull()

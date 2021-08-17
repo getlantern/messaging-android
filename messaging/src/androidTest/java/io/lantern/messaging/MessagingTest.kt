@@ -1195,6 +1195,18 @@ class MessagingTest : BaseMessagingTest() {
                         owner.introductionsDisappearAfterSeconds,
                         msg.disappearAfterSeconds
                     )
+                    val allIntroductionMessagesToThem = me.db
+                        .listDetails<Model.StoredMessage>(
+                            ownerId.directContactId.contactMessagesQuery
+                        )
+                        .filter {
+                            it.value.hasIntroduction() && it.value.introduction.to == them.myId
+                        }
+                    assertEquals(
+                        1,
+                        allIntroductionMessagesToThem.size,
+                        "should have only 1 introduction message from dog to them"
+                    )
                 }
             }
         }
@@ -1207,7 +1219,7 @@ class MessagingTest : BaseMessagingTest() {
         assertEquals("Cat", catContact.displayName)
         assertEquals(
             Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
-            dog.db.introductionMessage(ownerId, catId)?.value?.introduction?.status
+            dog.db.introductionMessage(ownerId, catId)?.value?.value?.introduction?.status
         )
 
         dog.acceptIntroduction(ownerId, fishId)
@@ -1229,10 +1241,10 @@ class MessagingTest : BaseMessagingTest() {
         cat.acceptIntroduction(dogId, fishId)
         assertEquals(
             Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
-            cat.db.introductionMessage(dogId, fishId)?.value?.introduction?.status
+            cat.db.introductionMessage(dogId, fishId)?.value?.value?.introduction?.status
         )
         var catToFishFromDog =
-            cat.db.introductionMessage(ownerId, fishId)?.value
+            cat.db.introductionMessage(ownerId, fishId)?.value?.value
         assertEquals(
             Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
             catToFishFromDog?.introduction?.status
