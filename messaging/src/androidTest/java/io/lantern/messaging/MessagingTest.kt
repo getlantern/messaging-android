@@ -124,8 +124,9 @@ class MessagingTest : BaseMessagingTest() {
                                 dog.db.listPaths(Schema.PATH_CONTACT_MESSAGES.path("%")).count()
                             )
                             assertEquals(
-                                0,
-                                dog.db.listPaths(Schema.PATH_CONTACTS.path("%")).count()
+                                1,
+                                dog.db.listPaths(Schema.PATH_CONTACTS.path("%")).count(),
+                                "dog now have a permanent contact"
                             )
                             assertEquals(
                                 0,
@@ -774,6 +775,104 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
+    fun testMyself() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newMessaging(dogDB, "dog").with { dog ->
+                    val msgs = sendAndVerify("dog sends note to dog", dog, dog, "hi myself")
+                    assertNotNull(msgs.received)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun testMyselfAttachments() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newMessaging(dogDB, "dog").with { dog ->
+                    val dogId = dog.myId.id
+                    val lazyPlainTextFile = File(tempDir, UUID.randomUUID().toString())
+                    FileOutputStream(lazyPlainTextFile).use { output ->
+                        Util.copy(
+                            ByteArrayInputStream(
+                                "lazy attachment".toByteArray(
+                                    Charsets.UTF_8
+                                )
+                            ),
+                            output
+                        )
+                    }
+                    val lazyAttachment = dog.createAttachment(
+                        lazyPlainTextFile,
+                        "text/plain"
+                    )
+                    val eagerPlainTextFile = File(tempDir, UUID.randomUUID().toString())
+                    FileOutputStream(eagerPlainTextFile).use { output ->
+                        Util.copy(
+                            ByteArrayInputStream(
+                                "eager attachment".toByteArray(
+                                    Charsets.UTF_8
+                                )
+                            ),
+                            output
+                        )
+                    }
+                    val eagerAttachment = dog.createAttachment(
+                        eagerPlainTextFile,
+                        "text/plain",
+                        lazy = false
+                    )
+                    val sentMsg = dog.sendToDirectContact(
+                        dogId,
+                        "hello dog",
+                        attachments = arrayOf(
+                            lazyAttachment,
+                            eagerAttachment,
+                        )
+                    )
+                    val recvMsg = dog.waitFor<Model.StoredMessage>(
+                        sentMsg.dbPath,
+                        "dog should receive message with 2 completed attachments"
+                    ) {
+                        it.attachmentsMap.values.count {
+                            it.status == Model.StoredAttachment.Status.DONE
+                        } == 2
+                    }
+
+                    assertEquals(
+                        2,
+                        recvMsg.attachmentsCount,
+                        "dog should have received 2 attachments"
+                    )
+
+                    fun getAttachment(id: Int): Model.StoredAttachment? {
+                        return recvMsg.attachmentsMap[id]
+                    }
+
+                    fun text(attachment: Model.StoredAttachment?): String {
+                        val out = ByteArrayOutputStream()
+                        attachment?.inputStream?.use { Util.copy(it, out) }
+                        return out.toString(Charsets.UTF_8.name())
+                    }
+
+                    val receivedLazyAttachment = getAttachment(0)
+                    val receivedEagerAttachment = getAttachment(1)
+
+                    assertEquals(
+                        "lazy attachment",
+                        text(receivedLazyAttachment)
+                    )
+                    assertEquals(
+                        "eager attachment",
+                        text(receivedEagerAttachment)
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
     fun testReactions() {
         testInCoroutine {
             newDB.use { dogDB ->
@@ -1348,9 +1447,18 @@ class MessagingTest : BaseMessagingTest() {
             replyToSenderId = replyToId?.let { toId }
         )
         assertFalse(senderStoredMsg.id.isNullOrBlank())
-        assertEquals(Model.StoredMessage.DeliveryStatus.SENDING, senderStoredMsg.status, testCase)
-        assertEquals(Model.MessageDirection.OUT, senderStoredMsg.direction, testCase)
-        assertEquals(fromId, senderStoredMsg.senderId, testCase)
+        assertEquals(
+            Model.StoredMessage.DeliveryStatus.SENDING,
+            senderStoredMsg.status,
+            testCase
+        )
+        if (fromId == toId) {
+            assertEquals(Model.MessageDirection.IN, senderStoredMsg.direction, testCase)
+            assertEquals(fromId, senderStoredMsg.senderId, testCase)
+        } else {
+            assertEquals(Model.MessageDirection.OUT, senderStoredMsg.direction, testCase)
+            assertEquals(fromId, senderStoredMsg.senderId, testCase)
+        }
         assertTrue(senderStoredMsg.ts > 0, testCase)
         assertTrue(senderStoredMsg.ts < now, testCase)
         if (replyToId != null) {
@@ -1432,12 +1540,17 @@ class MessagingTest : BaseMessagingTest() {
         }
 
         // ensure that recipient has received the message
+
         var recipientStoredMsg =
             to.waitFor<Model.StoredMessage>(senderStoredMsg.dbPath, testCase)
         assertEquals(senderStoredMsg.id, recipientStoredMsg.id)
         assertEquals(Model.MessageDirection.IN, recipientStoredMsg.direction, testCase)
         assertEquals(fromId, recipientStoredMsg.senderId, testCase)
-        assertTrue(senderStoredMsg.ts < recipientStoredMsg.ts, testCase)
+        if (fromId == toId) {
+            assertTrue(senderStoredMsg.ts <= recipientStoredMsg.ts, testCase)
+        } else {
+            assertTrue(senderStoredMsg.ts < recipientStoredMsg.ts, testCase)
+        }
         assertEquals(Model.MessageDirection.IN, recipientStoredMsg.direction)
         if (replyToId != null) {
             assertEquals(toId, recipientStoredMsg.replyToSenderId)

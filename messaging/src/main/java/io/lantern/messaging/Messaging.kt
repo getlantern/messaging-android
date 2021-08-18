@@ -160,6 +160,9 @@ class Messaging(
         }
         myId = me.contactId
 
+        // add myself as a contact user to start "talking"
+        addOrUpdateContact(myId, "Note to self")
+
         // immediately request some upload authorizations so that we're ready to upload attachments
         cryptoWorker.submit { cryptoWorker.getMoreUploadAuthorizationsIfNecessary() }
 
@@ -357,11 +360,13 @@ class Messaging(
                 "If specifying either replyToSenderId and replyToId, please specify both"
             )
         }
+
         val recipient = db.get<Model.Contact>(recipientId.directContactPath)
             ?: throw IllegalArgumentException("Unknown recipient")
-
+        val sendingToSelf = recipientId == myId.id
         val base32Id = randomMessageId.base32
         val sent = now
+
         val msgBuilder =
             Model.StoredMessage.newBuilder().setId(base32Id)
                 .setContactId(recipientId.directContactId)
@@ -379,22 +384,38 @@ class Messaging(
         }
         replyToSenderId?.let { msgBuilder.setReplyToSenderId(it) }
         replyToId?.let { msgBuilder.setReplyToId(it) }
-        val out =
-            Model.OutboundMessage.newBuilder().setMessageId(base32Id)
-                .setSent(sent)
-                .setSenderId(myId.id)
-                .setRecipientId(recipientId)
+        val out = Model.OutboundMessage.newBuilder().setMessageId(base32Id)
+            .setSent(sent)
+            .setSenderId(myId.id)
+            .setRecipientId(recipientId)
+        if (sendingToSelf) {
+            msgBuilder.direction = Model.MessageDirection.IN
+        }
+
         var attachmentId = 0
-        attachments?.forEach { attachment ->
+        attachments?.forEach { _attachment ->
+            val attachment =
+                if (sendingToSelf &&
+                    _attachment.status == Model.StoredAttachment.Status.PENDING_UPLOAD
+                ) {
+                    // don't bother uploading attachments on messages sent to ourselves
+                    _attachment.toBuilder()
+                        .setStatus(Model.StoredAttachment.Status.DONE).build()
+                } else {
+                    _attachment
+                }
             msgBuilder.putAttachments(attachmentId, attachment)
+
             attachmentId++
             if (attachment.hasThumbnail()) {
                 msgBuilder.putThumbnails(attachmentId, attachmentId - 1)
                 attachmentId++
             }
         }
+
         replyToSenderId?.let { msgBuilder.setReplyToSenderId(it) }
         replyToId?.let { msgBuilder.setReplyToId(it) }
+
         val msg = msgBuilder.build()
         return db.mutate { tx ->
             // save the message in a list of all messages
@@ -757,7 +778,8 @@ class Messaging(
     fun encryptAttachment(
         storedAttachment: Model.StoredAttachment.Builder,
         inputStream: InputStream? = null,
-        length: Long? = null
+        length: Long? = null,
+        sendingToSelf: Boolean = false
     ) {
         val plainTextFile = File(storedAttachment.plainTextFilePath)
         if (inputStream == null && !plainTextFile.exists()) {
@@ -771,7 +793,11 @@ class Messaging(
             length ?: plainTextFile.length()
         )
         storedAttachment.attachment = attachmentBuilder.build()
-        storedAttachment.status = Model.StoredAttachment.Status.PENDING_UPLOAD
+        storedAttachment.status =
+            if (sendingToSelf)
+                Model.StoredAttachment.Status.DONE
+            else
+                Model.StoredAttachment.Status.PENDING_UPLOAD
     }
 
     private fun encryptAttachment(
