@@ -3,6 +3,7 @@ package io.lantern.messaging
 import com.google.protobuf.ByteString
 import io.lantern.db.Detail
 import io.lantern.db.Queryable
+import io.lantern.db.Raw
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.ecc.ECPublicKey
 import org.whispersystems.libsignal.util.Base32
@@ -22,6 +23,7 @@ object Schema {
     const val PATH_SPAM = "/spam"
     const val PATH_INTRODUCTIONS_BY_FROM = "/intro/from"
     const val PATH_INTRODUCTIONS_BY_TO = "/intro/to"
+    const val PATH_PROVISIONAL_CONTACTS = "/pc"
 }
 
 fun Model.Message.inbound(senderId: String): Model.StoredMessage.Builder {
@@ -49,6 +51,9 @@ val String.directContactId: Model.ContactId
 
 val ByteString.directContactID: Model.ContactId
     get() = base32.directContactId
+
+val String.provisionalContactPath: String
+    get() = Schema.PATH_PROVISIONAL_CONTACTS.path(this)
 
 fun String.storedMessagePath(messageId: String) =
     Schema.PATH_MESSAGES.path(this, messageId)
@@ -150,5 +155,5 @@ fun String.path(vararg elements: Any): String {
 fun Queryable.introductionMessagesTo(to: String): List<Detail<Model.StoredMessage>> =
     listDetails(Schema.PATH_INTRODUCTIONS_BY_TO.path(to, "%"))
 
-fun Queryable.introductionMessage(from: String, to: String): Detail<Model.StoredMessage>? =
-    listDetails<Model.StoredMessage>(from.introductionIndexPathByFrom(to)).firstOrNull()
+fun Queryable.introductionMessage(from: String, to: String): Detail<Raw<Model.StoredMessage>>? =
+    listDetailsRaw<Model.StoredMessage>(from.introductionIndexPathByFrom(to)).firstOrNull()
