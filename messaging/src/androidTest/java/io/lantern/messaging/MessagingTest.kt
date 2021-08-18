@@ -339,7 +339,7 @@ class MessagingTest : BaseMessagingTest() {
                         )
 
                         val hugeLength = Long.MAX_VALUE -
-                                AttachmentCipherOutputStream.MAXIMUM_ENCRYPTION_OVERHEAD
+                            AttachmentCipherOutputStream.MAXIMUM_ENCRYPTION_OVERHEAD
                         // try to create an overly large attachment and make sure it fails
                         try {
                             dog.createAttachment(
@@ -657,7 +657,7 @@ class MessagingTest : BaseMessagingTest() {
                                     "waiting for attachment to download"
                                 ) {
                                     it.attachmentsMap[id]?.status ==
-                                            Model.StoredAttachment.Status.DONE
+                                        Model.StoredAttachment.Status.DONE
                                 }.let { storedMsg ->
                                     return storedMsg.attachmentsMap[id]
                                 }
@@ -820,7 +820,8 @@ class MessagingTest : BaseMessagingTest() {
                     }
                     val eagerAttachment = dog.createAttachment(
                         eagerPlainTextFile,
-                        "text/plain"
+                        "text/plain",
+                        lazy = false
                     )
                     val sentMsg = dog.sendToDirectContact(
                         dogId,
@@ -832,8 +833,12 @@ class MessagingTest : BaseMessagingTest() {
                     )
                     val recvMsg = dog.waitFor<Model.StoredMessage>(
                         sentMsg.dbPath,
-                        "dog should receive message"
-                    )
+                        "dog should receive message with 2 completed attachments"
+                    ) {
+                        it.attachmentsMap.values.count {
+                            it.status == Model.StoredAttachment.Status.DONE
+                        } == 2
+                    }
 
                     assertEquals(
                         2,
@@ -1442,20 +1447,15 @@ class MessagingTest : BaseMessagingTest() {
             replyToSenderId = replyToId?.let { toId }
         )
         assertFalse(senderStoredMsg.id.isNullOrBlank())
+        assertEquals(
+            Model.StoredMessage.DeliveryStatus.SENDING,
+            senderStoredMsg.status,
+            testCase
+        )
         if (fromId == toId) {
-            assertEquals(
-                Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT,
-                senderStoredMsg.status,
-                testCase
-            )
             assertEquals(Model.MessageDirection.IN, senderStoredMsg.direction, testCase)
             assertEquals(fromId, senderStoredMsg.senderId, testCase)
         } else {
-            assertEquals(
-                Model.StoredMessage.DeliveryStatus.SENDING,
-                senderStoredMsg.status,
-                testCase
-            )
             assertEquals(Model.MessageDirection.OUT, senderStoredMsg.direction, testCase)
             assertEquals(fromId, senderStoredMsg.senderId, testCase)
         }
@@ -1510,7 +1510,7 @@ class MessagingTest : BaseMessagingTest() {
         ) { storedMsg ->
             storedMsg.attachmentsMap.values.find {
                 (it.status != Model.StoredAttachment.Status.DONE) ||
-                        (it.hasThumbnail() && it.thumbnail.status != Model.StoredAttachment.Status.DONE)
+                    (it.hasThumbnail() && it.thumbnail.status != Model.StoredAttachment.Status.DONE)
             } == null
         }
 
@@ -1603,10 +1603,10 @@ class MessagingTest : BaseMessagingTest() {
                 to.waitFor(recipientStoredMsg.dbPath, testCase) { storedMsg ->
                     storedMsg.attachmentsMap.values.find {
                         (it.status != Model.StoredAttachment.Status.DONE) ||
-                                (
-                                        it.hasThumbnail() &&
-                                                it.thumbnail.status != Model.StoredAttachment.Status.DONE
-                                        )
+                            (
+                                it.hasThumbnail() &&
+                                    it.thumbnail.status != Model.StoredAttachment.Status.DONE
+                                )
                     } == null
                 }
             recipientStoredMsg.attachmentsMap.forEach { (id, attachment) ->

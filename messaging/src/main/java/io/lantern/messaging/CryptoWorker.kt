@@ -207,7 +207,9 @@ internal class CryptoWorker(
             return
         }
 
-        if (!out.knowsRecipientDevices) {
+        val sendingToSelf = out.recipientId == messaging.myId.id
+
+        if (!sendingToSelf && !out.knowsRecipientDevices) {
             val recipientIdentityKey = out.recipientIdentityKey
             // find out which deviceIds to send to
             val knownDeviceIds =
@@ -244,7 +246,9 @@ internal class CryptoWorker(
                             it.attachmentsPendingEncryption.forEach { (id, attachment) ->
                                 val storedAttachment = attachment.toBuilder()
                                 try {
-                                    messaging.encryptAttachment(storedAttachment)
+                                    messaging.encryptAttachment(
+                                        storedAttachment, sendingToSelf = sendingToSelf
+                                    )
                                 } catch (e: AttachmentPlainTextMissingException) {
                                     storedAttachment.status =
                                         Model.StoredAttachment.Status.FAILED
@@ -276,33 +280,42 @@ internal class CryptoWorker(
                 return
             }
 
-            encryptAndSendToAll(
-                out,
-                afterSuccess = { tx, completelySent ->
-                    val msgPath = out.msgPath
-                    tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
-                        val msgBuilder = msg.toBuilder()
-                        if (completelySent) {
-                            // mark the outbound message as "viewed" only once it's been completely sent
-                            messaging.markViewed(tx, msgBuilder)
-                        }
-                        tx.put(
-                            msgPath,
-                            msgBuilder
-                                .setStatus(
-                                    if (completelySent)
-                                        Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
-                                    else
-                                        Model.StoredMessage.DeliveryStatus.PARTIALLY_SENT
-                                )
-                                .build()
-                        )
+            fun afterSendSuccess(tx: Transaction, completelySent: Boolean) {
+                val msgPath = out.msgPath
+                tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
+                    val msgBuilder = msg.toBuilder()
+                    if (completelySent) {
+                        // mark the outbound message as "viewed" only once it's been completely sent
+                        messaging.markViewed(tx, msgBuilder)
                     }
+                    tx.put(
+                        msgPath,
+                        msgBuilder
+                            .setStatus(
+                                if (completelySent)
+                                    Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
+                                else
+                                    Model.StoredMessage.DeliveryStatus.PARTIALLY_SENT
+                            )
+                            .build()
+                    )
                 }
-            ) {
-                Model.TransferMessage.newBuilder()
-                    .setMessage(msg.message.toByteString()).build()
-                    .toByteArray()
+            }
+
+            if (sendingToSelf) {
+                db.mutate { tx ->
+                    afterSendSuccess(tx, true)
+                    tx.delete(out.dbPath)
+                }
+            } else {
+                encryptAndSendToAll(
+                    out,
+                    afterSuccess = ::afterSendSuccess
+                ) {
+                    Model.TransferMessage.newBuilder()
+                        .setMessage(msg.message.toByteString()).build()
+                        .toByteArray()
+                }
             }
         } else {
             val transferMsg = Model.TransferMessage.newBuilder()
@@ -322,8 +335,14 @@ internal class CryptoWorker(
                 }
             }
 
-            encryptAndSendToAll(out) {
-                transferMsg.build().toByteArray()
+            if (sendingToSelf) {
+                db.mutate { tx ->
+                    tx.delete(out.dbPath)
+                }
+            } else {
+                encryptAndSendToAll(out) {
+                    transferMsg.build().toByteArray()
+                }
             }
         }
     }

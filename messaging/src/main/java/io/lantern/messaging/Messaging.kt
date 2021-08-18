@@ -360,12 +360,13 @@ class Messaging(
                 "If specifying either replyToSenderId and replyToId, please specify both"
             )
         }
+
         val recipient = db.get<Model.Contact>(recipientId.directContactPath)
             ?: throw IllegalArgumentException("Unknown recipient")
-
         val sendingToSelf = recipientId == myId.id
         val base32Id = randomMessageId.base32
         val sent = now
+
         val msgBuilder =
             Model.StoredMessage.newBuilder().setId(base32Id)
                 .setContactId(recipientId.directContactId)
@@ -383,25 +384,27 @@ class Messaging(
         }
         replyToSenderId?.let { msgBuilder.setReplyToSenderId(it) }
         replyToId?.let { msgBuilder.setReplyToId(it) }
-        var out: Model.OutboundMessage.Builder? = null
+        val out = Model.OutboundMessage.newBuilder().setMessageId(base32Id)
+            .setSent(sent)
+            .setSenderId(myId.id)
+            .setRecipientId(recipientId)
         if (sendingToSelf) {
-            msgBuilder.status = Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
             msgBuilder.direction = Model.MessageDirection.IN
-        } else {
-            out = Model.OutboundMessage.newBuilder().setMessageId(base32Id)
-                .setSent(sent)
-                .setSenderId(myId.id)
-                .setRecipientId(recipientId)
         }
+
         var attachmentId = 0
-        attachments?.forEach { attachment ->
-            var myAttachment: Model.StoredAttachment.Builder? = null
-            if (sendingToSelf) {
-                myAttachment = attachment.toBuilder()
-                myAttachment.status = Model.StoredAttachment.Status.DONE
-                encryptAttachment(myAttachment)
-            }
-            msgBuilder.putAttachments(attachmentId, myAttachment?.build() ?: attachment)
+        attachments?.forEach { _attachment ->
+            val attachment =
+                if (sendingToSelf &&
+                    _attachment.status == Model.StoredAttachment.Status.PENDING_UPLOAD
+                ) {
+                    // don't bother uploading attachments on messages sent to ourselves
+                    _attachment.toBuilder()
+                        .setStatus(Model.StoredAttachment.Status.DONE).build()
+                } else {
+                    _attachment
+                }
+            msgBuilder.putAttachments(attachmentId, attachment)
 
             attachmentId++
             if (attachment.hasThumbnail()) {
@@ -409,21 +412,20 @@ class Messaging(
                 attachmentId++
             }
         }
+
         replyToSenderId?.let { msgBuilder.setReplyToSenderId(it) }
         replyToId?.let { msgBuilder.setReplyToId(it) }
+
         val msg = msgBuilder.build()
         return db.mutate { tx ->
             // save the message in a list of all messages
             tx.put(msg.dbPath, msg)
-
             // update the relevant contact
             updateContactMetaData(tx, msg)
             // save the message under the relevant contact messages
             tx.put(msg.contactMessagePath, msg.dbPath)
-            if (!sendingToSelf) {
-                tx.put(out!!.dbPath, out.build())
-                cryptoWorker.submit { cryptoWorker.processOutbound(out) }
-            }
+            tx.put(out.dbPath, out.build())
+            cryptoWorker.submit { cryptoWorker.processOutbound(out) }
             msg
         }
     }
@@ -480,7 +482,7 @@ class Messaging(
             if (builder.disappearAfterSeconds > 0) {
                 // set message to disappear now that it's been viewed
                 builder.disappearAt = builder.firstViewedAt +
-                        builder.disappearAfterSeconds.toLong().secondsToMillis
+                    builder.disappearAfterSeconds.toLong().secondsToMillis
                 tx.put(
                     builder.disappearingMessagePath,
                     msgPath
@@ -776,7 +778,8 @@ class Messaging(
     fun encryptAttachment(
         storedAttachment: Model.StoredAttachment.Builder,
         inputStream: InputStream? = null,
-        length: Long? = null
+        length: Long? = null,
+        sendingToSelf: Boolean = false
     ) {
         val plainTextFile = File(storedAttachment.plainTextFilePath)
         if (inputStream == null && !plainTextFile.exists()) {
@@ -790,7 +793,11 @@ class Messaging(
             length ?: plainTextFile.length()
         )
         storedAttachment.attachment = attachmentBuilder.build()
-        storedAttachment.status = Model.StoredAttachment.Status.PENDING_UPLOAD
+        storedAttachment.status =
+            if (sendingToSelf)
+                Model.StoredAttachment.Status.DONE
+            else
+                Model.StoredAttachment.Status.PENDING_UPLOAD
     }
 
     private fun encryptAttachment(
