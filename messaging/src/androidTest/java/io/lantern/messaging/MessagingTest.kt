@@ -628,12 +628,6 @@ class MessagingTest : BaseMessagingTest() {
                     newMessaging(dogDB, "dog").with { dog ->
                             val dogId = dog.myId.id
                             dog.addOrUpdateDirectContact(dogId, "Note to self")
-                            // lazy attachment to a non-existent file
-                            val badPlainTextFile = File(tempDir, UUID.randomUUID().toString())
-                            val badAttachment = dog.createAttachment(
-                                badPlainTextFile,
-                                "text/plain"
-                            )
                             val lazyPlainTextFile = File(tempDir, UUID.randomUUID().toString())
                             FileOutputStream(lazyPlainTextFile).use { output ->
                                 Util.copy(
@@ -664,41 +658,12 @@ class MessagingTest : BaseMessagingTest() {
                                 eagerPlainTextFile,
                                 "text/plain"
                             )
-                            val streamAttachment = dog.createAttachment(
-                                "text/plain",
-                                "stream attachment".length.toLong(),
-                                ByteArrayInputStream(
-                                    "stream attachment".toByteArray(
-                                        Charsets.UTF_8
-                                    )
-                                )
-                            )
-                            val imageAttachment = dog.createAttachment(
-                                assetToFile("image.jpg")
-                            )
-                            val audioAttachment = dog.createAttachment(
-                                assetToFile("clap.opus"),
-                            )
-                            assertEquals(
-                                "8.853",
-                                audioAttachment.attachment.metadataMap["duration"],
-                                "audio attachment should include duration metadata"
-                            )
-                            assertEquals(
-                                "application/x-lantern-waveform",
-                                audioAttachment.thumbnail?.attachment?.mimeType,
-                                "audio attachment should include waveform thumbnail"
-                            )
                             val sentMsg = dog.sendToDirectContact(
                                 dogId,
                                 "hello dog",
                                 attachments = arrayOf(
-                                    badAttachment,
                                     lazyAttachment,
                                     eagerAttachment,
-                                    streamAttachment,
-                                    imageAttachment,
-                                    audioAttachment
                                 )
                             )
                             val recvMsg = dog.waitFor<Model.StoredMessage>(
@@ -712,9 +677,9 @@ class MessagingTest : BaseMessagingTest() {
                                 "dog should have received correct message text"
                             )
                             assertEquals(
-                                6,
+                                2,
                                 recvMsg.attachmentsCount,
-                                "dog should have received 6 attachments"
+                                "dog should have received 2 attachments"
                             )
                     }
             }
