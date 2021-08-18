@@ -327,6 +327,7 @@ class Messaging(
         val recipient = db.get<Model.Contact>(recipientId.directContactPath)
             ?: throw IllegalArgumentException("Unknown recipient")
 
+        val sendingToSelf = recipientId == myId.id
         val base32Id = randomMessageId.base32
         val sent = now
         val msgBuilder =
@@ -347,18 +348,18 @@ class Messaging(
         replyToSenderId?.let { msgBuilder.setReplyToSenderId(it) }
         replyToId?.let { msgBuilder.setReplyToId(it) }
         var out: Model.OutboundMessage.Builder? = null
-        if(recipientId != myId.id){
+        if (sendingToSelf) {
+            msgBuilder.status = Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
+            msgBuilder.direction = Model.MessageDirection.IN
+        } else {
             out = Model.OutboundMessage.newBuilder().setMessageId(base32Id)
                 .setSent(sent)
                 .setSenderId(myId.id)
                 .setRecipientId(recipientId)
-        }else{
-            msgBuilder.status = Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
-            msgBuilder.direction = Model.MessageDirection.IN
         }
         var attachmentId = 0
         attachments?.forEach { attachment ->
-            if(recipientId == myId.id){
+            if (sendingToSelf) {
                 attachment.toBuilder().status = Model.StoredAttachment.Status.DONE
             }
             msgBuilder.putAttachments(attachmentId, attachment)
@@ -379,7 +380,7 @@ class Messaging(
             updateContactMetaData(tx, msg)
             // save the message under the relevant contact messages
             tx.put(msg.contactMessagePath, msg.dbPath)
-            if(recipientId != myId.id){
+            if (!sendingToSelf) {
                 tx.put(out!!.dbPath, out.build())
                 cryptoWorker.submit { cryptoWorker.processOutbound(out) }
             }
@@ -439,7 +440,7 @@ class Messaging(
             if (builder.disappearAfterSeconds > 0) {
                 // set message to disappear now that it's been viewed
                 builder.disappearAt = builder.firstViewedAt +
-                    builder.disappearAfterSeconds.toLong().secondsToMillis
+                        builder.disappearAfterSeconds.toLong().secondsToMillis
                 tx.put(
                     builder.disappearingMessagePath,
                     msgPath
