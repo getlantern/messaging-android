@@ -622,20 +622,6 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
-    fun testMyself() {
-        testInCoroutine {
-            newDB.use { dogDB ->
-                newMessaging(dogDB, "dog").with { dog ->
-                    val dogId = dog.myId.id
-                    dog.addOrUpdateDirectContact(dogId, "Note to self")
-                    val msgs = sendAndVerify("dog sends note to dog", dog, dog, "hi myself")
-                    assertNotNull(msgs.received)
-                }
-            }
-        }
-    }
-
-    @Test
     fun testMyselfAttachments() {
         testInCoroutine {
             newDB.use { dogDB ->
