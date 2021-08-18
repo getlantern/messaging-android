@@ -359,10 +359,14 @@ class Messaging(
         }
         var attachmentId = 0
         attachments?.forEach { attachment ->
+            var myAttachment: Model.StoredAttachment.Builder? = null
             if (sendingToSelf) {
-                attachment.toBuilder().status = Model.StoredAttachment.Status.DONE
+                myAttachment = attachment.toBuilder()
+                myAttachment.status = Model.StoredAttachment.Status.DONE
+                encryptAttachment(myAttachment)
             }
-            msgBuilder.putAttachments(attachmentId, attachment)
+            msgBuilder.putAttachments(attachmentId, myAttachment?.build() ?: attachment)
+
             attachmentId++
             if (attachment.hasThumbnail()) {
                 msgBuilder.putThumbnails(attachmentId, attachmentId - 1)

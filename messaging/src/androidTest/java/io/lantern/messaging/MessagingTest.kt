@@ -622,12 +622,23 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
+    fun testMyself() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newMessaging(dogDB, "dog").with { dog ->
+                    val msgs = sendAndVerify("dog sends note to dog", dog, dog, "hi myself")
+                    assertNotNull(msgs.received)
+                }
+            }
+        }
+    }
+
+    @Test
     fun testMyselfAttachments() {
         testInCoroutine {
             newDB.use { dogDB ->
                     newMessaging(dogDB, "dog").with { dog ->
                             val dogId = dog.myId.id
-                            dog.addOrUpdateDirectContact(dogId, "Note to self")
                             val lazyPlainTextFile = File(tempDir, UUID.randomUUID().toString())
                             FileOutputStream(lazyPlainTextFile).use { output ->
                                 Util.copy(
@@ -672,14 +683,31 @@ class MessagingTest : BaseMessagingTest() {
                             )
 
                             assertEquals(
-                                "hello dog",
-                                recvMsg.text,
-                                "dog should have received correct message text"
-                            )
-                            assertEquals(
                                 2,
                                 recvMsg.attachmentsCount,
                                 "dog should have received 2 attachments"
+                            )
+
+                            fun getAttachment(id: Int): Model.StoredAttachment? {
+                                return recvMsg.attachmentsMap[id]
+                            }
+
+                            fun text(attachment: Model.StoredAttachment?): String {
+                                val out = ByteArrayOutputStream()
+                                attachment?.inputStream?.use { Util.copy(it, out) }
+                                return out.toString(Charsets.UTF_8.name())
+                            }
+
+                            val receivedLazyAttachment = getAttachment(0)
+                            val receivedEagerAttachment = getAttachment(1)
+
+                            assertEquals(
+                                "lazy attachment",
+                                text(receivedLazyAttachment)
+                            )
+                            assertEquals(
+                                "eager attachment",
+                                text(receivedEagerAttachment)
                             )
                     }
             }
