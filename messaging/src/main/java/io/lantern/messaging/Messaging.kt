@@ -34,7 +34,7 @@ import org.whispersystems.signalservice.internal.util.Util
  * This exception indicates that a message was received from an unknown sender (i.e. someone not in
  * the local contact list).
  */
-class UnknownSenderException(internal val senderId: String, internal val messageId: String) :
+class UnknownSenderException(internal val senderId: String) :
     Exception("Unknown sender")
 
 /**
@@ -87,6 +87,7 @@ class Messaging(
     private val defaultMessagesDisappearAfterSeconds: Int = 86400, // 1 day
     private val orphanedAttachmentCutoffSeconds: Int = 86400, // 1 day
     internal val introductionsDisappearAfterSeconds: Int = 86400 * 7, // 7 days
+    internal val provisionalContactsExpireAfterSeconds: Long = 300, // 5 minutes
     internal val name: String = "messaging",
     defaultConfiguration: Messages.Configuration = Messages.Configuration.newBuilder()
         .setMaxAttachmentSize(100000000).build()
@@ -103,6 +104,7 @@ class Messaging(
         db.registerType(22, Model.StoredMessage::class.java)
         db.registerType(23, Model.OutboundMessage::class.java)
         db.registerType(24, Model.InboundAttachment::class.java)
+        db.registerType(25, Model.ProvisionalContact::class.java)
     }
 
     private val cfg = AtomicReference<Messages.Configuration>()
@@ -210,6 +212,7 @@ class Messaging(
      *
      * @param id the base32 encoded public identity key of the contact
      * @param displayName the human-friendly display name for this contact
+     * @return the created or updated Contact
      */
     fun addOrUpdateDirectContact(id: String, displayName: String): Model.Contact =
         addOrUpdateContact(id.directContactId, displayName)
@@ -223,9 +226,10 @@ class Messaging(
         }
     }
 
-    private fun doAddOrUpdateContact(
+    internal fun doAddOrUpdateContact(
         contactId: Model.ContactId,
-        displayName: String
+        displayName: String,
+        mostRecentHelloTs: Long? = null,
     ): Model.Contact {
         val path = contactId.contactPath
         return db.mutate { tx ->
@@ -238,6 +242,7 @@ class Messaging(
                 contactBuilder.messagesDisappearAfterSeconds =
                     defaultMessagesDisappearAfterSeconds
             }
+            mostRecentHelloTs?.let { contactBuilder.setMostRecentHelloTs(it) }
             val contact =
                 contactBuilder.setContactId(contactId).setDisplayName(displayName).build()
             tx.put(path, contact)
@@ -256,6 +261,37 @@ class Messaging(
                 )
             }
             contact
+        }
+    }
+
+    // Adds a provisional contact.
+    //
+    // If they're already a contact, this simply sends them a hello but doesn't add a provisional
+    // contact.
+    //
+    // @return the timestamp of the most recent hello received from this contact.
+    fun addProvisionalContact(contactId: String): Long {
+        val provisionalContact = Model.ProvisionalContact.newBuilder()
+            .setContactId(contactId)
+            .setExpiresAt(now + provisionalContactsExpireAfterSeconds.secondsToMillis)
+            .build()
+
+        var mostRecentHelloTs = 0L
+        db.mutate { tx ->
+            db.get<Model.Contact>(contactId.directContactPath)?.let {
+                mostRecentHelloTs = it.mostRecentHelloTs
+            } ?: run {
+                tx.put(contactId.provisionalContactPath, provisionalContact)
+            }
+            sendHello(tx, contactId)
+        }
+        return mostRecentHelloTs
+    }
+
+    fun deleteProvisionalContact(contactId: String) {
+        db.mutate { tx ->
+            store.deleteAllSessions(contactId)
+            tx.delete(contactId.provisionalContactPath)
         }
     }
 
@@ -524,13 +560,40 @@ class Messaging(
         disappearAfterSeconds: Int
     ) {
         val disappearSettings = Model.DisappearSettings.newBuilder()
-            .setMessagesDisappearAfterSeconds(disappearAfterSeconds).build()
+            .setMessagesDisappearAfterSeconds(disappearAfterSeconds)
+            .build().toByteString()
+        send(tx, contactId) { out ->
+            out.disappearSettings = disappearSettings
+        }
+    }
+
+    internal fun sendHello(
+        tx: Transaction,
+        contactId: String,
+        final: Boolean = false,
+    ) {
+        tx.get<Model.Contact>(Schema.PATH_ME).let { me ->
+            val hello = Model.Hello.newBuilder()
+                .setDisplayName(me!!.displayName)
+                .setFinal(final)
+                .build().toByteString()
+            send(tx, contactId) { out ->
+                out.hello = hello
+            }
+        }
+    }
+
+    internal fun send(
+        tx: Transaction,
+        to: String,
+        build: (Model.OutboundMessage.Builder) -> Unit,
+    ) {
         val out =
             Model.OutboundMessage.newBuilder()
-                .setDisappearSettings(disappearSettings.toByteString())
                 .setSent(now)
                 .setSenderId(myId.id)
-                .setRecipientId(contactId) // TODO: this will need to change for groups
+                .setRecipientId(to) // TODO: this will need to change for groups
+        build(out)
         tx.put(out.dbPath, out.build())
         cryptoWorker.submit { cryptoWorker.processOutbound(out) }
     }
@@ -791,8 +854,11 @@ class Messaging(
         // delete existing index entry
         tx.delete(contact.timestampedIdxPath)
         // update the contact
-        val updatedContactBuilder = contact.toBuilder().setMostRecentMessageTs(msg.ts)
-            .setMostRecentMessageDirection(msg.direction).setMostRecentMessageText(msg.text)
+        val updatedContactBuilder = contact.toBuilder()
+            .setMostRecentMessageTs(msg.ts)
+            .setMostRecentMessageDirection(msg.direction)
+            .setMostRecentMessageText(msg.text)
+            .setHasReceivedMessage(true)
         if (msg.attachmentsCount > 0) {
             updatedContactBuilder.mostRecentAttachmentMimeType =
                 msg.attachmentsMap.values.iterator().next().attachment.mimeType
@@ -926,10 +992,10 @@ class Messaging(
     fun acceptIntroduction(fromId: String, toId: String) {
         cryptoWorker.submitForValue {
             db.mutate { tx ->
-                val introductionMessage = tx.introductionMessage(fromId, toId)
+                val introductionMessage = tx.introductionMessage(fromId, toId)?.value?.value
                     ?: throw IllegalArgumentException("Introduction not found")
 
-                val introduction = introductionMessage.value.introduction
+                val introduction = introductionMessage.introduction
                 doAddOrUpdateContact(introduction.to.id.directContactId, introduction.displayName)
 
                 // Update status on all introductions
@@ -973,7 +1039,7 @@ class Messaging(
     }
 }
 
-private val randomMessageId: ByteString
+internal val randomMessageId: ByteString
     get() {
         val uuid = UUID.randomUUID()
         val bytes = ByteArray(16)

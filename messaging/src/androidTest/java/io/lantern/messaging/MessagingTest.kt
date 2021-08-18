@@ -101,6 +101,14 @@ class MessagingTest : BaseMessagingTest() {
                                 cat,
                                 "hi cat"
                             )
+
+                            dog.waitFor<Model.Contact>(
+                                catId.directContactPath,
+                                "cat contact shows that a message has been received (in this case, the disappear settings message, since we haven't sent anything yet)" // ktlint-disable max-line-length
+                            ) {
+                                it.hasReceivedMessage
+                            }
+
                             val msgs = sendAndVerify(
                                 "cat sends another message to dog",
                                 cat,
@@ -124,9 +132,21 @@ class MessagingTest : BaseMessagingTest() {
                                 0,
                                 dog.db.listPaths(Schema.PATH_CONTACTS_BY_ACTIVITY.path("%")).count()
                             )
+                            val dogDbString = dog.db.dumpToString()
+                            assertFalse(
+                                dogDbString.contains(catId),
+                                "dog's db should have no mention of cat's ID"
+                            )
+                            val dogStoreDbString = dog.store.db.dumpToString()
+                            assertFalse(
+                                dogStoreDbString.contains(catId),
+                                "dog's MessagingProtocolStore.db should have no mention of cat's ID"
+                            )
+
                             cat.sendToDirectContact(dogId, "cat sent this while not a contact")
 
-                            // hack dog's disappear settings to make sure we get hello message with new settings
+                            // hack dog's disappear settings to make sure we get hello message with
+                            // new settings
                             cat.db.mutate { tx ->
                                 tx.get<Model.Contact>(dogId.directContactPath)?.let {
                                     tx.put(
@@ -154,6 +174,139 @@ class MessagingTest : BaseMessagingTest() {
                                 1,
                                 dog.db.listPaths(Schema.PATH_CONTACT_MESSAGES.path("%")).count(),
                                 "dog should have only 1 message from cat, the message sent while cat was not a contact should have been lost because it couldn't be decrypted" // ktlint-disable max-line-length
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun testProvisionalContacts() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newDB.use { catDB ->
+                    newMessaging(dogDB, "dog").with { dog ->
+                        newMessaging(catDB, "cat").with { cat ->
+                            val dogId = dog.myId.id
+                            val catId = cat.myId.id
+
+                            dog.setMyDisplayName("The Dog")
+                            cat.setMyDisplayName("The Cat")
+
+                            assertEquals(0, dog.addProvisionalContact(catId))
+                            assertEquals(0, cat.addProvisionalContact(dogId))
+
+                            val catContact = dog.waitFor<Model.Contact>(
+                                catId.directContactPath,
+                                "dog should end up with cat contact"
+                            ) {
+                                it.mostRecentHelloTs > 0
+                            }
+                            assertEquals(
+                                "The Cat",
+                                catContact.displayName,
+                                "Cat contact should have the right display name"
+                            )
+
+                            val dogContact = cat.waitFor<Model.Contact>(
+                                dogId.directContactPath,
+                                "cat should end up with dog contact"
+                            ) {
+                                it.mostRecentHelloTs > 0
+                            }
+                            assertEquals(
+                                "The Dog",
+                                dogContact.displayName,
+                                "Dog contact should have the right display name"
+                            )
+
+                            assertEquals(
+                                0,
+                                dog.db.listPaths(
+                                    Schema.PATH_PROVISIONAL_CONTACTS.path("%")
+                                ).size,
+                                "dog should have no remaining provisional contacts"
+                            )
+
+                            assertEquals(
+                                0,
+                                cat.db.listPaths(
+                                    Schema.PATH_PROVISIONAL_CONTACTS.path("%")
+                                ).size,
+                                "cat should have no remaining provisional contacts"
+                            )
+
+                            assertNotEquals(0, dog.addProvisionalContact(catId))
+                            assertFalse(
+                                dog.db.contains(catId.provisionalContactPath),
+                                "no provisional contact should be stored for an existing contact"
+                            )
+
+                            cat.deleteDirectContact(dogId)
+                            assertEquals(0, cat.addProvisionalContact(dogId))
+                            cat.waitFor<Model.Contact>(
+                                dogId.directContactPath,
+                                "cat should end up with dog contact again after having deleted dog"
+                            )
+                            dog.waitFor<Model.Contact>(
+                                catId.directContactPath,
+                                "mostRecentHelloTs on dog's cat contact should advance"
+                            ) {
+                                it.mostRecentHelloTs > catContact.mostRecentHelloTs
+                            }
+
+                            newDB.use { mouseDB ->
+                                newMessaging(mouseDB, "mouse").with { mouse ->
+                                    val mouseId = mouse.myId.id
+
+                                    dog.addProvisionalContact(mouseId)
+                                    assertEquals(
+                                        1,
+                                        dog.db.listPaths(
+                                            Schema.PATH_PROVISIONAL_CONTACTS.path("%")
+                                        ).size,
+                                        "dog should have one provisional contact"
+                                    )
+
+                                    // wait for provisional contact to expire
+                                    delay(15000)
+
+                                    assertEquals(
+                                        0,
+                                        dog.db.listPaths(
+                                            Schema.PATH_PROVISIONAL_CONTACTS.path("%")
+                                        ).size,
+                                        "dog should have no provisional contacts"
+                                    )
+
+                                    val dogDbString = dog.db.dumpToString()
+                                    assertFalse(
+                                        dogDbString.contains(mouseId),
+                                        "dog's db should have no mention of mouse's ID"
+                                    )
+                                    val dogStoreDbString = dog.store.db.dumpToString()
+                                    assertFalse(
+                                        dogStoreDbString.contains(mouseId),
+                                        "dog's MessagingProtocolStore.db should have no mention of mouse's ID" // ktlint-disable max-line-length
+                                    )
+                                }
+                            }
+
+                            // make sure that we can successfully send messages even after the
+                            // provisional contact deletion job has run
+                            sendAndVerify(
+                                "cat sends a message to dog",
+                                cat,
+                                dog,
+                                "hi dog"
+                            )
+                            sendAndVerify(
+                                "dog sends a message to cat",
+                                dog,
+                                cat,
+                                "hi cat"
                             )
                         }
                     }
@@ -1152,6 +1305,18 @@ class MessagingTest : BaseMessagingTest() {
                         owner.introductionsDisappearAfterSeconds,
                         msg.disappearAfterSeconds
                     )
+                    val allIntroductionMessagesToThem = me.db
+                        .listDetails<Model.StoredMessage>(
+                            ownerId.directContactId.contactMessagesQuery
+                        )
+                        .filter {
+                            it.value.hasIntroduction() && it.value.introduction.to == them.myId
+                        }
+                    assertEquals(
+                        1,
+                        allIntroductionMessagesToThem.size,
+                        "should have only 1 introduction message from dog to them"
+                    )
                 }
             }
         }
@@ -1164,7 +1329,7 @@ class MessagingTest : BaseMessagingTest() {
         assertEquals("Cat", catContact.displayName)
         assertEquals(
             Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
-            dog.db.introductionMessage(ownerId, catId)?.value?.introduction?.status
+            dog.db.introductionMessage(ownerId, catId)?.value?.value?.introduction?.status
         )
 
         dog.acceptIntroduction(ownerId, fishId)
@@ -1186,10 +1351,10 @@ class MessagingTest : BaseMessagingTest() {
         cat.acceptIntroduction(dogId, fishId)
         assertEquals(
             Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
-            cat.db.introductionMessage(dogId, fishId)?.value?.introduction?.status
+            cat.db.introductionMessage(dogId, fishId)?.value?.value?.introduction?.status
         )
         var catToFishFromDog =
-            cat.db.introductionMessage(ownerId, fishId)?.value
+            cat.db.introductionMessage(ownerId, fishId)?.value?.value
         assertEquals(
             Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
             catToFishFromDog?.introduction?.status
@@ -1471,6 +1636,7 @@ class MessagingTest : BaseMessagingTest() {
         failedSendRetryDelayMillis: Long = 100,
         stopSendRetryAfterMillis: Long = 5L.minutesToMillis,
         orphanedAttachmentCutoffSeconds: Int = 1,
+        provisionalContactsExpireAfterSeconds: Long = 14
     ): Messaging {
         return Messaging(
             db,
@@ -1488,6 +1654,7 @@ class MessagingTest : BaseMessagingTest() {
             failedSendRetryDelayMillis = failedSendRetryDelayMillis,
             stopSendRetryAfterMillis = stopSendRetryAfterMillis,
             orphanedAttachmentCutoffSeconds = orphanedAttachmentCutoffSeconds,
+            provisionalContactsExpireAfterSeconds = provisionalContactsExpireAfterSeconds,
             name = name
         )
     }
@@ -1537,11 +1704,18 @@ internal suspend fun Messaging.waitForNull(
 }
 
 internal fun DB.dump() {
-    val dumpString = this.list<Any>("%").sortedBy { it.path }.joinToString("\n") {
-        "${it.path}: ${it.value}"
-    }
+    val dumpString = dumpToString()
     println("DB Dump for ${this.get<Model.Contact>(Schema.PATH_ME)?.displayName}\n===============================================\n\n${dumpString}\n\n======================================") // ktlint-disable max-line-length
 }
+
+internal fun DB.dumpToString(): String =
+    this.list<Any>("%").sortedBy { it.path }.joinToString("\n") {
+        val valueString = when (val value = it.value) {
+            is ByteArray -> value.base32
+            else -> value.toString()
+        }
+        "${it.path}: $valueString"
+    }
 
 internal suspend fun Messaging.with(fn: suspend (messaging: Messaging) -> Unit) = this.use {
     try {

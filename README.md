@@ -41,7 +41,7 @@ An index of all messages for a given Contact, by the sent timestamp of the messa
 ### /dm/[disappearAt]/[senderIdentityKey]/[messageId]
 An index of all messages that are supposed to auto disappear by some time (in unix milliseconds)
 
-### /spam/[senderIdentityKey]/[timestamp]/[messageId] (Model.StoredMessage)
+### /spam/[senderIdentityKey]/[timestamp]/[randomId] (Model.StoredMessage)
 Messages that aren't worth showing to the user for one reason or another.
 
 ### /o/[timestamp]/[messageId] (Model.OutboundMessage)
@@ -53,11 +53,11 @@ runs out.
 A queue of inbound attachments that are pending download. If downloading fails, downloads will be
 re-queued here for a limited period of time until they either send successfully or time runs out.
 
-### /intro/from/fromIdentityKey/toIdentityKey
+### /intro/from/[fromIdentityKey]/[toIdentityKey]
 An index of Introduction messages keyed to the contact who introduced us and then the contact to
 whom we're being introduced.
 
-### /intro/to/toIdentityKey/fromIdentityKey
+### /intro/to/[toIdentityKey]/[fromIdentityKey]
 An index of Introduction messages keyed to the contact to whom we're being introduced and then the
 contact who introduced us.
 
