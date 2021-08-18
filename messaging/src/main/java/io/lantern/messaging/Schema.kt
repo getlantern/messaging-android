@@ -96,8 +96,8 @@ val Model.Contact.spamQuery: String get() = contactId.spamQuery
 
 val Model.ContactId.spamQuery: String get() = Schema.PATH_SPAM.path(id, "%")
 
-fun spamPath(senderId: String, messageId: String, ts: Long) =
-    Schema.PATH_SPAM.path(senderId, ts, messageId)
+val String.randomSpamPath: String
+    get() = Schema.PATH_SPAM.path(this, now, randomMessageId.base32)
 
 val Model.StoredMessage.contactMessagePath: String
     get() =

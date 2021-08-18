@@ -200,7 +200,9 @@ class MessagingTest : BaseMessagingTest() {
                             val catContact = dog.waitFor<Model.Contact>(
                                 catId.directContactPath,
                                 "dog should end up with cat contact"
-                            )
+                            ) {
+                                it.mostRecentHelloTs > 0
+                            }
                             assertEquals(
                                 "The Cat",
                                 catContact.displayName,
@@ -210,7 +212,9 @@ class MessagingTest : BaseMessagingTest() {
                             val dogContact = cat.waitFor<Model.Contact>(
                                 dogId.directContactPath,
                                 "cat should end up with dog contact"
-                            )
+                            ) {
+                                it.mostRecentHelloTs > 0
+                            }
                             assertEquals(
                                 "The Dog",
                                 dogContact.displayName,
@@ -245,6 +249,12 @@ class MessagingTest : BaseMessagingTest() {
                                 dogId.directContactPath,
                                 "cat should end up with dog contact again after having deleted dog"
                             )
+                            dog.waitFor<Model.Contact>(
+                                catId.directContactPath,
+                                "mostRecentHelloTs on dog's cat contact should advance"
+                            ) {
+                                it.mostRecentHelloTs > catContact.mostRecentHelloTs
+                            }
 
                             newDB.use { mouseDB ->
                                 newMessaging(mouseDB, "mouse").with { mouse ->

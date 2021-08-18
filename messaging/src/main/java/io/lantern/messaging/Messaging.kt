@@ -34,7 +34,7 @@ import org.whispersystems.signalservice.internal.util.Util
  * This exception indicates that a message was received from an unknown sender (i.e. someone not in
  * the local contact list).
  */
-class UnknownSenderException(internal val senderId: String, internal val messageId: String) :
+class UnknownSenderException(internal val senderId: String) :
     Exception("Unknown sender")
 
 /**
@@ -1020,7 +1020,7 @@ class Messaging(
     }
 }
 
-private val randomMessageId: ByteString
+internal val randomMessageId: ByteString
     get() {
         val uuid = UUID.randomUUID()
         val bytes = ByteArray(16)

@@ -621,7 +621,7 @@ internal class CryptoWorker(
             logger.error("message from unknown sender, saving to spam")
             db.mutate { tx ->
                 tx.put(
-                    spamPath(e.senderId, e.messageId, now),
+                    e.senderId.randomSpamPath,
                     unidentifiedSenderMessage
                 )
             }
@@ -639,6 +639,13 @@ internal class CryptoWorker(
             val transferMsg = Model.TransferMessage.parseFrom(plainText)
             val senderAddress = decryptionResult.senderAddress
             val senderId = senderAddress.identityKey.toString()
+
+            if (transferMsg.contentCase != Model.TransferMessage.ContentCase.HELLO &&
+                !tx.contains(senderId.directContactPath)
+            ) {
+                throw UnknownSenderException(senderId)
+            }
+
             if (transferMsg.contentCase == Model.TransferMessage.ContentCase.MESSAGE) {
                 storeMessage(
                     tx,
@@ -683,9 +690,6 @@ internal class CryptoWorker(
     }
 
     private fun storeMessage(tx: Transaction, senderId: String, msg: Model.Message) {
-        if (!tx.contains(senderId.directContactPath)) {
-            throw UnknownSenderException(senderId, msg.id.base32)
-        }
         val storedMsgBuilder = msg.inbound(senderId)
 
         // save the introduction if one was included
@@ -764,9 +768,6 @@ internal class CryptoWorker(
     }
 
     private fun storeReaction(tx: Transaction, senderId: String, reaction: Model.Reaction) {
-        if (!tx.contains(senderId.directContactPath)) {
-            throw UnknownSenderException(senderId, reaction.reactingToMessageId.base32)
-        }
         tx.get<Model.StoredMessage>(
             reaction.reactingToSenderId.base32
                 .storedMessagePath(reaction.reactingToMessageId.base32)
