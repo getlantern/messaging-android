@@ -186,7 +186,7 @@ class MessagingTest : BaseMessagingTest() {
                         )
 
                         val hugeLength = Long.MAX_VALUE -
-                            AttachmentCipherOutputStream.MAXIMUM_ENCRYPTION_OVERHEAD
+                                AttachmentCipherOutputStream.MAXIMUM_ENCRYPTION_OVERHEAD
                         // try to create an overly large attachment and make sure it fails
                         try {
                             dog.createAttachment(
@@ -504,7 +504,7 @@ class MessagingTest : BaseMessagingTest() {
                                     "waiting for attachment to download"
                                 ) {
                                     it.attachmentsMap[id]?.status ==
-                                        Model.StoredAttachment.Status.DONE
+                                            Model.StoredAttachment.Status.DONE
                                 }.let { storedMsg ->
                                     return storedMsg.attachmentsMap[id]
                                 }
@@ -637,79 +637,79 @@ class MessagingTest : BaseMessagingTest() {
     fun testMyselfAttachments() {
         testInCoroutine {
             newDB.use { dogDB ->
-                    newMessaging(dogDB, "dog").with { dog ->
-                            val dogId = dog.myId.id
-                            val lazyPlainTextFile = File(tempDir, UUID.randomUUID().toString())
-                            FileOutputStream(lazyPlainTextFile).use { output ->
-                                Util.copy(
-                                    ByteArrayInputStream(
-                                        "lazy attachment".toByteArray(
-                                            Charsets.UTF_8
-                                        )
-                                    ),
-                                    output
+                newMessaging(dogDB, "dog").with { dog ->
+                    val dogId = dog.myId.id
+                    val lazyPlainTextFile = File(tempDir, UUID.randomUUID().toString())
+                    FileOutputStream(lazyPlainTextFile).use { output ->
+                        Util.copy(
+                            ByteArrayInputStream(
+                                "lazy attachment".toByteArray(
+                                    Charsets.UTF_8
                                 )
-                            }
-                            val lazyAttachment = dog.createAttachment(
-                                lazyPlainTextFile,
-                                "text/plain"
-                            )
-                            val eagerPlainTextFile = File(tempDir, UUID.randomUUID().toString())
-                            FileOutputStream(eagerPlainTextFile).use { output ->
-                                Util.copy(
-                                    ByteArrayInputStream(
-                                        "eager attachment".toByteArray(
-                                            Charsets.UTF_8
-                                        )
-                                    ),
-                                    output
-                                )
-                            }
-                            val eagerAttachment = dog.createAttachment(
-                                eagerPlainTextFile,
-                                "text/plain"
-                            )
-                            val sentMsg = dog.sendToDirectContact(
-                                dogId,
-                                "hello dog",
-                                attachments = arrayOf(
-                                    lazyAttachment,
-                                    eagerAttachment,
-                                )
-                            )
-                            val recvMsg = dog.waitFor<Model.StoredMessage>(
-                                sentMsg.dbPath,
-                                "dog should receive message"
-                            )
-
-                            assertEquals(
-                                2,
-                                recvMsg.attachmentsCount,
-                                "dog should have received 2 attachments"
-                            )
-
-                            fun getAttachment(id: Int): Model.StoredAttachment? {
-                                return recvMsg.attachmentsMap[id]
-                            }
-
-                            fun text(attachment: Model.StoredAttachment?): String {
-                                val out = ByteArrayOutputStream()
-                                attachment?.inputStream?.use { Util.copy(it, out) }
-                                return out.toString(Charsets.UTF_8.name())
-                            }
-
-                            val receivedLazyAttachment = getAttachment(0)
-                            val receivedEagerAttachment = getAttachment(1)
-
-                            assertEquals(
-                                "lazy attachment",
-                                text(receivedLazyAttachment)
-                            )
-                            assertEquals(
-                                "eager attachment",
-                                text(receivedEagerAttachment)
-                            )
+                            ),
+                            output
+                        )
                     }
+                    val lazyAttachment = dog.createAttachment(
+                        lazyPlainTextFile,
+                        "text/plain"
+                    )
+                    val eagerPlainTextFile = File(tempDir, UUID.randomUUID().toString())
+                    FileOutputStream(eagerPlainTextFile).use { output ->
+                        Util.copy(
+                            ByteArrayInputStream(
+                                "eager attachment".toByteArray(
+                                    Charsets.UTF_8
+                                )
+                            ),
+                            output
+                        )
+                    }
+                    val eagerAttachment = dog.createAttachment(
+                        eagerPlainTextFile,
+                        "text/plain"
+                    )
+                    val sentMsg = dog.sendToDirectContact(
+                        dogId,
+                        "hello dog",
+                        attachments = arrayOf(
+                            lazyAttachment,
+                            eagerAttachment,
+                        )
+                    )
+                    val recvMsg = dog.waitFor<Model.StoredMessage>(
+                        sentMsg.dbPath,
+                        "dog should receive message"
+                    )
+
+                    assertEquals(
+                        2,
+                        recvMsg.attachmentsCount,
+                        "dog should have received 2 attachments"
+                    )
+
+                    fun getAttachment(id: Int): Model.StoredAttachment? {
+                        return recvMsg.attachmentsMap[id]
+                    }
+
+                    fun text(attachment: Model.StoredAttachment?): String {
+                        val out = ByteArrayOutputStream()
+                        attachment?.inputStream?.use { Util.copy(it, out) }
+                        return out.toString(Charsets.UTF_8.name())
+                    }
+
+                    val receivedLazyAttachment = getAttachment(0)
+                    val receivedEagerAttachment = getAttachment(1)
+
+                    assertEquals(
+                        "lazy attachment",
+                        text(receivedLazyAttachment)
+                    )
+                    assertEquals(
+                        "eager attachment",
+                        text(receivedEagerAttachment)
+                    )
+                }
             }
         }
     }
@@ -1277,12 +1277,20 @@ class MessagingTest : BaseMessagingTest() {
             replyToSenderId = replyToId?.let { toId }
         )
         assertFalse(senderStoredMsg.id.isNullOrBlank())
-        if(fromId == toId){
-            assertEquals(Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT, senderStoredMsg.status, testCase)
+        if (fromId == toId) {
+            assertEquals(
+                Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT,
+                senderStoredMsg.status,
+                testCase
+            )
             assertEquals(Model.MessageDirection.IN, senderStoredMsg.direction, testCase)
             assertEquals(fromId, senderStoredMsg.senderId, testCase)
-        }else{
-            assertEquals(Model.StoredMessage.DeliveryStatus.SENDING, senderStoredMsg.status, testCase)
+        } else {
+            assertEquals(
+                Model.StoredMessage.DeliveryStatus.SENDING,
+                senderStoredMsg.status,
+                testCase
+            )
             assertEquals(Model.MessageDirection.OUT, senderStoredMsg.direction, testCase)
             assertEquals(fromId, senderStoredMsg.senderId, testCase)
         }
@@ -1337,7 +1345,7 @@ class MessagingTest : BaseMessagingTest() {
         ) { storedMsg ->
             storedMsg.attachmentsMap.values.find {
                 (it.status != Model.StoredAttachment.Status.DONE) ||
-                    (it.hasThumbnail() && it.thumbnail.status != Model.StoredAttachment.Status.DONE)
+                        (it.hasThumbnail() && it.thumbnail.status != Model.StoredAttachment.Status.DONE)
             } == null
         }
 
@@ -1373,9 +1381,9 @@ class MessagingTest : BaseMessagingTest() {
         assertEquals(senderStoredMsg.id, recipientStoredMsg.id)
         assertEquals(Model.MessageDirection.IN, recipientStoredMsg.direction, testCase)
         assertEquals(fromId, recipientStoredMsg.senderId, testCase)
-        if(fromId == toId){
+        if (fromId == toId) {
             assertTrue(senderStoredMsg.ts <= recipientStoredMsg.ts, testCase)
-        }else{
+        } else {
             assertTrue(senderStoredMsg.ts < recipientStoredMsg.ts, testCase)
         }
         assertEquals(Model.MessageDirection.IN, recipientStoredMsg.direction)
@@ -1430,10 +1438,10 @@ class MessagingTest : BaseMessagingTest() {
                 to.waitFor(recipientStoredMsg.dbPath, testCase) { storedMsg ->
                     storedMsg.attachmentsMap.values.find {
                         (it.status != Model.StoredAttachment.Status.DONE) ||
-                            (
-                                it.hasThumbnail() &&
-                                    it.thumbnail.status != Model.StoredAttachment.Status.DONE
-                                )
+                                (
+                                        it.hasThumbnail() &&
+                                                it.thumbnail.status != Model.StoredAttachment.Status.DONE
+                                        )
                     } == null
                 }
             recipientStoredMsg.attachmentsMap.forEach { (id, attachment) ->
