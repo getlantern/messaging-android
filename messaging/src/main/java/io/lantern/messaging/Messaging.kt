@@ -3,12 +3,12 @@ package io.lantern.messaging
 import com.google.protobuf.ByteString
 import io.lantern.db.DB
 import io.lantern.db.Transaction
+import io.lantern.messaging.conversions.byteString
 import io.lantern.messaging.metadata.Metadata
 import io.lantern.messaging.store.MessagingProtocolStore
 import io.lantern.messaging.tassis.Callback
 import io.lantern.messaging.tassis.Messages
 import io.lantern.messaging.tassis.TransportFactory
-import io.lantern.messaging.tassis.byteString
 import io.lantern.messaging.time.hoursToMillis
 import io.lantern.messaging.time.secondsToMillis
 import java.io.ByteArrayInputStream
@@ -37,7 +37,7 @@ import org.whispersystems.signalservice.internal.util.Util
  * This exception indicates that a message was received from an unknown sender (i.e. someone not in
  * the local contact list).
  */
-class UnknownSenderException(internal val senderId: String, internal val messageId: String) :
+class UnknownSenderException(internal val senderId: String) :
     Exception("Unknown sender")
 
 /**
@@ -89,6 +89,8 @@ class Messaging(
     numInitialPreKeysToRegister: Int = 5,
     private val defaultMessagesDisappearAfterSeconds: Int = 86400, // 1 day
     private val orphanedAttachmentCutoffSeconds: Int = 86400, // 1 day
+    internal val introductionsDisappearAfterSeconds: Int = 86400 * 7, // 7 days
+    internal val provisionalContactsExpireAfterSeconds: Long = 300, // 5 minutes
     internal val name: String = "messaging",
     defaultConfiguration: Messages.Configuration = Messages.Configuration.newBuilder()
         .setMaxAttachmentSize(100000000).build()
@@ -106,6 +108,7 @@ class Messaging(
         db.registerType(22, Model.StoredMessage::class.java)
         db.registerType(23, Model.OutboundMessage::class.java)
         db.registerType(24, Model.InboundAttachment::class.java)
+        db.registerType(25, Model.ProvisionalContact::class.java)
     }
 
     private val cfg = AtomicReference<Messages.Configuration>()
@@ -126,7 +129,11 @@ class Messaging(
     // All processing that involves crypto operations happens on this executor to keep the
     // SignalProtocolStore in a consistent state
     internal val cryptoWorker =
-        CryptoWorker(this, failedSendRetryDelayMillis, stopSendRetryAfterMillis)
+        CryptoWorker(
+            this,
+            failedSendRetryDelayMillis,
+            stopSendRetryAfterMillis
+        )
     internal val anonymousClientWorker =
         AnonymousClientWorker(
             transportFactory,
@@ -156,6 +163,9 @@ class Messaging(
             )
         }
         myId = me.contactId
+
+        // add myself as a contact user to start "talking"
+        addOrUpdateContact(myId, "Note to self")
 
         // immediately request some upload authorizations so that we're ready to upload attachments
         cryptoWorker.submit { cryptoWorker.getMoreUploadAuthorizationsIfNecessary() }
@@ -206,6 +216,7 @@ class Messaging(
      *
      * @param id the base32 encoded public identity key of the contact
      * @param displayName the human-friendly display name for this contact
+     * @return the created or updated Contact
      */
     fun addOrUpdateDirectContact(id: String, displayName: String): Model.Contact =
         addOrUpdateContact(id.directContactId, displayName)
@@ -214,37 +225,77 @@ class Messaging(
         contactId: Model.ContactId,
         displayName: String
     ): Model.Contact {
-        val path = contactId.contactPath
         return cryptoWorker.submitForValue {
-            db.mutate { tx ->
-                val existingContact = tx.get<Model.Contact>(path)
-                val contactBuilder = existingContact?.toBuilder() ?: Model.Contact.newBuilder()
-                    .setContactId(contactId)
-                val isNew = existingContact == null
-                if (isNew) {
-                    contactBuilder.createdTs = now
-                    contactBuilder.messagesDisappearAfterSeconds =
-                        defaultMessagesDisappearAfterSeconds
-                }
-                val contact =
-                    contactBuilder.setContactId(contactId).setDisplayName(displayName).build()
-                tx.put(path, contact)
-                // decrypt any "spam" we received from this Contact prior to adding them
-                db.list<ByteArray>(contact.spamQuery)
-                    .forEach { (spamPath, unidentifiedSenderMessage) ->
-                        cryptoWorker.doDecryptAndStore(unidentifiedSenderMessage)
-                        tx.delete(spamPath)
-                    }
-                if (isNew) {
-                    // send our disappear settings as a kind of "hello", that also makes sure we're in sync on retention period
-                    sendDisappearSettings(
-                        tx,
-                        contact.contactId.id,
-                        contact.messagesDisappearAfterSeconds
-                    )
-                }
-                contact
+            doAddOrUpdateContact(contactId, displayName)
+        }
+    }
+
+    internal fun doAddOrUpdateContact(
+        contactId: Model.ContactId,
+        displayName: String,
+        mostRecentHelloTs: Long? = null,
+    ): Model.Contact {
+        val path = contactId.contactPath
+        return db.mutate { tx ->
+            val existingContact = tx.get<Model.Contact>(path)
+            val contactBuilder = existingContact?.toBuilder() ?: Model.Contact.newBuilder()
+                .setContactId(contactId)
+            val isNew = existingContact == null
+            if (isNew) {
+                contactBuilder.createdTs = now
+                contactBuilder.messagesDisappearAfterSeconds =
+                    defaultMessagesDisappearAfterSeconds
             }
+            mostRecentHelloTs?.let { contactBuilder.setMostRecentHelloTs(it) }
+            val contact =
+                contactBuilder.setContactId(contactId).setDisplayName(displayName).build()
+            tx.put(path, contact)
+            // decrypt any "spam" we received from this Contact prior to adding them
+            db.list<ByteArray>(contact.spamQuery)
+                .forEach { (spamPath, unidentifiedSenderMessage) ->
+                    cryptoWorker.doDecryptAndStore(unidentifiedSenderMessage)
+                    tx.delete(spamPath)
+                }
+            if (isNew) {
+                // send our disappear settings as a kind of "hello", that also makes sure we're in sync on retention period
+                sendDisappearSettings(
+                    tx,
+                    contact.contactId.id,
+                    contact.messagesDisappearAfterSeconds
+                )
+            }
+            contact
+        }
+    }
+
+    // Adds a provisional contact.
+    //
+    // If they're already a contact, this simply sends them a hello but doesn't add a provisional
+    // contact.
+    //
+    // @return the timestamp of the most recent hello received from this contact.
+    fun addProvisionalContact(contactId: String): Long {
+        val provisionalContact = Model.ProvisionalContact.newBuilder()
+            .setContactId(contactId)
+            .setExpiresAt(now + provisionalContactsExpireAfterSeconds.secondsToMillis)
+            .build()
+
+        var mostRecentHelloTs = 0L
+        db.mutate { tx ->
+            db.get<Model.Contact>(contactId.directContactPath)?.let {
+                mostRecentHelloTs = it.mostRecentHelloTs
+            } ?: run {
+                tx.put(contactId.provisionalContactPath, provisionalContact)
+            }
+            sendHello(tx, contactId)
+        }
+        return mostRecentHelloTs
+    }
+
+    fun deleteProvisionalContact(contactId: String) {
+        db.mutate { tx ->
+            store.deleteAllSessions(contactId)
+            tx.delete(contactId.provisionalContactPath)
         }
     }
 
@@ -260,13 +311,12 @@ class Messaging(
     private fun deleteContact(contactId: Model.ContactId) {
         return cryptoWorker.submitForValue {
             db.mutate { tx ->
-                tx.delete(contactId.contactPath)
+                tx.list<String>(contactId.contactMessagesQuery)
+                    .forEach { doDeleteLocally(tx, it.value) }
                 db.listPaths(contactId.contactByActivityQuery).forEach {
                     tx.delete(it)
                 }
                 tx.listPaths(contactId.spamQuery).forEach { path -> tx.delete(path) }
-                tx.list<String>(contactId.contactMessagesQuery)
-                    .forEach { doDeleteLocally(tx, it.value) }
                 when (contactId.type) {
                     Model.ContactType.DIRECT -> {
                         store.deleteAllSessions(contactId.id)
@@ -275,6 +325,7 @@ class Messaging(
                         // TODO: support group contacts
                     }
                 }
+                tx.delete(contactId.contactPath)
             }
         }
     }
@@ -298,51 +349,77 @@ class Messaging(
     @Throws(IllegalArgumentException::class)
     fun sendToDirectContact(
         recipientId: String,
-        text: String?,
+        text: String? = null,
         replyToSenderId: String? = null,
         replyToId: String? = null,
         attachments: Array<Model.StoredAttachment>? = null,
+        introduction: Model.IntroductionDetails? = null,
     ): Model.StoredMessage {
-        if (text.isNullOrBlank() && attachments?.size == 0)
-            throw IllegalArgumentException("Please specify either text or at least one attachment")
+        if (text.isNullOrBlank() && attachments?.size == 0 && introduction == null)
+            throw IllegalArgumentException(
+                "Please specify either text, an introduction or at least one attachment"
+            )
         else if (replyToSenderId.isNullOrBlank() != replyToId.isNullOrBlank()) {
             throw IllegalArgumentException(
                 "If specifying either replyToSenderId and replyToId, please specify both"
             )
         }
+
         val recipient = db.get<Model.Contact>(recipientId.directContactPath)
             ?: throw IllegalArgumentException("Unknown recipient")
-
+        val sendingToSelf = recipientId == myId.id
         val base32Id = randomMessageId.base32
         val sent = now
+
         val msgBuilder =
             Model.StoredMessage.newBuilder().setId(base32Id)
                 .setContactId(recipientId.directContactId)
                 .setSenderId(myId.id)
                 .setTs(sent)
-                .setText(text)
                 .setDirection(Model.MessageDirection.OUT)
-        replyToSenderId?.let { msgBuilder.setReplyToSenderId(it) }
-        replyToId?.let { msgBuilder.setReplyToId(it) }
         if (recipient.messagesDisappearAfterSeconds > 0) {
             msgBuilder.disappearAfterSeconds = recipient.messagesDisappearAfterSeconds
         }
-        val out =
-            Model.OutboundMessage.newBuilder().setMessageId(base32Id)
-                .setSent(sent)
-                .setSenderId(myId.id)
-                .setRecipientId(recipientId)
+        text?.let { msgBuilder.setText(it) }
+        introduction?.let {
+            msgBuilder.introduction = introduction
+            // introduction messages don't follow the usual disappearing messages setting
+            msgBuilder.disappearAfterSeconds = introductionsDisappearAfterSeconds
+        }
+        replyToSenderId?.let { msgBuilder.setReplyToSenderId(it) }
+        replyToId?.let { msgBuilder.setReplyToId(it) }
+        val out = Model.OutboundMessage.newBuilder().setMessageId(base32Id)
+            .setSent(sent)
+            .setSenderId(myId.id)
+            .setRecipientId(recipientId)
+        if (sendingToSelf) {
+            msgBuilder.direction = Model.MessageDirection.IN
+        }
+
         var attachmentId = 0
-        attachments?.forEach { attachment ->
+        attachments?.forEach { _attachment ->
+            val attachment =
+                if (sendingToSelf &&
+                    _attachment.status == Model.StoredAttachment.Status.PENDING_UPLOAD
+                ) {
+                    // don't bother uploading attachments on messages sent to ourselves
+                    _attachment.toBuilder()
+                        .setStatus(Model.StoredAttachment.Status.DONE).build()
+                } else {
+                    _attachment
+                }
             msgBuilder.putAttachments(attachmentId, attachment)
+
             attachmentId++
             if (attachment.hasThumbnail()) {
                 msgBuilder.putThumbnails(attachmentId, attachmentId - 1)
                 attachmentId++
             }
         }
+
         replyToSenderId?.let { msgBuilder.setReplyToSenderId(it) }
         replyToId?.let { msgBuilder.setReplyToId(it) }
+
         val msg = msgBuilder.build()
         return db.mutate { tx ->
             // save the message in a list of all messages
@@ -549,13 +626,40 @@ class Messaging(
         disappearAfterSeconds: Int
     ) {
         val disappearSettings = Model.DisappearSettings.newBuilder()
-            .setMessagesDisappearAfterSeconds(disappearAfterSeconds).build()
+            .setMessagesDisappearAfterSeconds(disappearAfterSeconds)
+            .build().toByteString()
+        send(tx, contactId) { out ->
+            out.disappearSettings = disappearSettings
+        }
+    }
+
+    internal fun sendHello(
+        tx: Transaction,
+        contactId: String,
+        final: Boolean = false,
+    ) {
+        tx.get<Model.Contact>(Schema.PATH_ME).let { me ->
+            val hello = Model.Hello.newBuilder()
+                .setDisplayName(me!!.displayName)
+                .setFinal(final)
+                .build().toByteString()
+            send(tx, contactId) { out ->
+                out.hello = hello
+            }
+        }
+    }
+
+    internal fun send(
+        tx: Transaction,
+        to: String,
+        build: (Model.OutboundMessage.Builder) -> Unit,
+    ) {
         val out =
             Model.OutboundMessage.newBuilder()
-                .setDisappearSettings(disappearSettings.toByteString())
                 .setSent(now)
                 .setSenderId(myId.id)
-                .setRecipientId(contactId) // TODO: this will need to change for groups
+                .setRecipientId(to) // TODO: this will need to change for groups
+        build(out)
         tx.put(out.dbPath, out.build())
         cryptoWorker.submit { cryptoWorker.processOutbound(out) }
     }
@@ -641,6 +745,12 @@ class Messaging(
                 // Delete index entries for messages under this Contact's conversation
                 tx.delete(msg.contactMessagePath)
 
+                if (msg.hasIntroduction()) {
+                    // Delete index entries for introductions
+                    tx.delete(msg.senderId.introductionIndexPathByFrom(msg.introduction.to.id))
+                    tx.delete(msg.introduction.to.id.introductionIndexPathByTo(msg.senderId))
+                }
+
                 // Update the Contact metadata based on the most recent remaining message
                 tx.listDetails<Model.StoredMessage>(
                     msg.contactMessagesQuery,
@@ -673,20 +783,18 @@ class Messaging(
         metadata: Map<String, String>? = null,
         lazy: Boolean = true,
     ): Model.StoredAttachment {
-        val md = try {
-            Metadata.analyze(file, mimeType)
-        } catch (t: Throwable) {
-            logger.error("couldn't analyze metadata: ${t.message}")
-            null
+        val md = Metadata.analyze(file, mimeType)
+        val attachment = Model.Attachment.newBuilder().setMimeType(md.mimeType ?: mimeType)
+        if (md.additionalMetadata != null) {
+            attachment.putAllMetadata(md.additionalMetadata)
         }
-        val attachment = Model.Attachment.newBuilder().setMimeType(md?.mimeType ?: mimeType)
         if (metadata != null) {
             attachment.putAllMetadata(metadata)
         }
         val storedAttachment =
             newStoredAttachment.setPlainTextFilePath(file.absolutePath)
                 .setAttachment(attachment.build())
-        if (md?.thumbnail != null) {
+        if (md.thumbnail != null) {
             storedAttachment.thumbnail = createAttachment(
                 md.thumbnailMimeType,
                 md.thumbnail.size.toLong(),
@@ -734,7 +842,8 @@ class Messaging(
     fun encryptAttachment(
         storedAttachment: Model.StoredAttachment.Builder,
         inputStream: InputStream? = null,
-        length: Long? = null
+        length: Long? = null,
+        sendingToSelf: Boolean = false
     ) {
         val plainTextFile = File(storedAttachment.plainTextFilePath)
         if (inputStream == null && !plainTextFile.exists()) {
@@ -748,7 +857,11 @@ class Messaging(
             length ?: plainTextFile.length()
         )
         storedAttachment.attachment = attachmentBuilder.build()
-        storedAttachment.status = Model.StoredAttachment.Status.PENDING_UPLOAD
+        storedAttachment.status =
+            if (sendingToSelf)
+                Model.StoredAttachment.Status.DONE
+            else
+                Model.StoredAttachment.Status.PENDING_UPLOAD
     }
 
     private fun encryptAttachment(
@@ -812,8 +925,11 @@ class Messaging(
         // delete existing index entry
         tx.delete(contact.timestampedIdxPath)
         // update the contact
-        val updatedContactBuilder = contact.toBuilder().setMostRecentMessageTs(msg.ts)
-            .setMostRecentMessageDirection(msg.direction).setMostRecentMessageText(msg.text)
+        val updatedContactBuilder = contact.toBuilder()
+            .setMostRecentMessageTs(msg.ts)
+            .setMostRecentMessageDirection(msg.direction)
+            .setMostRecentMessageText(msg.text)
+            .setHasReceivedMessage(true)
         if (msg.attachmentsCount > 0) {
             updatedContactBuilder.mostRecentAttachmentMimeType =
                 msg.attachmentsMap.values.iterator().next().attachment.mimeType
@@ -916,6 +1032,67 @@ class Messaging(
         }
     }
 
+    @Throws(IllegalArgumentException::class)
+    fun introduce(recipientIds: List<String>) {
+        if (recipientIds.size < 2) {
+            throw IllegalArgumentException("Please specify at least 2 recipients to introduce")
+        }
+
+        val introducedParties = recipientIds.map { recipientId ->
+            db.get<Model.Contact>(recipientId.directContactPath)
+                ?: throw IllegalArgumentException("Unknown recipient")
+        }
+
+        db.mutate {
+            introducedParties.forEach { a ->
+                introducedParties.forEach { b ->
+                    if (a.contactId.id != b.contactId.id) {
+                        sendToDirectContact(
+                            a.contactId.id,
+                            introduction = Model.IntroductionDetails.newBuilder()
+                                .setTo(b.contactId)
+                                .setDisplayName(b.displayName).build()
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    @Throws(IllegalArgumentException::class)
+    fun acceptIntroduction(fromId: String, toId: String) {
+        cryptoWorker.submitForValue {
+            db.mutate { tx ->
+                val introductionMessage = tx.introductionMessage(fromId, toId)?.value?.value
+                    ?: throw IllegalArgumentException("Introduction not found")
+
+                val introduction = introductionMessage.introduction
+                doAddOrUpdateContact(introduction.to.id.directContactId, introduction.displayName)
+
+                // Update status on all introductions
+                tx.introductionMessagesTo(toId).forEach {
+                    val updatedIntroduction = it.value.introduction.toBuilder()
+                        .setStatus(
+                            Model.IntroductionDetails.IntroductionStatus.ACCEPTED
+                        )
+                        // we update the displayName on all introductions to match the name that we
+                        // accepted
+                        .setDisplayName(introduction.displayName).build()
+                    tx.put(
+                        it.value.dbPath,
+                        it.value.toBuilder().setIntroduction(updatedIntroduction).build()
+                    )
+                }
+            }
+        }
+    }
+
+    fun rejectIntroduction(fromId: String, toId: String) {
+        db.get<String>(fromId.introductionIndexPathByFrom(toId))?.let { path ->
+            deleteLocally(path)
+        }
+    }
+
     /**
      * Closes this Messaging instance, including stopping all workers and disconnecting from tassis.
      */
@@ -933,7 +1110,7 @@ class Messaging(
     }
 }
 
-private val randomMessageId: ByteString
+internal val randomMessageId: ByteString
     get() {
         val uuid = UUID.randomUUID()
         val bytes = ByteArray(16)

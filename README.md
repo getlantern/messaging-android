@@ -41,7 +41,7 @@ An index of all messages for a given Contact, by the sent timestamp of the messa
 ### /dm/[disappearAt]/[senderIdentityKey]/[messageId]
 An index of all messages that are supposed to auto disappear by some time (in unix milliseconds)
 
-### /spam/[senderIdentityKey]/[timestamp]/[messageId] (Model.StoredMessage)
+### /spam/[senderIdentityKey]/[timestamp]/[randomId] (Model.StoredMessage)
 Messages that aren't worth showing to the user for one reason or another.
 
 ### /o/[timestamp]/[messageId] (Model.OutboundMessage)
@@ -52,6 +52,14 @@ runs out.
 ### /ia/[senderIdentityKey]/[timestamp]/[messageId]/[attachmentId] (Model.InboundAttachment)
 A queue of inbound attachments that are pending download. If downloading fails, downloads will be
 re-queued here for a limited period of time until they either send successfully or time runs out.
+
+### /intro/from/[fromIdentityKey]/[toIdentityKey]
+An index of Introduction messages keyed to the contact who introduced us and then the contact to
+whom we're being introduced.
+
+### /intro/to/[toIdentityKey]/[fromIdentityKey]
+An index of Introduction messages keyed to the contact to whom we're being introduced and then the
+contact who introduced us.
 
 ## Included Signal Code
 The included Signal code (like AttachmentCipherInputStream) comes from https://github.com/signalapp/Signal-Android, not from https://github.com/signalapp/libsignal-service-java
@@ -76,3 +84,11 @@ This auto-formats all Kotlin files in the project.
 ./gradlew ktlintCheck
 
 This manually runs the linter against all Kotlin files in the project.
+
+## Entropy Issues Testing on Emulators
+This library uses a lot of cryptography routines, which uses up available entropy on systems.
+If you're frequently running the tests on emulators or devices which you don't actually use, the
+system may run out of entropy and the tests will slow down and eventually even stop working.
+
+The solution is to run the tests on a device or emulator on which you also use the UI, which helps
+regenerate entropy.

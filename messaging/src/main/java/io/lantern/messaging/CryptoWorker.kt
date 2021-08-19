@@ -3,11 +3,11 @@ package io.lantern.messaging
 import io.lantern.db.ChangeSet
 import io.lantern.db.Subscriber
 import io.lantern.db.Transaction
+import io.lantern.messaging.conversions.byteString
 import io.lantern.messaging.tassis.Callback
 import io.lantern.messaging.tassis.InboundMessage
 import io.lantern.messaging.tassis.Messages
 import io.lantern.messaging.tassis.Padding
-import io.lantern.messaging.tassis.byteString
 import io.lantern.messaging.time.minutesToMillis
 import java.io.File
 import java.io.FileOutputStream
@@ -42,7 +42,7 @@ import org.whispersystems.signalservice.internal.util.Util
 internal class CryptoWorker(
     messaging: Messaging,
     retryDelayMillis: Long,
-    private val stopSendRetryAfterMillis: Long
+    private val stopSendRetryAfterMillis: Long,
 ) :
     Worker(messaging, "crypto", retryDelayMillis = retryDelayMillis) {
     private val db = messaging.db
@@ -80,7 +80,43 @@ internal class CryptoWorker(
                     }
                 }
             },
-            true
+            receiveInitial = true
+        )
+
+        // find out about all provisional contacts (including previously saved ones) and schedule
+        // them for deletion
+        db.subscribe(
+            object : Subscriber<Model.ProvisionalContact>(
+                "provisionalContactsSubscriber",
+                Schema.PATH_PROVISIONAL_CONTACTS.path('%')
+            ) {
+                override fun onChanges(changes: ChangeSet<Model.ProvisionalContact>) {
+                    changes.updates.forEach { (path, pc) ->
+                        val delayMillis = pc.expiresAt - now
+                        executor.schedule(
+                            {
+                                try {
+                                    db.mutate { tx ->
+                                        val provisionalContact =
+                                            tx.get<Model.ProvisionalContact>(path)
+                                        provisionalContact?.let { it ->
+                                            // check the expiration again in case the provisional
+                                            // contact's expiration was extended
+                                            if (it.expiresAt < now) {
+                                                messaging.deleteProvisionalContact(pc.contactId)
+                                            }
+                                        }
+                                    }
+                                } catch (t: Throwable) {
+                                    logger.error("failed to delete provisional contact: ${t.message}") // ktlint-disable max-line-length
+                                }
+                            },
+                            delayMillis, TimeUnit.MILLISECONDS
+                        )
+                    }
+                }
+            },
+            receiveInitial = true
         )
     }
 
@@ -135,11 +171,16 @@ internal class CryptoWorker(
                     msgBuilder.putAttachments(id, attachmentWithThumbnail.build())
                 }
             }
+            if (hasIntroduction()) {
+                msgBuilder.introduction = Model.Introduction.newBuilder()
+                    .setId(introduction.to.id.fromBase32.byteString())
+                    .setDisplayName(introduction.displayName).build()
+            }
             return msgBuilder.build()
         }
 
     private fun Model.OutboundMessage.Builder.deleteFailed() {
-        logger.debug("deleting failed message")
+        logger.debug("deleting failed messages")
         db.mutate { tx ->
             tx.delete(this.dbPath)
             val msgPath = this.msgPath
@@ -167,7 +208,9 @@ internal class CryptoWorker(
             return
         }
 
-        if (!out.knowsRecipientDevices) {
+        val sendingToSelf = out.recipientId == messaging.myId.id
+
+        if (!sendingToSelf && !out.knowsRecipientDevices) {
             val recipientIdentityKey = out.recipientIdentityKey
             // find out which deviceIds to send to
             val knownDeviceIds =
@@ -188,108 +231,119 @@ internal class CryptoWorker(
             db.mutate { it.put(out.dbPath, out.build()) }
         }
 
-        when (out.contentCase) {
-            Model.OutboundMessage.ContentCase.MESSAGEID -> {
-                val msg = db.get<Model.StoredMessage>(out.msgPath)
-                if (msg == null) {
-                    out.deleteFailed()
-                    return
-                }
+        if (out.contentCase == Model.OutboundMessage.ContentCase.MESSAGEID) {
+            val msg = db.get<Model.StoredMessage>(out.msgPath)
+            if (msg == null) {
+                out.deleteFailed()
+                return
+            }
 
-                if (msg.attachmentsPendingEncryption.isNotEmpty()) {
-                    encryptAttachmentsExecutor.submit {
-                        db.mutate { tx ->
-                            db.get<Model.StoredMessage>(out.msgPath)?.let { it ->
-                                val upToDateMsg = it.toBuilder()
-                                it.attachmentsPendingEncryption.forEach { (id, attachment) ->
-                                    val storedAttachment = attachment.toBuilder()
-                                    try {
-                                        messaging.encryptAttachment(storedAttachment)
-                                    } catch (e: AttachmentPlainTextMissingException) {
-                                        storedAttachment.status =
-                                            Model.StoredAttachment.Status.FAILED
-                                    }
-                                    upToDateMsg.putAttachments(id, storedAttachment.build())
+            if (msg.attachmentsPendingEncryption.isNotEmpty()) {
+                encryptAttachmentsExecutor.submit {
+                    db.mutate { tx ->
+                        db.get<Model.StoredMessage>(out.msgPath)?.let { it ->
+                            val upToDateMsg = it.toBuilder()
+                            it.attachmentsPendingEncryption.forEach { (id, attachment) ->
+                                val storedAttachment = attachment.toBuilder()
+                                try {
+                                    messaging.encryptAttachment(
+                                        storedAttachment, sendingToSelf = sendingToSelf
+                                    )
+                                } catch (e: AttachmentPlainTextMissingException) {
+                                    storedAttachment.status =
+                                        Model.StoredAttachment.Status.FAILED
                                 }
-                                tx.put(upToDateMsg.dbPath, upToDateMsg.build())
-                                submit { processOutbound(out) }
+                                upToDateMsg.putAttachments(id, storedAttachment.build())
                             }
+                            tx.put(upToDateMsg.dbPath, upToDateMsg.build())
+                            submit { processOutbound(out) }
                         }
                     }
-                    return
                 }
+                return
+            }
 
-                val attachmentsPendingUpload = msg.attachmentsPendingUpload
-                if (attachmentsPendingUpload.isNotEmpty()) {
-                    // handle pending attachments before sending message
-                    attachmentsPendingUpload.forEach { (id, attachment) ->
-                        if (attachment.status == Model.StoredAttachment.Status.PENDING_UPLOAD) {
-                            uploadAttachment(out, msg, id, attachment, false)
-                        }
-                        if (attachment.hasThumbnail() &&
-                            attachment.thumbnail.status ==
-                            Model.StoredAttachment.Status.PENDING_UPLOAD
-                        ) {
-                            uploadAttachment(out, msg, id, attachment.thumbnail, true)
-                        }
+            val attachmentsPendingUpload = msg.attachmentsPendingUpload
+            if (attachmentsPendingUpload.isNotEmpty()) {
+                // handle pending attachments before sending message
+                attachmentsPendingUpload.forEach { (id, attachment) ->
+                    if (attachment.status == Model.StoredAttachment.Status.PENDING_UPLOAD) {
+                        uploadAttachment(out, msg, id, attachment, false)
                     }
-                    return
+                    if (attachment.hasThumbnail() &&
+                        attachment.thumbnail.status ==
+                        Model.StoredAttachment.Status.PENDING_UPLOAD
+                    ) {
+                        uploadAttachment(out, msg, id, attachment.thumbnail, true)
+                    }
                 }
+                return
+            }
 
+            fun afterSendSuccess(tx: Transaction, completelySent: Boolean) {
+                val msgPath = out.msgPath
+                tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
+                    val msgBuilder = msg.toBuilder()
+                    if (completelySent) {
+                        // mark the outbound message as "viewed" only once it's been completely sent
+                        messaging.markViewed(tx, msgBuilder)
+                    }
+                    tx.put(
+                        msgPath,
+                        msgBuilder
+                            .setStatus(
+                                if (completelySent)
+                                    Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
+                                else
+                                    Model.StoredMessage.DeliveryStatus.PARTIALLY_SENT
+                            )
+                            .build()
+                    )
+                }
+            }
+
+            if (sendingToSelf) {
+                db.mutate { tx ->
+                    afterSendSuccess(tx, true)
+                    tx.delete(out.dbPath)
+                }
+            } else {
                 encryptAndSendOutboundToAll(
                     out,
-                    afterSuccess = { tx, completelySent ->
-                        val msgPath = out.msgPath
-                        tx.get<Model.StoredMessage>(msgPath)?.let { msg ->
-                            val msgBuilder = msg.toBuilder()
-                            if (completelySent) {
-                                // mark the outbound message as "viewed" only once it's been completely sent
-                                messaging.markViewed(tx, msgBuilder)
-                            }
-                            tx.put(
-                                msgPath,
-                                msgBuilder
-                                    .setStatus(
-                                        if (completelySent)
-                                            Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT
-                                        else
-                                            Model.StoredMessage.DeliveryStatus.PARTIALLY_SENT
-                                    )
-                                    .build()
-                            )
-                        }
-                    }
+                    afterSuccess = ::afterSendSuccess
                 ) {
                     Model.TransferMessage.newBuilder()
                         .setMessage(msg.message.toByteString()).build()
                         .toByteArray()
                 }
             }
+        } else {
+            val transferMsg = Model.TransferMessage.newBuilder()
 
-            Model.OutboundMessage.ContentCase.REACTION -> {
-                encryptAndSendOutboundToAll(out) {
-                    Model.TransferMessage.newBuilder().setReaction(out.reaction).build()
-                        .toByteArray()
+            when (out.contentCase) {
+                Model.OutboundMessage.ContentCase.REACTION ->
+                    transferMsg.setReaction(out.reaction)
+                Model.OutboundMessage.ContentCase.DELETEMESSAGEID ->
+                    transferMsg.setDeleteMessageId(out.deleteMessageId)
+                Model.OutboundMessage.ContentCase.DISAPPEARSETTINGS ->
+                    transferMsg.setDisappearSettings(out.disappearSettings)
+                Model.OutboundMessage.ContentCase.HELLO ->
+                    transferMsg.setHello(out.hello)
+                else -> {
+                    logger.error("unknown outbound message content type")
+                    return
                 }
             }
 
-            Model.OutboundMessage.ContentCase.DELETEMESSAGEID -> {
+            if (sendingToSelf) {
+                db.mutate { tx ->
+                    tx.delete(out.dbPath)
+                }
+            } else {
                 encryptAndSendOutboundToAll(out) {
-                    Model.TransferMessage.newBuilder().setDeleteMessageId(out.deleteMessageId)
-                        .build()
-                        .toByteArray()
+                    transferMsg.build().toByteArray()
                 }
             }
-
-            Model.OutboundMessage.ContentCase.DISAPPEARSETTINGS -> {
-                encryptAndSendOutboundToAll(out) {
-                    Model.TransferMessage.newBuilder().setDisappearSettings(out.disappearSettings)
-                        .build()
-                        .toByteArray()
-                }
-            }
-
-            else -> logger.error("unknown outbound message content type")
         }
     }
 
@@ -702,7 +756,7 @@ internal class CryptoWorker(
             logger.error("message from unknown sender, saving to spam")
             db.mutate { tx ->
                 tx.put(
-                    spamPath(e.senderId, e.messageId, now),
+                    e.senderId.randomSpamPath,
                     unidentifiedSenderMessage
                 )
             }
@@ -720,47 +774,100 @@ internal class CryptoWorker(
             val transferMsg = Model.TransferMessage.parseFrom(plainText)
             val senderAddress = decryptionResult.senderAddress
             val senderId = senderAddress.identityKey.toString()
-            when (transferMsg.contentCase) {
-                Model.TransferMessage.ContentCase.MESSAGE -> storeMessage(
+
+            if (transferMsg.contentCase != Model.TransferMessage.ContentCase.HELLO &&
+                !tx.contains(senderId.directContactPath)
+            ) {
+                throw UnknownSenderException(senderId)
+            }
+
+            if (transferMsg.contentCase == Model.TransferMessage.ContentCase.MESSAGE) {
+                storeMessage(
                     tx,
                     senderId,
                     Model.Message.parseFrom(transferMsg.message)
                 )
-                Model.TransferMessage.ContentCase.REACTION -> storeReaction(
-                    tx,
-                    senderId,
-                    Model.Reaction.parseFrom(transferMsg.reaction)
-                )
-                Model.TransferMessage.ContentCase.DELETEMESSAGEID -> messaging.deleteLocally(
-                    senderId.storedMessagePath(transferMsg.deleteMessageId.base32),
-                    // We keep metadata so that the recipient's UI still has an empty placeholder for the deleted message.
-                    // Once the recipient chooses to delete this message locally, the metadata will be deleted.
-                    remotelyDeletedBy = senderId.directContactId,
-                )
-                Model.TransferMessage.ContentCase.DISAPPEARSETTINGS -> storeDisappearSettings(
-                    tx,
-                    senderId,
-                    Model.DisappearSettings.parseFrom(transferMsg.disappearSettings)
-                )
-                Model.TransferMessage.ContentCase.WEBRTCSIGNAL -> messaging.notifyWebRTCSignal(
-                    senderId,
-                    senderAddress.deviceId.toString(),
-                    transferMsg.webRTCSignal
-                )
-                else -> {
-                    logger.debug("received currently unsupported message type")
+            } else {
+                tx.get<Model.Contact>(senderId.directContactPath)?.let {
+                    val updatedContact = it.toBuilder()
+                        .setHasReceivedMessage(true).build()
+                    tx.put(senderId.directContactPath, updatedContact)
+                }
+
+                when (transferMsg.contentCase) {
+                    Model.TransferMessage.ContentCase.REACTION -> storeReaction(
+                        tx,
+                        senderId,
+                        Model.Reaction.parseFrom(transferMsg.reaction)
+                    )
+                    Model.TransferMessage.ContentCase.DELETEMESSAGEID -> messaging.deleteLocally(
+                        senderId.storedMessagePath(transferMsg.deleteMessageId.base32),
+                        // We keep metadata so that the recipient's UI still has an empty placeholder for the deleted message.
+                        // Once the recipient chooses to delete this message locally, the metadata will be deleted.
+                        remotelyDeletedBy = senderId.directContactId,
+                    )
+                    Model.TransferMessage.ContentCase.DISAPPEARSETTINGS -> storeDisappearSettings(
+                        tx,
+                        senderId,
+                        Model.DisappearSettings.parseFrom(transferMsg.disappearSettings)
+                    )
+                    Model.TransferMessage.ContentCase.HELLO -> storeHello(
+                        tx,
+                        senderId,
+                        Model.Hello.parseFrom(transferMsg.hello)
+                    )
+                    Model.TransferMessage.ContentCase.WEBRTCSIGNAL -> messaging.notifyWebRTCSignal(
+                        senderId,
+                        senderAddress.deviceId.toString(),
+                        transferMsg.webRTCSignal
+                    )
+                    else -> {
+                        logger.debug("received currently unsupported message type")
+                    }
                 }
             }
         }
     }
 
     private fun storeMessage(tx: Transaction, senderId: String, msg: Model.Message) {
-        if (!tx.contains(senderId.directContactPath)) {
-            throw UnknownSenderException(senderId, msg.id.base32)
-        }
         val storedMsgBuilder = msg.inbound(senderId)
-        // save inbound attachments and trigger downloads
 
+        // save the introduction if one was included
+        if (msg.hasIntroduction()) {
+            val matchingContact = tx.findOne<Model.Contact>(
+                msg.introduction.id.directContactID.contactPath
+            )
+            if (matchingContact != null) {
+                logger.debug("received introduction to known contact, ignoring")
+                return
+            }
+
+            val introduction = Model.IntroductionDetails.newBuilder()
+                .setTo(msg.introduction.id.directContactID)
+                .setDisplayName(msg.introduction.displayName)
+                .setOriginalDisplayName(msg.introduction.displayName).build()
+            storedMsgBuilder.introduction = introduction
+
+            // Delete any existing introduction message of this kind
+            // This ensures that at any given time, we have at most one introduction message for
+            // a given combination of from/to (i.e. each the conversation only has one introduction
+            // message per distinct contact)
+            tx.introductionMessage(senderId, introduction.to.id)?.let {
+                messaging.deleteLocally(it.detailPath)
+            }
+
+            // Add index entries pointing to the introduction
+            tx.put(
+                senderId.introductionIndexPathByFrom(introduction.to.id),
+                storedMsgBuilder.dbPath
+            )
+            tx.put(
+                introduction.to.id.introductionIndexPathByTo(senderId),
+                storedMsgBuilder.dbPath
+            )
+        }
+
+        // save inbound attachments and trigger downloads
         msg.attachmentsMap.forEach { (id, attachmentWithThumbnail) ->
             // this is a full size attachment, store it on the message
             val fullSizeInboundAttachment =
@@ -801,9 +908,6 @@ internal class CryptoWorker(
     }
 
     private fun storeReaction(tx: Transaction, senderId: String, reaction: Model.Reaction) {
-        if (!tx.contains(senderId.directContactPath)) {
-            throw UnknownSenderException(senderId, reaction.reactingToMessageId.base32)
-        }
         tx.get<Model.StoredMessage>(
             reaction.reactingToSenderId.base32
                 .storedMessagePath(reaction.reactingToMessageId.base32)
@@ -836,6 +940,34 @@ internal class CryptoWorker(
                 contactPath,
                 updatedContactBuilder.build()
             )
+        }
+    }
+
+    private fun storeHello(
+        tx: Transaction,
+        senderId: String,
+        hello: Model.Hello
+    ) {
+        val provisionalContactPath = senderId.provisionalContactPath
+        tx.get<Model.ProvisionalContact>(provisionalContactPath)?.let {
+            messaging.doAddOrUpdateContact(
+                senderId.directContactId,
+                hello.displayName,
+                mostRecentHelloTs = now
+            )
+            tx.delete(senderId.provisionalContactPath)
+            if (!hello.final) {
+                // send a hello just in case they couldn't process our first one
+                messaging.sendHello(tx, senderId, final = true)
+            }
+        } ?: tx.get<Model.Contact>(senderId.directContactPath)?.let {
+            // just update teh mostRecentHelloTs
+            tx.put(
+                senderId.directContactPath, it.toBuilder().setMostRecentHelloTs(now).build()
+            )
+            if (!hello.final) {
+                messaging.sendHello(tx, senderId, final = true)
+            }
         }
     }
 
