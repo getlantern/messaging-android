@@ -8,12 +8,12 @@ import java9.util.concurrent.CompletableFuture
  * The result of sending something to multiple devices.
  */
 class MultiDeviceResult(
-    /** the deviceIDs to which the signal was successfully sent */
+    /** the deviceIDs to which the message was successfully sent */
     val successfulDeviceIds: Set<String>,
-    /** map of deviceID to Throwable for all device IDs to which the signal could not be sent */
+    /** map of deviceID to Throwable for all device IDs to which the message could not be sent */
     val errors: Map<String, Throwable>
 ) {
-    /** Indicates if the signal was successfully sent to all known devices */
+    /** Indicates if the message was successfully sent to all known devices */
     val allSucceeded: Boolean get() = errors.isEmpty()
 
     internal class Builder(

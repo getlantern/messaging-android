@@ -159,14 +159,6 @@ message Hello {
   bool final = 2; // indicates whether this is a final hello
 }
 
-// A message that's used for WebRTC signaling. Unlike regular messages, this type of message is not
-// stored on disk. The client also doesn't attempt to re-send, but rather returns an error if it
-// fails to send right away.
-message WebRTCSignal {
-  string senderId = 1; // the id of the person who sent this message
-  bytes content = 2; // the contents of the message
-}
-
 // An envelope for messages to be transferred via the message broker
 message TransferMessage {
   oneof content {
@@ -175,7 +167,7 @@ message TransferMessage {
     bytes deleteMessageId = 3; // the id of a message from this Sender to delete
     bytes disappearSettings = 4; // serialized DisappearSettings
     bytes hello = 5; // serialized Hello
-    bytes webRTCSignal = 6; // the content of a WebRTCSignalingMessage
+    bytes webRTCSignal = 6; // the content of a WebRTCSignal
   }
 }
 

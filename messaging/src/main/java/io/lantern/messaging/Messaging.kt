@@ -437,11 +437,12 @@ class Messaging(
     /**
      * Send a WebRTC signaling message to a direct contact. Unlike regular messages, these are not
      * persisted on disk and are not queued for send. We attempt to send them immediately, and if
-     * that doesn't work for any reason, this function will throw an exception.
+     * that doesn't work for any reason, the return Future will throw an exception.
      *
      * @param recipientId the base32 encoded public identity key of the recipient
      * @param content the content of the signal to send
      * @param deviceId optionally, a specific device ID to which to send the signal
+     *
      * @return a Future MultiDeviceResult with the result of sending to the relevant devices
      */
     fun sendWebRTCSignal(
@@ -464,7 +465,7 @@ class Messaging(
     }
 
     /**
-     * Subscribes to inbound WebRTC signals using.
+     * Subscribes to inbound WebRTC signals.
      *
      * @param subscriberId a unique identifier for this subscription, used in
      *                     #unsubscribeFromWebRTCSignals()
@@ -475,7 +476,7 @@ class Messaging(
     }
 
     /**
-     * Unsubscribes the idenfied subscriber from WebRTC signal notifications.
+     * Unsubscribes the specified subscriber from WebRTC signal notifications.
      *
      * @param subscriberId the ID that was used when calling #subscribeToWebRTCSignals()
      */
