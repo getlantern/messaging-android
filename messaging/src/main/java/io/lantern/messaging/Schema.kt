@@ -157,3 +157,9 @@ fun Queryable.introductionMessagesTo(to: String): List<Detail<Model.StoredMessag
 
 fun Queryable.introductionMessage(from: String, to: String): Detail<Raw<Model.StoredMessage>>? =
     listDetailsRaw<Model.StoredMessage>(from.introductionIndexPathByFrom(to)).firstOrNull()
+
+val Model.Contact.fullText: String
+    get() = "$displayName $contactId.id"
+
+val Model.StoredMessage.fullText: String?
+    get() = text
