@@ -14,6 +14,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java9.util.concurrent.CompletableFuture
 import kotlin.collections.ArrayList
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -1229,6 +1230,77 @@ class MessagingTest : BaseMessagingTest() {
                                         .isEmpty(),
                                     "disappearing message entry should be gone remotely"
                                 )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun testWebRTCSignaling() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newDB.use { catDB ->
+                    newMessaging(catDB, "cat").with { cat ->
+                        newMessaging(dogDB, "dog", stopSendRetryAfterMillis = 5000).with { dog ->
+                            val catId = cat.store.identityKeyPair.publicKey.toString()
+                            val dogId = dog.store.identityKeyPair.publicKey.toString()
+
+                            cat.addOrUpdateDirectContact(dogId, "Dog")
+                            dog.addOrUpdateDirectContact(catId, "Cat")
+
+                            // give some time for pre keys to register
+                            // TODO: would be nice to check for this more explicitly so we don't
+                            // have a timing dependency
+                            delay(5000)
+
+                            val receivedFirstSignal = CompletableFuture<Void>()
+                            val receivedSignals = HashMap<String, String>()
+                            cat.subscribeToWebRTCSignals("subscriberId") { signal ->
+                                receivedSignals.put(
+                                    signal.senderId,
+                                    signal.content.toString(Charsets.UTF_8)
+                                )
+                                receivedFirstSignal.complete(null)
+                            }
+
+                            var result = dog.sendWebRTCSignal(
+                                catId,
+                                "first".toByteArray(Charsets.UTF_8)
+                            ).get()
+                            assertTrue(result.allSucceeded)
+                            assertEquals(1, result.successfulDeviceIds.size)
+
+                            // wait for first signal, then unsubscribe
+                            receivedFirstSignal.get()
+                            cat.unsubscribeFromWebRTCSignals("subscriberId")
+
+                            // now send another signal that shouldn't be recorded since we've
+                            // unsubscribed
+                            result = dog.sendWebRTCSignal(
+                                catId,
+                                "second".toByteArray(Charsets.UTF_8)
+                            ).get()
+                            assertTrue(result.allSucceeded)
+                            assertEquals(1, result.successfulDeviceIds.size)
+
+                            // wait for cat to potentially receive 2nd signal (which it shouldn't)
+                            delay(5000)
+
+                            assertEquals(mapOf(dogId to "first"), receivedSignals)
+
+                            // try to send to a non-existent device and make sure we get an error
+                            try {
+                                dog.sendWebRTCSignal(
+                                    catId,
+                                    "first".toByteArray(Charsets.UTF_8),
+                                    deviceId = "nonexistent"
+                                )
+                                fail("sending signal to non-existent device should have failed")
+                            } catch (err: Throwable) {
+                                // okay
                             }
                         }
                     }
