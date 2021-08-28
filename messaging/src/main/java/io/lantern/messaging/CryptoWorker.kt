@@ -410,6 +410,13 @@ internal class CryptoWorker(
                 { err -> resultBuilder.deviceFailed(deviceId.toString(), err) }
             )
         } else {
+            if (knownDeviceIds.isEmpty()) {
+                future.completeExceptionally(
+                    RuntimeException("No known device ids")
+                )
+                return
+            }
+
             // send to all known devices
             knownDeviceIds.forEach { knownDeviceId ->
                 encryptAndSendTo(
