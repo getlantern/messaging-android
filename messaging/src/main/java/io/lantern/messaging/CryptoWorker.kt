@@ -14,7 +14,6 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import java9.util.concurrent.CompletableFuture
 import okhttp3.Call
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -350,8 +349,8 @@ internal class CryptoWorker(
     fun sendEphemeral(
         recipientId: String,
         transferMsg: Model.TransferMessage,
-        result: CompletableFuture<MultiDeviceResult>,
         deviceId: DeviceId? = null,
+        onComplete: (MultiDeviceResult) -> Unit
     ) {
         val recipientIdentityKey = ECPublicKey(recipientId)
         val knownDeviceIds =
@@ -363,7 +362,7 @@ internal class CryptoWorker(
                     deviceId,
                     knownDeviceIds,
                     transferMsg,
-                    result,
+                    onComplete,
                 )
                 return
             }
@@ -373,8 +372,10 @@ internal class CryptoWorker(
             recipientIdentityKey,
             { updatedDeviceIds ->
                 if (deviceId != null && !updatedDeviceIds.contains(deviceId)) {
-                    result.completeExceptionally(
-                        RuntimeException("Unable to get pre keys for target device")
+                    MultiDeviceResult.fail(
+                        onComplete,
+                        RuntimeException("Unable to get pre keys for target device"),
+                        deviceId = deviceId.toString()
                     )
                     return@retrievePreKeys
                 }
@@ -383,10 +384,10 @@ internal class CryptoWorker(
                     deviceId,
                     knownDeviceIds,
                     transferMsg,
-                    result,
+                    onComplete,
                 )
             },
-            { err -> result.completeExceptionally(err) }
+            { err -> MultiDeviceResult.fail(onComplete, err) }
         )
     }
 
@@ -395,9 +396,9 @@ internal class CryptoWorker(
         deviceId: DeviceId?,
         knownDeviceIds: List<DeviceId>,
         transferMsg: Model.TransferMessage,
-        future: CompletableFuture<MultiDeviceResult>
+        onComplete: (MultiDeviceResult) -> Unit
     ) {
-        val resultBuilder = MultiDeviceResult.Builder(knownDeviceIds.size, future)
+        val resultBuilder = MultiDeviceResult.Builder(knownDeviceIds.size, onComplete)
         val msgBytes = transferMsg.toByteArray()
         if (deviceId != null) {
             // send to just the specific device
@@ -410,7 +411,7 @@ internal class CryptoWorker(
             )
         } else {
             if (knownDeviceIds.isEmpty()) {
-                future.completeExceptionally(
+                resultBuilder.fail(
                     RuntimeException("No known device ids")
                 )
                 return
