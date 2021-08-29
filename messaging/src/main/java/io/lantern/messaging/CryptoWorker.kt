@@ -356,18 +356,17 @@ internal class CryptoWorker(
         val recipientIdentityKey = ECPublicKey(recipientId)
         val knownDeviceIds =
             store.getSubDeviceSessions(recipientIdentityKey.toString())
-        if (
-            (deviceId == null && knownDeviceIds.isNotEmpty()) ||
-            knownDeviceIds.contains(deviceId)
-        ) {
-            doSendEphemeral(
-                recipientIdentityKey,
-                deviceId,
-                knownDeviceIds,
-                transferMsg,
-                result,
-            )
-            return
+        if (knownDeviceIds.isNotEmpty()) {
+            if (deviceId == null || knownDeviceIds.contains(deviceId)) {
+                doSendEphemeral(
+                    recipientIdentityKey,
+                    deviceId,
+                    knownDeviceIds,
+                    transferMsg,
+                    result,
+                )
+                return
+            }
         }
 
         retrievePreKeys(
