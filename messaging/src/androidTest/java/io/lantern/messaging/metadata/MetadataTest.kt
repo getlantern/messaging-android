@@ -25,14 +25,6 @@ class MetadataTest : BaseTest() {
     fun testHeic() {
         val file = assetToFile("image.heic")
         val md = Metadata.analyze(file)
-        assertNull(md.mimeType)
-        assertNull(md.thumbnail)
-    }
-
-    @Test
-    fun testHeicWithDefaultMimeType() {
-        val file = assetToFile("image.heic")
-        val md = Metadata.analyze(file, "image/heic")
         assertEquals("image/heic", md.mimeType)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             assertNotNull(md.thumbnail)
