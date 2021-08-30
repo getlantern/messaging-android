@@ -834,8 +834,10 @@ internal class CryptoWorker(
 
         // save the introduction if one was included
         if (msg.hasIntroduction()) {
+            val toId = msg.introduction.id.directContactID.sanitized
+
             val matchingContact = tx.findOne<Model.Contact>(
-                msg.introduction.id.directContactID.contactPath
+                toId.contactPath
             )
             if (matchingContact != null) {
                 logger.debug("received introduction to known contact, ignoring")
@@ -843,7 +845,7 @@ internal class CryptoWorker(
             }
 
             val introduction = Model.IntroductionDetails.newBuilder()
-                .setTo(msg.introduction.id.directContactID)
+                .setTo(toId)
                 .setDisplayName(msg.introduction.displayName)
                 .setOriginalDisplayName(msg.introduction.displayName).build()
             storedMsgBuilder.introduction = introduction

@@ -35,6 +35,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import org.junit.Test
+import org.whispersystems.libsignal.InvalidKeyException
 import org.whispersystems.libsignal.util.KeyHelper
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
 import org.whispersystems.signalservice.internal.util.Util
@@ -56,9 +57,16 @@ class MessagingTest : BaseMessagingTest() {
                             val dogId = dog.myId.id
                             val catId = cat.myId.id
 
+                            try {
+                                dog.addOrUpdateDirectContact("blub", "Bogus")
+                                fail("adding an invalid contact ID should fail")
+                            } catch (e: InvalidKeyException) {
+                                // okay
+                            }
+
                             val now = now
                             var catContact =
-                                dog.addOrUpdateDirectContact(catId, "Cat")
+                                dog.addOrUpdateDirectContact(catId.toUpperCase(), "Cat")
                             val createdTs = catContact.createdTs
                             assertEquals(
                                 Model.ContactType.DIRECT,
@@ -117,7 +125,7 @@ class MessagingTest : BaseMessagingTest() {
                                 "hello again dog"
                             )
 
-                            dog.deleteDirectContact(catId)
+                            dog.deleteDirectContact(catId.toUpperCase())
                             assertFalse(dog.db.contains(catId.directContactId.contactPath))
                             assertFalse(dog.db.contains(msgs.received.dbPath))
                             assertEquals(
@@ -195,6 +203,17 @@ class MessagingTest : BaseMessagingTest() {
 
                             dog.setMyDisplayName("The Dog")
                             cat.setMyDisplayName("The Cat")
+
+                            try {
+                                dog.addProvisionalContact(
+                                    // This is the length of a real public key, but has some
+                                    // disallowed characters
+                                    "bogus"
+                                )
+                                fail("adding an invalid contact ID should fail")
+                            } catch (e: InvalidKeyException) {
+                                // okay
+                            }
 
                             assertEquals(0, dog.addProvisionalContact(catId))
                             assertEquals(0, cat.addProvisionalContact(dogId))
@@ -1267,7 +1286,7 @@ class MessagingTest : BaseMessagingTest() {
                             }
 
                             var result = dog.sendWebRTCSignal(
-                                catId,
+                                catId.toUpperCase(),
                                 "first".toByteArray(Charsets.UTF_8)
                             ).get()
                             assertTrue(result.allSucceeded)
@@ -1360,10 +1379,10 @@ class MessagingTest : BaseMessagingTest() {
         }
 
         // introduce all the pets to each other
-        owner.introduce(listOf(dogId, catId, fishId))
+        owner.introduce(listOf(dogId, catId.toUpperCase(), fishId))
 
         // introduce them again to make sure we can handle duplicate introductions
-        owner.introduce(listOf(dogId, catId, fishId))
+        owner.introduce(listOf(dogId, catId, fishId.toUpperCase()))
 
         // make sure everyone received an introduction to everyone
         val introducedParties = listOf(dog, cat, fish)
@@ -1410,7 +1429,7 @@ class MessagingTest : BaseMessagingTest() {
         )
 
         dog.acceptIntroduction(ownerId, fishId)
-        cat.acceptIntroduction(ownerId, dogId)
+        cat.acceptIntroduction(ownerId, dogId.toUpperCase())
 
         // send a duplicate introduction for fish from dog to cat (but with a different displayName)
         dog.addOrUpdateDirectContact(fishId, "Dogfish")
@@ -1455,7 +1474,7 @@ class MessagingTest : BaseMessagingTest() {
 
         // test deleting introduction messages
         fish.rejectIntroduction(ownerId, dogId)
-        fish.rejectIntroduction(ownerId, catId)
+        fish.rejectIntroduction(ownerId, catId.toUpperCase())
         assertNull(
             fish.db.findOne(Schema.PATH_INTRODUCTIONS_BY_TO.path("%")),
             "all introductions by to index entries should be deleted"
@@ -1512,11 +1531,11 @@ class MessagingTest : BaseMessagingTest() {
 
         // send a message
         var senderStoredMsg = from.sendToDirectContact(
-            toId,
+            toId.toUpperCase(),
             text,
             attachments = attachments,
             replyToId = replyToId,
-            replyToSenderId = replyToId?.let { toId }
+            unsafeReplyToSenderId = replyToId?.let { toId.toUpperCase() }
         )
         assertFalse(senderStoredMsg.id.isNullOrBlank())
         assertEquals(
