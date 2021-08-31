@@ -31,6 +31,7 @@ import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.InvalidKeyException
 import org.whispersystems.libsignal.ecc.ECPublicKey
+import org.whispersystems.libsignal.util.InvalidCharacterException
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherInputStream
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
 import org.whispersystems.signalservice.internal.util.Util
@@ -220,7 +221,7 @@ class Messaging(
      * @param displayName the human-friendly display name for this contact
      * @return the created or updated Contact
      */
-    @Throws(InvalidKeyException::class)
+    @Throws(InvalidKeyException::class, InvalidCharacterException::class)
     fun addOrUpdateDirectContact(id: String, displayName: String): Model.Contact =
         addOrUpdateContact(id.directContactId, displayName)
 

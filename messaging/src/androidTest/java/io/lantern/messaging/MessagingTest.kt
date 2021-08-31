@@ -36,6 +36,7 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import org.junit.Test
 import org.whispersystems.libsignal.InvalidKeyException
+import org.whispersystems.libsignal.util.InvalidCharacterException
 import org.whispersystems.libsignal.util.KeyHelper
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
 import org.whispersystems.signalservice.internal.util.Util
@@ -64,9 +65,23 @@ class MessagingTest : BaseMessagingTest() {
                                 // okay
                             }
 
+                            try {
+                                dog.addOrUpdateDirectContact("${catId}aaa", "Bogus")
+                                fail("adding a too long contact ID should fail")
+                            } catch (e: InvalidKeyException) {
+                                // okay
+                            }
+
+                            try {
+                                dog.addOrUpdateDirectContact("-${catId.substring(1, 52)}", "Bogus")
+                                fail("adding an contact ID with an invalid character should fail")
+                            } catch (e: InvalidCharacterException) {
+                                // okay
+                            }
+
                             val now = now
                             var catContact =
-                                dog.addOrUpdateDirectContact(catId.toUpperCase(), "Cat")
+                                dog.addOrUpdateDirectContact(" ${catId.toUpperCase()} ", "Cat")
                             val createdTs = catContact.createdTs
                             assertEquals(
                                 Model.ContactType.DIRECT,
