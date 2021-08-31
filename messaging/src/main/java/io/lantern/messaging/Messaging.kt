@@ -302,10 +302,11 @@ class Messaging(
         return mostRecentHelloTs
     }
 
-    internal fun deleteProvisionalContact(id: String) {
+    fun deleteProvisionalContact(unsafeContactId: String) {
+        val contactId = unsafeContactId.sanitizedContactId
         db.mutate { tx ->
-            store.deleteAllSessions(id)
-            tx.delete(id.provisionalContactPath)
+            store.deleteAllSessions(contactId)
+            tx.delete(contactId.provisionalContactPath)
         }
     }
 
@@ -1167,7 +1168,7 @@ val now: Long
 internal val String.sanitizedContactId: String
     @Throws(InvalidKeyException::class)
     get() {
-        return ECPublicKey(this.toLowerCase()).toString()
+        return ECPublicKey(this.toLowerCase().trim()).toString()
     }
 
 /**
