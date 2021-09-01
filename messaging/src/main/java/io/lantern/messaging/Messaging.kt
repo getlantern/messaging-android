@@ -22,10 +22,8 @@ import java.nio.ByteBuffer
 import java.security.SecureRandom
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
-import java9.util.concurrent.CompletableFuture
 import kotlin.collections.HashSet
 import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
@@ -442,26 +440,26 @@ class Messaging(
      * @param recipientId the base32 encoded public identity key of the recipient
      * @param content the content of the signal to send
      * @param deviceId optionally, a specific device ID to which to send the signal
+     * @param onComplete callback for when sending is complete (whether successful or failed)
      *
      * @return a Future MultiDeviceResult with the result of sending to the relevant devices
      */
     fun sendWebRTCSignal(
         recipientId: String,
         content: ByteArray,
-        deviceId: String? = null
-    ): Future<MultiDeviceResult> {
+        deviceId: String? = null,
+        onComplete: (MultiDeviceResult) -> Unit
+    ) {
         val msg = Model.TransferMessage.newBuilder()
             .setWebRTCSignal(content.byteString()).build()
-        val result = CompletableFuture<MultiDeviceResult>()
         cryptoWorker.submit {
             cryptoWorker.sendEphemeral(
                 recipientId,
                 msg,
-                result,
-                deviceId = deviceId?.let { DeviceId(it) } ?: null
+                deviceId = deviceId?.let { DeviceId(it) },
+                onComplete = onComplete
             )
         }
-        return result
     }
 
     /**
@@ -1011,9 +1009,9 @@ class Messaging(
         dir: File
     ) {
         if (dir.exists()) {
-            dir.listFiles().let { files ->
+            dir.listFiles()?.let { files ->
                 for (i in files.indices) {
-                    files[i].let { file ->
+                    files[i]?.let { file ->
                         if (file.isDirectory) {
                             deleteOrphanedAttachments(now, cutoffMillis, knownAttachmentPaths, file)
                         } else {
