@@ -244,7 +244,7 @@ class Messaging(
 
         val path = sanitizedContactId.contactPath
         return db.mutate { tx ->
-            val existingContact = tx.get<Model.Contact>(contactPath)
+            val existingContact = tx.get<Model.Contact>(path)
             val contactBuilder = existingContact?.toBuilder() ?: Model.Contact.newBuilder()
                 .setContactId(sanitizedContactId)
             val isNew = existingContact == null
