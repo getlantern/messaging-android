@@ -307,7 +307,7 @@ class MessagingTest : BaseMessagingTest() {
                                     )
 
                                     // wait for provisional contact to expire
-                                    delay(15000)
+                                    delay(21000)
 
                                     assertEquals(
                                         0,
@@ -1802,7 +1802,7 @@ class MessagingTest : BaseMessagingTest() {
         failedSendRetryDelayMillis: Long = 100,
         stopSendRetryAfterMillis: Long = 5L.minutesToMillis,
         orphanedAttachmentCutoffSeconds: Int = 1,
-        provisionalContactsExpireAfterSeconds: Long = 14
+        provisionalContactsExpireAfterSeconds: Long = 20
     ): Messaging {
         return Messaging(
             db,
