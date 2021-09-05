@@ -49,7 +49,7 @@ internal abstract class Worker(
                 }
             }
         } catch (t: Throwable) {
-            logger.error(t.message)
+            logger.error(t.message, t)
         }
     }
 

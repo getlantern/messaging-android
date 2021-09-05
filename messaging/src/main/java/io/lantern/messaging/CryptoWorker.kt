@@ -72,7 +72,7 @@ internal class CryptoWorker(
                                         tx.delete(path)
                                     }
                                 } catch (t: Throwable) {
-                                    logger.error("failed to delete disappearing message: ${t.message}") // ktlint-disable max-line-length
+                                    logger.error("failed to delete disappearing message: ${t.message}", t) // ktlint-disable max-line-length
                                 }
                             },
                             delayMillis, TimeUnit.MILLISECONDS
@@ -543,12 +543,12 @@ internal class CryptoWorker(
                         }
                     }
                 } catch (t: Throwable) {
-                    logger.error("unexpected error marking successful send: ${t.message}")
+                    logger.error("unexpected error marking successful send: ${t.message}", t)
                     retryFailed { encryptAndSendOutboundTo(out, deviceId, afterSuccess, build) }
                 }
             },
             { err ->
-                logger.error("failed to send: ${err.message}")
+                logger.error("failed to send: ${err.message}", err)
                 retryFailed { encryptAndSendOutboundTo(out, deviceId, afterSuccess, build) }
             }
         )
@@ -698,7 +698,7 @@ internal class CryptoWorker(
             }
 
             override fun onFailure(call: Call, e: IOException) {
-                logger.error("failed to upload attachment, will try again: ${e.message}")
+                logger.error("failed to upload attachment, will try again: ${e.message}", e)
                 retryFailed { uploadAttachment(out, msg, id, attachment, isThumbnail) }
             }
         })
@@ -762,7 +762,7 @@ internal class CryptoWorker(
             }
         } catch (e: Exception) {
             logger.error(
-                "unexpected problem decrypting and storing message, dropping: ${e.message}"
+                "unexpected problem decrypting and storing message, dropping: ${e.message}", e
             )
         }
     }
@@ -991,7 +991,7 @@ internal class CryptoWorker(
                                     Util.copy(response.body!!.byteStream(), out)
                                 }
                             } catch (t: Throwable) {
-                                logger.error("error downloading attachment data, will try again: ${t.message}") // ktlint-disable max-line-length
+                                logger.error("error downloading attachment data, will try again: ${t.message}", t) // ktlint-disable max-line-length
                                 retryFailed { downloadAttachment(inbound, attachment) }
                                 return
                             }
@@ -1052,7 +1052,7 @@ internal class CryptoWorker(
                 }
 
                 override fun onFailure(call: Call, e: IOException) {
-                    logger.error("failed to download attachment, will try again: ${e.message}")
+                    logger.error("failed to download attachment, will try again: ${e.message}", e)
                     retryFailed { downloadAttachment(inbound, attachment) }
                 }
             })

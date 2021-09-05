@@ -1132,7 +1132,7 @@ class Messaging(
             anonymousClientWorker.executor.awaitTermination(10, TimeUnit.SECONDS)
             authenticatedClientWorker.executor.awaitTermination(10, TimeUnit.SECONDS)
         } catch (t: Throwable) {
-            logger.error(t.message)
+            logger.error("error closing Messaging: ${t.message}", t)
         }
     }
 }
