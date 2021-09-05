@@ -102,7 +102,7 @@ internal class CryptoWorker(
                                             // check the expiration again in case the provisional
                                             // contact's expiration was extended
                                             if (it.expiresAt < now) {
-                                                messaging.deleteProvisionalContact(pc.contactId)
+                                                messaging.doDeleteProvisionalContact(pc.contactId)
                                             }
                                         }
                                     }

@@ -304,9 +304,20 @@ class Messaging(
 
     fun deleteProvisionalContact(unsafeContactId: String) {
         val contactId = unsafeContactId.sanitizedContactId
+
+        // delete provisional contacts in crypto worker's thread to avoid race conditions on
+        // managing Signal session
+        cryptoWorker.submitForValue {
+            doDeleteProvisionalContact(contactId)
+        }
+    }
+
+    internal fun doDeleteProvisionalContact(contactId: String) {
         db.mutate { tx ->
-            store.deleteAllSessions(contactId)
             tx.delete(contactId.provisionalContactPath)
+            if (!tx.contains(contactId.directContactPath)) {
+                store.deleteAllSessions(contactId)
+            }
         }
     }
 
@@ -321,6 +332,8 @@ class Messaging(
     }
 
     private fun deleteContact(contactId: Model.ContactId) {
+        // delete contacts in crypto worker's thread to avoid race conditions on managing Signal
+        // session
         return cryptoWorker.submitForValue {
             db.mutate { tx ->
                 tx.list<String>(contactId.contactMessagesQuery)
