@@ -35,6 +35,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import org.junit.Test
+import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.InvalidKeyException
 import org.whispersystems.libsignal.util.InvalidCharacterException
 import org.whispersystems.libsignal.util.KeyHelper
@@ -1300,12 +1301,16 @@ class MessagingTest : BaseMessagingTest() {
                                 receivedFirstSignal.complete(null)
                             }
 
-                            var result = dog.sendWebRTCSignal(
-                                catId.toUpperCase(),
+                            var resultFuture = CompletableFuture<MultiDeviceResult>()
+                            dog.sendWebRTCSignal(
+                                catId,
                                 "first".toByteArray(Charsets.UTF_8)
-                            ).get()
-                            assertTrue(result.allSucceeded)
-                            assertEquals(1, result.successfulDeviceIds.size)
+                            ) {
+                                resultFuture.complete(it)
+                            }
+                            var result = resultFuture.get()
+                            assertTrue(result.succeeded)
+                            assertEquals(1, result.successfulDeviceIds?.size)
 
                             // wait for first signal, then unsubscribe
                             receivedFirstSignal.get()
@@ -1313,12 +1318,16 @@ class MessagingTest : BaseMessagingTest() {
 
                             // now send another signal that shouldn't be recorded since we've
                             // unsubscribed
-                            result = dog.sendWebRTCSignal(
+                            resultFuture = CompletableFuture<MultiDeviceResult>()
+                            dog.sendWebRTCSignal(
                                 catId,
                                 "second".toByteArray(Charsets.UTF_8)
-                            ).get()
-                            assertTrue(result.allSucceeded)
-                            assertEquals(1, result.successfulDeviceIds.size)
+                            ) {
+                                resultFuture.complete(it)
+                            }
+                            result = resultFuture.get()
+                            assertTrue(result.succeeded)
+                            assertEquals(1, result.successfulDeviceIds?.size)
 
                             // wait for cat to potentially receive 2nd signal (which it shouldn't)
                             delay(5000)
@@ -1326,16 +1335,24 @@ class MessagingTest : BaseMessagingTest() {
                             assertEquals(mapOf(dogId to "first"), receivedSignals)
 
                             // try to send to a non-existent device and make sure we get an error
-                            try {
-                                dog.sendWebRTCSignal(
-                                    catId,
-                                    "first".toByteArray(Charsets.UTF_8),
-                                    deviceId = "nonexistent"
-                                )
-                                fail("sending signal to non-existent device should have failed")
-                            } catch (err: Throwable) {
-                                // okay
+                            val badDeviceId = DeviceId("nonexistent")
+                            resultFuture = CompletableFuture<MultiDeviceResult>()
+                            dog.sendWebRTCSignal(
+                                catId,
+                                "first".toByteArray(Charsets.UTF_8),
+                                deviceId = badDeviceId.toString()
+                            ) {
+                                resultFuture.complete(it)
                             }
+                            result = resultFuture.get()
+                            assertFalse(
+                                result.succeeded,
+                                "sending signal to non-existent device should have failed"
+                            )
+                            assertEquals(
+                                true,
+                                result.deviceErrors?.containsKey(badDeviceId.toString())
+                            )
                         }
                     }
                 }
