@@ -908,7 +908,7 @@ internal class CryptoWorker(
 
         // save the stored message
         val storedMsg = storedMsgBuilder.build()
-        tx.put(storedMsg.dbPath, storedMsg)
+        tx.put(storedMsg.dbPath, storedMsg, fullText = storedMsg.fullText)
 
         // update the Contact metadata
         messaging.updateContactMetaData(tx, storedMsg)

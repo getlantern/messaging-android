@@ -2,6 +2,7 @@ package io.lantern.messaging
 
 import com.google.protobuf.ByteString
 import io.lantern.db.DB
+import io.lantern.db.PathAndValue
 import io.lantern.db.Transaction
 import io.lantern.messaging.conversions.byteString
 import io.lantern.messaging.metadata.Metadata
@@ -255,7 +256,7 @@ class Messaging(
             mostRecentHelloTs?.let { contactBuilder.setMostRecentHelloTs(it) }
             val contact =
                 contactBuilder.setContactId(sanitizedContactId).setDisplayName(displayName).build()
-            tx.put(path, contact)
+            tx.put(path, contact, fullText = contact.fullText)
             // decrypt any "spam" we received from this Contact prior to adding them
             db.list<ByteArray>(contact.spamQuery)
                 .forEach { (spamPath, unidentifiedSenderMessage) ->
@@ -437,7 +438,7 @@ class Messaging(
         val msg = msgBuilder.build()
         return db.mutate { tx ->
             // save the message in a list of all messages
-            tx.put(msg.dbPath, msg)
+            tx.put(msg.dbPath, msg, fullText = msg.fullText)
             // update the relevant contact
             updateContactMetaData(tx, msg)
             // save the message under the relevant contact messages
@@ -1117,6 +1118,16 @@ class Messaging(
             deleteLocally(path)
         }
     }
+
+    fun searchContacts(query: String): List<PathAndValue<Model.Contact>> =
+        db.list(Schema.PATH_CONTACTS.path("%"), fullTextSearch = query) { contact, highlight ->
+            contact.toBuilder().setDisplayName(highlight(contact.displayName)).build()
+        }
+
+    fun searchMessages(query: String): List<PathAndValue<Model.StoredMessage>> =
+        db.list(Schema.PATH_MESSAGES.path("%"), fullTextSearch = query) { msg, highlight ->
+            msg.toBuilder().setText(highlight(msg.text)).build()
+        }
 
     /**
      * Closes this Messaging instance, including stopping all workers and disconnecting from tassis.

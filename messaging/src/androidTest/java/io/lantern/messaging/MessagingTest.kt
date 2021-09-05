@@ -1524,6 +1524,49 @@ class MessagingTest : BaseMessagingTest() {
         }
     }
 
+    @Test
+    fun testSearch() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newMessaging(dogDB, "dog").with { dog ->
+                    val dogId = dog.myId.id
+                    val otherContactId = KeyHelper.generateIdentityKeyPair().publicKey.toString()
+
+                    dog.addOrUpdateDirectContact(otherContactId, "The Dude")
+                    dog.sendToDirectContact(dogId, text = "Woof")
+
+                    assertEquals(
+                        0,
+                        dog.searchContacts("Cat").size,
+                        "search for non-existent contact should be empty"
+                    )
+                    assertEquals(
+                        0,
+                        dog.searchMessages("Meow").size,
+                        "search for non-existent message should be empty"
+                    )
+
+                    val wildcard = otherContactId.substring(0, otherContactId.length - 2) + "*"
+                    assertEquals(
+                        otherContactId,
+                        dog.searchContacts(wildcard).firstOrNull()?.value?.contactId?.id,
+                        "search for existing contact by id should yield that contact"
+                    )
+                    assertEquals(
+                        "The *Dud*e",
+                        dog.searchContacts("dud*").firstOrNull()?.value?.displayName,
+                        "search for existing contact by display name should yield that contact"
+                    )
+                    assertEquals(
+                        "*Woo*f",
+                        dog.searchMessages("woo*").firstOrNull()?.value?.text,
+                        "search for existing message by text should yield that message"
+                    )
+                }
+            }
+        }
+    }
+
     private fun testInCoroutine(fn: suspend () -> Unit) {
         var thrown: Throwable? = null
         runBlocking {
