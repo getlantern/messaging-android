@@ -1530,8 +1530,9 @@ class MessagingTest : BaseMessagingTest() {
             newDB.use { dogDB ->
                 newMessaging(dogDB, "dog").with { dog ->
                     val dogId = dog.myId.id
+                    val otherContactId = KeyHelper.generateIdentityKeyPair().publicKey.toString()
 
-                    dog.addOrUpdateDirectContact("blah", "The Dude")
+                    dog.addOrUpdateDirectContact(otherContactId, "The Dude")
                     dog.sendToDirectContact(dogId, text = "Woof")
 
                     assertEquals(
@@ -1545,9 +1546,10 @@ class MessagingTest : BaseMessagingTest() {
                         "search for non-existent message should be empty"
                     )
 
+                    val wildcard = otherContactId.substring(0, otherContactId.length - 2) + "*"
                     assertEquals(
-                        "blah",
-                        dog.searchContacts("bla*").firstOrNull()?.value?.contactId?.id,
+                        otherContactId,
+                        dog.searchContacts(wildcard).firstOrNull()?.value?.contactId?.id,
                         "search for existing contact by id should yield that contact"
                     )
                     assertEquals(
