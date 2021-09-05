@@ -214,21 +214,20 @@ internal class CryptoWorker(
             // find out which deviceIds to send to
             val knownDeviceIds =
                 store.getSubDeviceSessions(recipientIdentityKey.toString())
-            if (knownDeviceIds.size == 0) {
+            if (knownDeviceIds.isEmpty()) {
                 // we don't know any deviceIds yet, retrieve pre keys and stop processing
-                retrievePreKeys(out)
+                retrievePreKeysForOutbound(out)
                 return
-            } else {
-                // we know some deviceIds for the recipient, send to the ones we know
-                // TODO: figure out how to handle future additions of recipient devices (maybe retrieve preKeys periodically?)
-                knownDeviceIds.forEach {
-                    out.putSubDeliveryStatuses(
-                        it.toString(),
-                        Model.OutboundMessage.SubDeliveryStatus.SENDING
-                    )
-                }
-                db.mutate { it.put(out.dbPath, out.build()) }
             }
+            // we know some deviceIds for the recipient, send to the ones we know
+            // TODO: figure out how to handle future additions of recipient devices (maybe retrieve preKeys periodically?)
+            knownDeviceIds.forEach {
+                out.putSubDeliveryStatuses(
+                    it.toString(),
+                    Model.OutboundMessage.SubDeliveryStatus.SENDING
+                )
+            }
+            db.mutate { it.put(out.dbPath, out.build()) }
         }
 
         if (out.contentCase == Model.OutboundMessage.ContentCase.MESSAGEID) {
@@ -308,7 +307,7 @@ internal class CryptoWorker(
                     tx.delete(out.dbPath)
                 }
             } else {
-                encryptAndSendToAll(
+                encryptAndSendOutboundToAll(
                     out,
                     afterSuccess = ::afterSendSuccess
                 ) {
@@ -340,15 +339,113 @@ internal class CryptoWorker(
                     tx.delete(out.dbPath)
                 }
             } else {
-                encryptAndSendToAll(out) {
+                encryptAndSendOutboundToAll(out) {
                     transferMsg.build().toByteArray()
                 }
             }
         }
     }
 
-    private fun retrievePreKeys(out: Model.OutboundMessage.Builder) {
-        val recipientIdentityKey = out.recipientIdentityKey
+    fun sendEphemeral(
+        recipientId: String,
+        transferMsg: Model.TransferMessage,
+        deviceId: DeviceId? = null,
+        onComplete: (MultiDeviceResult) -> Unit
+    ) {
+        val recipientIdentityKey = ECPublicKey(recipientId)
+        val knownDeviceIds =
+            store.getSubDeviceSessions(recipientIdentityKey.toString())
+        if (knownDeviceIds.isNotEmpty()) {
+            if (deviceId == null || knownDeviceIds.contains(deviceId)) {
+                doSendEphemeral(
+                    recipientIdentityKey,
+                    deviceId,
+                    knownDeviceIds,
+                    transferMsg,
+                    onComplete,
+                )
+                return
+            }
+        }
+
+        retrievePreKeys(
+            recipientIdentityKey,
+            { updatedDeviceIds ->
+                if (deviceId != null && !updatedDeviceIds.contains(deviceId)) {
+                    MultiDeviceResult.fail(
+                        onComplete,
+                        RuntimeException("Unable to get pre keys for target device"),
+                        deviceId = deviceId.toString()
+                    )
+                    return@retrievePreKeys
+                }
+                doSendEphemeral(
+                    recipientIdentityKey,
+                    deviceId,
+                    knownDeviceIds,
+                    transferMsg,
+                    onComplete,
+                )
+            },
+            { err -> MultiDeviceResult.fail(onComplete, err) }
+        )
+    }
+
+    private fun doSendEphemeral(
+        recipientIdentityKey: ECPublicKey,
+        deviceId: DeviceId?,
+        knownDeviceIds: List<DeviceId>,
+        transferMsg: Model.TransferMessage,
+        onComplete: (MultiDeviceResult) -> Unit
+    ) {
+        val resultBuilder = MultiDeviceResult.Builder(knownDeviceIds.size, onComplete)
+        val msgBytes = transferMsg.toByteArray()
+        if (deviceId != null) {
+            // send to just the specific device
+            encryptAndSendTo(
+                recipientIdentityKey,
+                deviceId,
+                { msgBytes },
+                { resultBuilder.deviceSucceded(deviceId.toString()) },
+                { err -> resultBuilder.deviceFailed(deviceId.toString(), err) }
+            )
+        } else {
+            if (knownDeviceIds.isEmpty()) {
+                resultBuilder.fail(
+                    RuntimeException("No known device ids")
+                )
+                return
+            }
+
+            // send to all known devices
+            knownDeviceIds.forEach { knownDeviceId ->
+                encryptAndSendTo(
+                    recipientIdentityKey,
+                    knownDeviceId,
+                    { msgBytes },
+                    { resultBuilder.deviceSucceded(knownDeviceId.toString()) },
+                    { err -> resultBuilder.deviceFailed(knownDeviceId.toString(), err) }
+                )
+            }
+        }
+    }
+
+    private fun retrievePreKeysForOutbound(out: Model.OutboundMessage.Builder) {
+        retrievePreKeys(
+            out.recipientIdentityKey,
+            { processOutbound(out) },
+            { err ->
+                logger.debug("error retrieving pre keys: ${err.message}")
+                retryFailed { processOutbound(out) }
+            }
+        )
+    }
+
+    private fun retrievePreKeys(
+        recipientIdentityKey: ECPublicKey,
+        onSuccess: (List<DeviceId>) -> Unit,
+        onError: (Throwable) -> Unit
+    ) {
         messaging.anonymousClientWorker.withClient { client ->
             client.requestPreKeys(
                 recipientIdentityKey,
@@ -356,6 +453,7 @@ internal class CryptoWorker(
                 object : Callback<List<Messages.PreKey>> {
                     override fun onSuccess(result: List<Messages.PreKey>) {
                         submit {
+                            val deviceIds = ArrayList<DeviceId>()
                             db.mutate {
                                 result.forEach { preKey ->
                                     val oneTimePreKey = preKey.oneTimePreKey?.let {
@@ -364,12 +462,14 @@ internal class CryptoWorker(
                                     }
                                     val signedPreKey =
                                         SignedPreKeyRecord(preKey.signedPreKey.toByteArray())
+                                    val deviceId = DeviceId(preKey.deviceId.toByteArray())
+                                    deviceIds.add(deviceId)
                                     // TODO: implement max_recv checking for signed pre key age
                                     val builder = SessionBuilder(
                                         store,
                                         SignalProtocolAddress(
                                             recipientIdentityKey,
-                                            DeviceId(preKey.deviceId.toByteArray())
+                                            deviceId,
                                         )
                                     )
                                     builder.process(
@@ -384,20 +484,19 @@ internal class CryptoWorker(
                                     )
                                 }
                             }
-                            processOutbound(out)
+                            onSuccess(deviceIds)
                         }
                     }
 
                     override fun onError(err: Throwable) {
-                        logger.debug("error retrieving pre keys: ${err.message}")
-                        retryFailed { processOutbound(out) }
+                        onError(err)
                     }
                 }
             )
         }
     }
 
-    private fun encryptAndSendToAll(
+    private fun encryptAndSendOutboundToAll(
         out: Model.OutboundMessage.Builder,
         afterSuccess: ((Transaction, Boolean) -> Unit)? = null,
         build: () -> ByteArray
@@ -405,15 +504,15 @@ internal class CryptoWorker(
         out.subDeliveryStatusesMap.forEach { (deviceId, status) ->
             if (status == Model.OutboundMessage.SubDeliveryStatus.SENDING) {
                 submit {
-                    encryptAndSendTo(out, deviceId, afterSuccess, build)
+                    encryptAndSendOutboundTo(out, DeviceId(deviceId), afterSuccess, build)
                 }
             }
         }
     }
 
-    private fun encryptAndSendTo(
+    private fun encryptAndSendOutboundTo(
         out: Model.OutboundMessage.Builder,
-        deviceId: String,
+        deviceId: DeviceId,
         afterSuccess: ((Transaction, Boolean) -> Unit)? = null,
         build: () -> ByteArray
     ) {
@@ -422,57 +521,81 @@ internal class CryptoWorker(
             return
         }
 
-        // TODO: we (mostly Signal) use ByteArray everywhere, but Protocol Buffers wants byte strings
-        // which have to be copied from the ByteArray. That results in a lot of extra copies,
-        // it would  sure be nice to avoid that.
-        val plainText = build()
-        val paddedPlainText = Padding.padMessage(plainText)
-        val to =
-            SignalProtocolAddress(out.recipientIdentityKey, DeviceId(deviceId))
-        val unidentifiedSenderMessage: ByteArray =
-            cipher.encrypt(to, paddedPlainText)
-
-        messaging.anonymousClientWorker.withClient { client ->
-            client.sendUnidentifiedSenderMessage(
-                to,
-                unidentifiedSenderMessage,
-                object : Callback<Unit> {
-                    override fun onSuccess(result: Unit) {
-                        try {
-                            db.mutate { tx ->
-                                // re-read message to make sure we're updating the latest
-                                tx.get<Model.OutboundMessage>(out.dbPath)?.let {
-                                    val completelySent =
-                                        it.subDeliveryStatusesMap.count { (_, status) ->
-                                            status != Model.OutboundMessage.SubDeliveryStatus.SENT
-                                        } == 1
-                                    if (completelySent) {
-                                        // we're done
-                                        tx.delete(out.dbPath)
-                                    } else {
-                                        tx.put(
-                                            out.dbPath,
-                                            it.toBuilder().putSubDeliveryStatuses(
-                                                deviceId,
-                                                Model.OutboundMessage.SubDeliveryStatus.SENT
-                                            ).build()
-                                        )
-                                    }
-                                    afterSuccess?.let { it(tx, completelySent) }
-                                }
+        encryptAndSendTo(
+            out.recipientIdentityKey,
+            deviceId,
+            build,
+            {
+                try {
+                    db.mutate { tx ->
+                        // re-read message to make sure we're updating the latest
+                        tx.get<Model.OutboundMessage>(out.dbPath)?.let {
+                            val completelySent =
+                                it.subDeliveryStatusesMap.count { (_, status) ->
+                                    status != Model.OutboundMessage.SubDeliveryStatus.SENT
+                                } == 1
+                            if (completelySent) {
+                                // we're done
+                                tx.delete(out.dbPath)
+                            } else {
+                                tx.put(
+                                    out.dbPath,
+                                    it.toBuilder().putSubDeliveryStatuses(
+                                        deviceId.toString(),
+                                        Model.OutboundMessage.SubDeliveryStatus.SENT
+                                    ).build()
+                                )
                             }
-                        } catch (t: Throwable) {
-                            logger.error("unexpected error marking successful send: ${t.message}")
-                            retryFailed { encryptAndSendTo(out, deviceId, afterSuccess, build) }
+                            afterSuccess?.let { it(tx, completelySent) }
                         }
                     }
-
-                    override fun onError(err: Throwable) {
-                        logger.error("failed to send: ${err.message}")
-                        retryFailed { encryptAndSendTo(out, deviceId, afterSuccess, build) }
-                    }
+                } catch (t: Throwable) {
+                    logger.error("unexpected error marking successful send: ${t.message}")
+                    retryFailed { encryptAndSendOutboundTo(out, deviceId, afterSuccess, build) }
                 }
-            )
+            },
+            { err ->
+                logger.error("failed to send: ${err.message}")
+                retryFailed { encryptAndSendOutboundTo(out, deviceId, afterSuccess, build) }
+            }
+        )
+    }
+
+    private fun encryptAndSendTo(
+        recipientIdentityKey: ECPublicKey,
+        deviceId: DeviceId,
+        build: () -> ByteArray,
+        onSuccess: () -> Unit,
+        onError: (Throwable) -> Unit
+    ) {
+        try {
+            // TODO: we (mostly Signal) use ByteArray everywhere, but Protocol Buffers wants byte strings
+            // which have to be copied from the ByteArray. That results in a lot of extra copies,
+            // it would  sure be nice to avoid that.
+            val plainText = build()
+            val paddedPlainText = Padding.padMessage(plainText)
+            val to =
+                SignalProtocolAddress(recipientIdentityKey, deviceId)
+            val unidentifiedSenderMessage: ByteArray =
+                cipher.encrypt(to, paddedPlainText)
+
+            messaging.anonymousClientWorker.withClient { client ->
+                client.sendUnidentifiedSenderMessage(
+                    to,
+                    unidentifiedSenderMessage,
+                    object : Callback<Unit> {
+                        override fun onSuccess(result: Unit) {
+                            onSuccess()
+                        }
+
+                        override fun onError(err: Throwable) {
+                            onError(err)
+                        }
+                    }
+                )
+            }
+        } catch (err: Throwable) {
+            onError(err)
         }
     }
 
@@ -699,6 +822,11 @@ internal class CryptoWorker(
                         tx,
                         senderId,
                         Model.Hello.parseFrom(transferMsg.hello)
+                    )
+                    Model.TransferMessage.ContentCase.WEBRTCSIGNAL -> messaging.notifyWebRTCSignal(
+                        senderId,
+                        senderAddress.deviceId.toString(),
+                        transferMsg.webRTCSignal
                     )
                     else -> {
                         logger.debug("received currently unsupported message type")

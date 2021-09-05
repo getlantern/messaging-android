@@ -22,6 +22,7 @@ import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.security.SecureRandom
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.collections.HashSet
@@ -96,6 +97,7 @@ class Messaging(
     internal val logger = KotlinLogging.logger(name)
     internal val store = MessagingProtocolStore(parentDB)
     val db = parentDB.withSchema("messaging")
+    private val webRTCSignalingSubscribers = ConcurrentHashMap<String, (WebRTCSignal) -> Unit>()
 
     init {
         // register protocol buffer types before starting crypto worker or doing anything else that
@@ -432,6 +434,67 @@ class Messaging(
     }
 
     /**
+     * Send a WebRTC signaling message to a direct contact. Unlike regular messages, these are not
+     * persisted on disk and are not queued for send. We attempt to send them immediately, and if
+     * that doesn't work for any reason, the return Future will throw an exception.
+     *
+     * @param recipientId the base32 encoded public identity key of the recipient
+     * @param content the content of the signal to send
+     * @param deviceId optionally, a specific device ID to which to send the signal
+     * @param onComplete callback for when sending is complete (whether successful or failed)
+     *
+     * @return a Future MultiDeviceResult with the result of sending to the relevant devices
+     */
+    fun sendWebRTCSignal(
+        recipientId: String,
+        content: ByteArray,
+        deviceId: String? = null,
+        onComplete: (MultiDeviceResult) -> Unit
+    ) {
+        val msg = Model.TransferMessage.newBuilder()
+            .setWebRTCSignal(content.byteString()).build()
+        cryptoWorker.submit {
+            cryptoWorker.sendEphemeral(
+                recipientId,
+                msg,
+                deviceId = deviceId?.let { DeviceId(it) },
+                onComplete = onComplete
+            )
+        }
+    }
+
+    /**
+     * Subscribes to inbound WebRTC signals.
+     *
+     * @param subscriberId a unique identifier for this subscription, used in
+     *                     #unsubscribeFromWebRTCSignals()
+     * @param onSignal callback that gets invoked whenever a signal is received
+     */
+    fun subscribeToWebRTCSignals(subscriberId: String, onSignal: (WebRTCSignal) -> Unit) {
+        webRTCSignalingSubscribers[subscriberId] = onSignal
+    }
+
+    /**
+     * Unsubscribes the specified subscriber from WebRTC signal notifications.
+     *
+     * @param subscriberId the ID that was used when calling #subscribeToWebRTCSignals()
+     */
+    fun unsubscribeFromWebRTCSignals(subscriberId: String) {
+        webRTCSignalingSubscribers.remove(subscriberId)
+    }
+
+    internal fun notifyWebRTCSignal(
+        senderId: String,
+        senderDeviceId: String,
+        content: ByteString
+    ) {
+        val signal = WebRTCSignal(senderId, senderDeviceId, content.toByteArray())
+        webRTCSignalingSubscribers.values.forEach { subscriber ->
+            subscriber(signal)
+        }
+    }
+
+    /*
      * Re-sends the failed message identified by messageId to all recipients to whom we were unable
      * to send the message.
      *
@@ -947,9 +1010,9 @@ class Messaging(
         dir: File
     ) {
         if (dir.exists()) {
-            dir.listFiles().let { files ->
+            dir.listFiles()?.let { files ->
                 for (i in files.indices) {
-                    files[i].let { file ->
+                    files[i]?.let { file ->
                         if (file.isDirectory) {
                             deleteOrphanedAttachments(now, cutoffMillis, knownAttachmentPaths, file)
                         } else {
