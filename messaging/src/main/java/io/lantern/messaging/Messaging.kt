@@ -27,6 +27,9 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.collections.HashSet
 import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
+import org.whispersystems.libsignal.InvalidKeyException
+import org.whispersystems.libsignal.ecc.ECPublicKey
+import org.whispersystems.libsignal.util.InvalidCharacterException
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherInputStream
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
 import org.whispersystems.signalservice.internal.util.Util
@@ -162,8 +165,8 @@ class Messaging(
         }
         myId = me.contactId
 
-        // add myself as a contact user to start "talking"
-        addOrUpdateContact(myId, "Note to self")
+        // add myself as a contact to record notes to myself
+        doAddOrUpdateContact(myId, "Note to self")
 
         // immediately request some upload authorizations so that we're ready to upload attachments
         cryptoWorker.submit { cryptoWorker.getMoreUploadAuthorizationsIfNecessary() }
@@ -216,9 +219,11 @@ class Messaging(
      * @param displayName the human-friendly display name for this contact
      * @return the created or updated Contact
      */
+    @Throws(InvalidKeyException::class, InvalidCharacterException::class)
     fun addOrUpdateDirectContact(id: String, displayName: String): Model.Contact =
         addOrUpdateContact(id.directContactId, displayName)
 
+    @Throws(InvalidKeyException::class)
     private fun addOrUpdateContact(
         contactId: Model.ContactId,
         displayName: String
@@ -228,16 +233,19 @@ class Messaging(
         }
     }
 
+    @Throws(InvalidKeyException::class)
     internal fun doAddOrUpdateContact(
         contactId: Model.ContactId,
         displayName: String,
         mostRecentHelloTs: Long? = null,
     ): Model.Contact {
-        val path = contactId.contactPath
+        val sanitizedContactId = contactId.sanitized
+
+        val path = sanitizedContactId.contactPath
         return db.mutate { tx ->
             val existingContact = tx.get<Model.Contact>(path)
             val contactBuilder = existingContact?.toBuilder() ?: Model.Contact.newBuilder()
-                .setContactId(contactId)
+                .setContactId(sanitizedContactId)
             val isNew = existingContact == null
             if (isNew) {
                 contactBuilder.createdTs = now
@@ -246,7 +254,7 @@ class Messaging(
             }
             mostRecentHelloTs?.let { contactBuilder.setMostRecentHelloTs(it) }
             val contact =
-                contactBuilder.setContactId(contactId).setDisplayName(displayName).build()
+                contactBuilder.setContactId(sanitizedContactId).setDisplayName(displayName).build()
             tx.put(path, contact)
             // decrypt any "spam" we received from this Contact prior to adding them
             db.list<ByteArray>(contact.spamQuery)
@@ -272,7 +280,10 @@ class Messaging(
     // contact.
     //
     // @return the timestamp of the most recent hello received from this contact.
-    fun addProvisionalContact(contactId: String): Long {
+    @Throws(InvalidKeyException::class)
+    fun addProvisionalContact(unsafeContactId: String): Long {
+        val contactId = unsafeContactId.sanitizedContactId
+
         val provisionalContact = Model.ProvisionalContact.newBuilder()
             .setContactId(contactId)
             .setExpiresAt(now + provisionalContactsExpireAfterSeconds.secondsToMillis)
@@ -290,7 +301,8 @@ class Messaging(
         return mostRecentHelloTs
     }
 
-    fun deleteProvisionalContact(contactId: String) {
+    fun deleteProvisionalContact(unsafeContactId: String) {
+        val contactId = unsafeContactId.sanitizedContactId
         db.mutate { tx ->
             store.deleteAllSessions(contactId)
             tx.delete(contactId.provisionalContactPath)
@@ -300,10 +312,11 @@ class Messaging(
     /**
      * Deletes the specified contact and all associated data.
      *
-     * @param id the base32 encoded public identity key of the contact
+     * @param unsafeContactId the base32 encoded public identity key of the contact
      */
-    fun deleteDirectContact(id: String) {
-        deleteContact(id.directContactId)
+    fun deleteDirectContact(unsafeContactId: String) {
+        val contactId = unsafeContactId.sanitizedContactId
+        deleteContact(contactId.directContactId)
     }
 
     private fun deleteContact(contactId: Model.ContactId) {
@@ -338,21 +351,24 @@ class Messaging(
     /**
      * Send an outbound message from the user to a direct contact.
      *
-     * @param recipientId the base32 encoded public identity key of the recipient
+     * @param unsafeRecipientId the base32 encoded public identity key of the recipient
      * @param text text for the message
-     * @param replyToSenderId the id of the sender of the message to which we're replying
+     * @param unsafeReplyToSenderId the id of the sender of the message to which we're replying
      * @param replyToId the id of the message to which we're replying (if replying to a message)
      * @param attachments any attachments to include with the message
      */
     @Throws(IllegalArgumentException::class)
     fun sendToDirectContact(
-        recipientId: String,
+        unsafeRecipientId: String,
         text: String? = null,
-        replyToSenderId: String? = null,
+        unsafeReplyToSenderId: String? = null,
         replyToId: String? = null,
         attachments: Array<Model.StoredAttachment>? = null,
         introduction: Model.IntroductionDetails? = null,
     ): Model.StoredMessage {
+        val recipientId = unsafeRecipientId.sanitizedContactId
+        val replyToSenderId = unsafeReplyToSenderId?.sanitizedContactId
+
         if (text.isNullOrBlank() && attachments?.size == 0 && introduction == null)
             throw IllegalArgumentException(
                 "Please specify either text, an introduction or at least one attachment"
@@ -437,7 +453,7 @@ class Messaging(
      * persisted on disk and are not queued for send. We attempt to send them immediately, and if
      * that doesn't work for any reason, the return Future will throw an exception.
      *
-     * @param recipientId the base32 encoded public identity key of the recipient
+     * @param unsafeRecipientId the base32 encoded public identity key of the recipient
      * @param content the content of the signal to send
      * @param deviceId optionally, a specific device ID to which to send the signal
      * @param onComplete callback for when sending is complete (whether successful or failed)
@@ -445,11 +461,12 @@ class Messaging(
      * @return a Future MultiDeviceResult with the result of sending to the relevant devices
      */
     fun sendWebRTCSignal(
-        recipientId: String,
+        unsafeRecipientId: String,
         content: ByteArray,
         deviceId: String? = null,
         onComplete: (MultiDeviceResult) -> Unit
     ) {
+        val recipientId = unsafeRecipientId.sanitizedContactId
         val msg = Model.TransferMessage.newBuilder()
             .setWebRTCSignal(content.byteString()).build()
         cryptoWorker.submit {
@@ -621,9 +638,10 @@ class Messaging(
 
     private fun sendDisappearSettings(
         tx: Transaction,
-        contactId: String,
+        unsafeContactId: String,
         disappearAfterSeconds: Int
     ) {
+        val contactId = unsafeContactId.sanitizedContactId
         val disappearSettings = Model.DisappearSettings.newBuilder()
             .setMessagesDisappearAfterSeconds(disappearAfterSeconds)
             .build().toByteString()
@@ -1032,10 +1050,12 @@ class Messaging(
     }
 
     @Throws(IllegalArgumentException::class)
-    fun introduce(recipientIds: List<String>) {
-        if (recipientIds.size < 2) {
+    fun introduce(unsafeRecipientIds: List<String>) {
+        if (unsafeRecipientIds.size < 2) {
             throw IllegalArgumentException("Please specify at least 2 recipients to introduce")
         }
+
+        val recipientIds = unsafeRecipientIds.map { it.sanitizedContactId }
 
         val introducedParties = recipientIds.map { recipientId ->
             db.get<Model.Contact>(recipientId.directContactPath)
@@ -1059,7 +1079,10 @@ class Messaging(
     }
 
     @Throws(IllegalArgumentException::class)
-    fun acceptIntroduction(fromId: String, toId: String) {
+    fun acceptIntroduction(unsafeFromId: String, unsafeToId: String) {
+        val fromId = unsafeFromId.sanitizedContactId
+        val toId = unsafeToId.sanitizedContactId
+
         cryptoWorker.submitForValue {
             db.mutate { tx ->
                 val introductionMessage = tx.introductionMessage(fromId, toId)?.value?.value
@@ -1086,7 +1109,10 @@ class Messaging(
         }
     }
 
-    fun rejectIntroduction(fromId: String, toId: String) {
+    fun rejectIntroduction(unsafeFromId: String, unsafeToId: String) {
+        val fromId = unsafeFromId.sanitizedContactId
+        val toId = unsafeToId.sanitizedContactId
+
         db.get<String>(fromId.introductionIndexPathByFrom(toId))?.let { path ->
             deleteLocally(path)
         }
@@ -1104,7 +1130,7 @@ class Messaging(
             anonymousClientWorker.executor.awaitTermination(10, TimeUnit.SECONDS)
             authenticatedClientWorker.executor.awaitTermination(10, TimeUnit.SECONDS)
         } catch (t: Throwable) {
-            logger.error(t.message)
+            logger.error("error closing Messaging: ${t.message}", t)
         }
     }
 }
@@ -1124,6 +1150,34 @@ internal val randomMessageId: ByteString
  */
 val now: Long
     get() = System.currentTimeMillis()
+
+/**
+ * Sanitizes string contact ids that are supposed to be in human-friendly Base32 encoding.
+ * Human-friendly base32 encoding supports substitutions for certain characters (for example, o is
+ * replaced by 0) and it also assumes everything is lowercase. So, this function converts everything
+ * to lowercase and round trips it through ECPublicKey so that we end up with the canonical human-
+ * friendly representation. That avoids scenarios like having to contact entries at different
+ * database paths that are in fact the same contact id, like '.......o.....' and '.......0.....'.
+ *
+ * This sanitizing should be performed anywhere that a contact ID is passed in externally, either
+ * from user input or through a message received from another user such as an Introduction.
+ *
+ * @throws InvalidKeyException if the ID doesn't decode to the right length (52 bytes)
+ */
+internal val String.sanitizedContactId: String
+    @Throws(InvalidKeyException::class)
+    get() {
+        return ECPublicKey(this.toLowerCase().trim()).toString()
+    }
+
+/**
+ * Applies #String.sanitizedContactId to a Model.ContactId.
+ */
+internal val Model.ContactId.sanitized: Model.ContactId
+    @Throws(InvalidKeyException::class)
+    get() {
+        return toBuilder().setId(id.sanitizedContactId).build()
+    }
 
 val Model.StoredAttachment.inputStream: InputStream
     get() = AttachmentCipherInputStream.createForAttachment(

@@ -76,8 +76,8 @@ dependencies {
 
     implementation 'com.github.getlantern:secrets-android:66a9adb621'
     api 'com.github.getlantern:db-android:4d13d81641'
-    implementation 'com.github.getlantern:libsignal-protocol-java:5c7d676'
-    implementation 'com.github.getlantern:libsignal-metadata-java:2aed184'
+    implementation 'com.github.getlantern:libsignal-protocol-java:47e9418c74'
+    implementation 'com.github.getlantern:libsignal-metadata-java:f0f1a0ea15'
 
     testImplementation 'junit:junit:4.13.2'
 
