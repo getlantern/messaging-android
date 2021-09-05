@@ -75,9 +75,9 @@ dependencies {
     implementation 'com.j256.simplemagic:simplemagic:1.16'
 
     implementation 'com.github.getlantern:secrets-android:66a9adb621'
-    api 'com.github.getlantern:db-android:55cdd87351'
-    implementation 'com.github.getlantern:libsignal-protocol-java:5c7d676'
-    implementation 'com.github.getlantern:libsignal-metadata-java:2aed184'
+    api 'com.github.getlantern:db-android:f45b5eb6f2'
+    implementation 'com.github.getlantern:libsignal-protocol-java:47e9418c74'
+    implementation 'com.github.getlantern:libsignal-metadata-java:f0f1a0ea15'
 
     testImplementation 'junit:junit:4.13.2'
 
