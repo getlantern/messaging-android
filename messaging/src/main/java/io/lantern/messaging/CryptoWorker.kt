@@ -321,13 +321,13 @@ internal class CryptoWorker(
 
             when (out.contentCase) {
                 Model.OutboundMessage.ContentCase.REACTION ->
-                    transferMsg.setReaction(out.reaction)
+                    transferMsg.reaction = out.reaction
                 Model.OutboundMessage.ContentCase.DELETEMESSAGEID ->
-                    transferMsg.setDeleteMessageId(out.deleteMessageId)
+                    transferMsg.deleteMessageId = out.deleteMessageId
                 Model.OutboundMessage.ContentCase.DISAPPEARSETTINGS ->
-                    transferMsg.setDisappearSettings(out.disappearSettings)
+                    transferMsg.disappearSettings = out.disappearSettings
                 Model.OutboundMessage.ContentCase.HELLO ->
-                    transferMsg.setHello(out.hello)
+                    transferMsg.hello = out.hello
                 else -> {
                     logger.error("unknown outbound message content type")
                     return
@@ -851,10 +851,11 @@ internal class CryptoWorker(
                 return
             }
 
+            val sanitizedDisplayName = msg.introduction.displayName.sanitizedDisplayName
             val introduction = Model.IntroductionDetails.newBuilder()
                 .setTo(toId)
-                .setDisplayName(msg.introduction.displayName)
-                .setOriginalDisplayName(msg.introduction.displayName).build()
+                .setDisplayName(sanitizedDisplayName)
+                .setOriginalDisplayName(sanitizedDisplayName).build()
             storedMsgBuilder.introduction = introduction
 
             // Delete any existing introduction message of this kind

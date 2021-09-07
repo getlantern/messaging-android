@@ -54,6 +54,13 @@ class AttachmentTooBigException(val maxAttachmentBytes: Long) : Exception("Attac
 class AttachmentPlainTextMissingException : Exception("Attachment Plaintext File Is Missing")
 
 /**
+ * This exception indicates that a display name was invalid. We sanitize display names before
+ * validating them, so this error means that after removing special characters, whitespace and so
+ * forth, the display name was empty.
+ */
+class InvalidDisplayNameException : Exception("Invalid display name")
+
+/**
  * Messaging provides an API for End to End Encrypted (E2EE) messaging, using a tassis server for
  * key distribution and message transport. Encryption is performed using a fork of Signal.
  *
@@ -203,7 +210,15 @@ class Messaging(
     /**
      * Updates the displayName associated with the "me" contact entry.
      */
-    fun setMyDisplayName(displayName: String) {
+    @Throws(InvalidDisplayNameException::class)
+    fun setMyDisplayName(unsafeDisplayName: String) {
+        unsafeSetMyDisplayName(unsafeDisplayName.sanitizedDisplayName)
+    }
+
+    /**
+     * Version of setMyDisplayName that does not sanitize the displayName, used only for testing.
+     */
+    internal fun unsafeSetMyDisplayName(displayName: String) {
         db.mutate { tx ->
             tx.put(
                 Schema.PATH_ME,
@@ -220,33 +235,38 @@ class Messaging(
      * @param displayName the human-friendly display name for this contact
      * @return the created or updated Contact
      */
-    @Throws(InvalidKeyException::class, InvalidCharacterException::class)
-    fun addOrUpdateDirectContact(id: String, displayName: String): Model.Contact =
-        addOrUpdateContact(id.directContactId, displayName)
+    @Throws(
+        InvalidKeyException::class,
+        InvalidCharacterException::class,
+        InvalidDisplayNameException::class
+    )
+    fun addOrUpdateDirectContact(unsafeId: String, displayName: String): Model.Contact =
+        addOrUpdateContact(unsafeId.directContactId, displayName)
 
-    @Throws(InvalidKeyException::class)
+    @Throws(InvalidKeyException::class, InvalidDisplayNameException::class)
     private fun addOrUpdateContact(
-        contactId: Model.ContactId,
+        unsafeContactId: Model.ContactId,
         displayName: String
     ): Model.Contact {
         return cryptoWorker.submitForValue {
-            doAddOrUpdateContact(contactId, displayName)
+            doAddOrUpdateContact(unsafeContactId, displayName)
         }
     }
 
-    @Throws(InvalidKeyException::class)
+    @Throws(InvalidKeyException::class, InvalidDisplayNameException::class)
     internal fun doAddOrUpdateContact(
-        contactId: Model.ContactId,
-        displayName: String,
+        unsafeContactId: Model.ContactId,
+        unsafeDisplayName: String,
         mostRecentHelloTs: Long? = null,
     ): Model.Contact {
-        val sanitizedContactId = contactId.sanitized
+        val contactId = unsafeContactId.sanitized
+        val displayName = unsafeDisplayName.sanitizedDisplayName
 
-        val path = sanitizedContactId.contactPath
+        val path = contactId.contactPath
         return db.mutate { tx ->
             val existingContact = tx.get<Model.Contact>(path)
             val contactBuilder = existingContact?.toBuilder() ?: Model.Contact.newBuilder()
-                .setContactId(sanitizedContactId)
+                .setContactId(contactId)
             val isNew = existingContact == null
             if (isNew) {
                 contactBuilder.createdTs = now
@@ -255,7 +275,7 @@ class Messaging(
             }
             mostRecentHelloTs?.let { contactBuilder.setMostRecentHelloTs(it) }
             val contact =
-                contactBuilder.setContactId(sanitizedContactId).setDisplayName(displayName).build()
+                contactBuilder.setContactId(contactId).setDisplayName(displayName).build()
             tx.put(path, contact, fullText = contact.fullText)
             // decrypt any "spam" we received from this Contact prior to adding them
             db.list<ByteArray>(contact.spamQuery)
@@ -1065,6 +1085,20 @@ class Messaging(
 
     @Throws(IllegalArgumentException::class)
     fun introduce(unsafeRecipientIds: List<String>) {
+        doIntroduce(unsafeRecipientIds) { to ->
+            Model.IntroductionDetails.newBuilder()
+                .setTo(to.contactId)
+                .setDisplayName(to.displayName).build()
+        }
+    }
+
+    /**
+     * Like introduce, but accepting a function that builds the introduction, used only for testing.
+     */
+    internal fun doIntroduce(
+        unsafeRecipientIds: List<String>,
+        buildIntroduction: (Model.Contact) -> Model.IntroductionDetails
+    ) {
         if (unsafeRecipientIds.size < 2) {
             throw IllegalArgumentException("Please specify at least 2 recipients to introduce")
         }
@@ -1082,9 +1116,7 @@ class Messaging(
                     if (a.contactId.id != b.contactId.id) {
                         sendToDirectContact(
                             a.contactId.id,
-                            introduction = Model.IntroductionDetails.newBuilder()
-                                .setTo(b.contactId)
-                                .setDisplayName(b.displayName).build()
+                            introduction = buildIntroduction(b)
                         )
                     }
                 }
@@ -1113,7 +1145,7 @@ class Messaging(
                         )
                         // we update the displayName on all introductions to match the name that we
                         // accepted
-                        .setDisplayName(introduction.displayName).build()
+                        .setDisplayName(introduction.displayName.sanitizedDisplayName).build()
                     tx.put(
                         it.value.dbPath,
                         it.value.toBuilder().setIntroduction(updatedIntroduction).build()
@@ -1201,6 +1233,28 @@ internal val Model.ContactId.sanitized: Model.ContactId
     @Throws(InvalidKeyException::class)
     get() {
         return toBuilder().setId(id.sanitizedContactId).build()
+    }
+
+/**
+ * This regex matches any character that's not a letter, number or the space character
+ */
+internal val invalidDisplayNameCharacters = Regex("[^\\p{L}\\p{N} ]")
+
+/**
+ * This regex matches 2 or more spaces in a row
+ */
+internal val multipleSpaces = Regex(" +")
+
+internal val String.sanitizedDisplayName: String
+    @Throws(InvalidDisplayNameException::class)
+    get() {
+        val sanitized = this.replace(invalidDisplayNameCharacters, "")
+            .replace(multipleSpaces, " ")
+            .trim()
+        if (sanitized.isEmpty()) {
+            throw InvalidDisplayNameException()
+        }
+        return sanitized
     }
 
 val Model.StoredAttachment.inputStream: InputStream
