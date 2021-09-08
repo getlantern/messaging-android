@@ -50,6 +50,20 @@ private const val smileyFace = "\uD83D\uDE04"
 class MessagingTest : BaseMessagingTest() {
 
     @Test
+    fun testSanitizeDisplayName() {
+        assertEquals(
+            "The Name 經被這些工業 5",
+            " \n\tThe    \uD83D\uDE00\n\tName 經被這些工業 5\n\t  ".sanitizedDisplayName
+        )
+        try {
+            " \n\t\uD83D\uDE00\n\t\uD83D\uDE02\n\t  ".sanitizedDisplayName
+            fail("display name with only invalid characters should raise exception")
+        } catch (e: InvalidDisplayNameException) {
+            // expected
+        }
+    }
+
+    @Test
     fun testManageDirectContact() {
         testInCoroutine {
             newDB.use { dogDB ->
@@ -82,7 +96,10 @@ class MessagingTest : BaseMessagingTest() {
 
                             val now = now
                             var catContact =
-                                dog.addOrUpdateDirectContact(" ${catId.toUpperCase()} ", "Cat")
+                                dog.addOrUpdateDirectContact(
+                                    " ${catId.toUpperCase()} ",
+                                    "\uD83D\uDE00   Cat\n"
+                                )
                             val createdTs = catContact.createdTs
                             assertEquals(
                                 Model.ContactType.DIRECT,
@@ -101,7 +118,7 @@ class MessagingTest : BaseMessagingTest() {
                             )
                             assertTrue(createdTs >= now, "createdTime should have been set")
 
-                            catContact = dog.addOrUpdateDirectContact(catId, "New Cat")
+                            catContact = dog.addOrUpdateDirectContact(catId, "New     Cat")
                             assertEquals(
                                 "New Cat",
                                 catContact.displayName,
@@ -217,8 +234,11 @@ class MessagingTest : BaseMessagingTest() {
                             val dogId = dog.myId.id
                             val catId = cat.myId.id
 
-                            dog.setMyDisplayName("The Dog")
-                            cat.setMyDisplayName("The Cat")
+                            // We use unsafeSetMyDisplayName to keep the name from being sanitized
+                            // here, which allows us to test that it gets sanitized when the
+                            // provisional contact turns into a real contact.
+                            dog.unsafeSetMyDisplayName("\uD83D\uDE00   The Dog\n")
+                            cat.unsafeSetMyDisplayName("\uD83D\uDE00   The Cat\n")
 
                             try {
                                 dog.addProvisionalContact(
@@ -368,9 +388,9 @@ class MessagingTest : BaseMessagingTest() {
                             dog.db.get<Model.Contact>(Schema.PATH_ME),
                             "self-contact should exist"
                         )
-                        dog.setMyDisplayName("I'm a Dog")
+                        dog.setMyDisplayName("\uD83D\uDE00   Im a Dog\n")
                         assertEquals(
-                            "I'm a Dog",
+                            "Im a Dog",
                             dog.db.get<Model.Contact>(Schema.PATH_ME)?.displayName
                         )
 
@@ -1394,6 +1414,11 @@ class MessagingTest : BaseMessagingTest() {
         val fishId = fish.myId.id
         val ownerId = owner.myId.id
 
+        // First connect owner with all the pets
+
+        // We use unsafeDoAddOrUpdateDirectContact so that the display name remains unsanitized.
+        // That allows us to make sure the display name gets sanitized when the introduction is
+        // accepted.
         // first connect owner with all the pets
         owner.addOrUpdateDirectContact(dogId, "Dog")
         dog.addOrUpdateDirectContact(ownerId, "Owner")
@@ -1410,10 +1435,16 @@ class MessagingTest : BaseMessagingTest() {
             // okay
         }
 
-        // introduce all the pets to each other
-        owner.introduce(listOf(dogId, catId.toUpperCase(), fishId))
+        // Introduce dog and cat to each other. We use a custom introduction builder to mess up the
+        // displayName on the introduction to test sanitizing inbound introductions.
+        owner.doIntroduce(listOf(dogId, catId.toUpperCase())) { to ->
+            Model.IntroductionDetails.newBuilder()
+                .setDisplayName("\uD83D\uDE00   ${to.displayName}  \n")
+                .build()
+        }
 
-        // introduce them again to make sure we can handle duplicate introductions
+        // introduce all pets, including dog and cat again, to make sure we can handle duplicate
+        // introductions
         owner.introduce(listOf(dogId, catId, fishId.toUpperCase()))
 
         // make sure everyone received an introduction to everyone
