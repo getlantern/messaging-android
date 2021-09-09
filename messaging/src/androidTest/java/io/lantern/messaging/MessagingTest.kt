@@ -2,6 +2,7 @@ package io.lantern.messaging
 
 import androidx.test.platform.app.InstrumentationRegistry
 import io.lantern.db.DB
+import io.lantern.db.Raw
 import io.lantern.messaging.tassis.MessageHandler
 import io.lantern.messaging.tassis.Transport
 import io.lantern.messaging.tassis.websocket.WSListener
@@ -15,7 +16,6 @@ import java.io.FileOutputStream
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java9.util.concurrent.CompletableFuture
-import kotlin.collections.ArrayList
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
@@ -245,14 +245,24 @@ class MessagingTest : BaseMessagingTest() {
                                     // This is the length of a real public key, but has some
                                     // disallowed characters
                                     "bogus"
-                                )
+                                ) {}
                                 fail("adding an invalid contact ID should fail")
                             } catch (e: InvalidKeyException) {
                                 // okay
                             }
 
-                            assertEquals(0, dog.addProvisionalContact(catId))
-                            assertEquals(0, cat.addProvisionalContact(dogId))
+                            val expectSuccess = fun(cb: ((Raw<Model.Contact>?) -> Unit) -> Unit) {
+                                val contact = CompletableFuture<Raw<Model.Contact>>()
+                                cb(contact::complete)
+                                assertNotNull(contact.get(), "handshake should have succeeded")
+                            }
+
+                            expectSuccess { cb ->
+                                assertNotEquals(0, dog.addProvisionalContact(catId, cb))
+                                expectSuccess { cb ->
+                                    assertNotEquals(0, cat.addProvisionalContact(dogId, cb))
+                                }
+                            }
 
                             val catContact = dog.waitFor<Model.Contact>(
                                 catId.directContactPath,
@@ -294,14 +304,16 @@ class MessagingTest : BaseMessagingTest() {
                                 "cat should have no remaining provisional contacts"
                             )
 
-                            assertNotEquals(0, dog.addProvisionalContact(catId))
+                            assertEquals(0, dog.addProvisionalContact(catId) {})
                             assertFalse(
                                 dog.db.contains(catId.provisionalContactPath),
                                 "no provisional contact should be stored for an existing contact"
                             )
 
                             cat.deleteDirectContact(dogId)
-                            assertEquals(0, cat.addProvisionalContact(dogId))
+                            expectSuccess { cb ->
+                                assertNotEquals(0, cat.addProvisionalContact(dogId, cb))
+                            }
                             cat.waitFor<Model.Contact>(
                                 dogId.directContactPath,
                                 "cat should end up with dog contact again after having deleted dog"
@@ -317,7 +329,7 @@ class MessagingTest : BaseMessagingTest() {
                                 newMessaging(mouseDB, "mouse").with { mouse ->
                                     val mouseId = mouse.myId.id
 
-                                    dog.addProvisionalContact(mouseId)
+                                    dog.addProvisionalContact(mouseId) {}
                                     assertEquals(
                                         1,
                                         dog.db.listPaths(

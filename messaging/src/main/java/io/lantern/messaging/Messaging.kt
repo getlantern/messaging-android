@@ -3,6 +3,9 @@ package io.lantern.messaging
 import com.google.protobuf.ByteString
 import io.lantern.db.DB
 import io.lantern.db.PathAndValue
+import io.lantern.db.Raw
+import io.lantern.db.RawChangeSet
+import io.lantern.db.RawSubscriber
 import io.lantern.db.Transaction
 import io.lantern.messaging.conversions.byteString
 import io.lantern.messaging.metadata.Metadata
@@ -24,8 +27,8 @@ import java.security.SecureRandom
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.collections.HashSet
 import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.InvalidKeyException
@@ -300,9 +303,17 @@ class Messaging(
     // If they're already a contact, this simply sends them a hello but doesn't add a provisional
     // contact.
     //
-    // @return the timestamp of the most recent hello received from this contact.
+    // @param unsafeContactId the ID of the contact to add as a provisional contact
+    // @param onHandshakeComplete callback for when the handshake is complete or timed out. If the
+    //                            handshake timed out, onHandshakeComplete will receive a null
+    //                            Contact
+    //
+    // @return the amount of time before the handshake will time out, in milliseconds
     @Throws(InvalidKeyException::class)
-    fun addProvisionalContact(unsafeContactId: String): Long {
+    fun addProvisionalContact(
+        unsafeContactId: String,
+        onHandshakeComplete: (Raw<Model.Contact>?) -> Unit
+    ): Long {
         val contactId = unsafeContactId.sanitizedContactId
 
         val provisionalContact = Model.ProvisionalContact.newBuilder()
@@ -310,16 +321,56 @@ class Messaging(
             .setExpiresAt(now + provisionalContactsExpireAfterSeconds.secondsToMillis)
             .build()
 
+        val contactSubscriberId = UUID.randomUUID().toString()
+        val alreadyCalled = AtomicBoolean()
+        val callback = fun (contact: Raw<Model.Contact>?) {
+            if (!alreadyCalled.getAndSet(true)) {
+                db.unsubscribe(contactSubscriberId)
+                onHandshakeComplete(contact)
+            }
+        }
+
         var mostRecentHelloTs = 0L
-        db.mutate { tx ->
-            db.get<Model.Contact>(contactId.directContactPath)?.let {
+        val addedProvisionalContact = db.mutate { tx ->
+            val added = db.get<Model.Contact>(contactId.directContactPath)?.let {
                 mostRecentHelloTs = it.mostRecentHelloTs
+                false
             } ?: run {
                 tx.put(contactId.provisionalContactPath, provisionalContact)
+                true
             }
             sendHello(tx, contactId)
+            added
         }
-        return mostRecentHelloTs
+
+        // subscribe for changes to contact
+        db.subscribe(
+            object : RawSubscriber<Model.Contact>(
+                contactSubscriberId,
+                contactId.directContactPath
+            ) {
+                override fun onChanges(changes: RawChangeSet<Model.Contact>) {
+                    changes.updates.forEach { (path, contact) ->
+                        if (contact.value.mostRecentHelloTs > mostRecentHelloTs) {
+                            callback(contact)
+                        }
+                    }
+                }
+            }
+        )
+
+        return if (addedProvisionalContact) {
+            cryptoWorker.executor.schedule(
+                {
+                    // provisional contact expired
+                    callback(null)
+                },
+                provisionalContactsExpireAfterSeconds.secondsToMillis, TimeUnit.MILLISECONDS
+            )
+            provisionalContactsExpireAfterSeconds.secondsToMillis
+        } else {
+            0
+        }
     }
 
     fun deleteProvisionalContact(unsafeContactId: String) {
