@@ -576,8 +576,9 @@ internal class CryptoWorker(
             val paddedPlainText = Padding.padMessage(plainText)
             val to =
                 SignalProtocolAddress(recipientIdentityKey, deviceId)
-            val unidentifiedSenderMessage: ByteArray =
+            val unidentifiedSenderMessage: ByteArray = db.mutate {
                 cipher.encrypt(to, paddedPlainText)
+            }
 
             messaging.anonymousClientWorker.withClient { client ->
                 client.sendUnidentifiedSenderMessage(
@@ -782,10 +783,16 @@ internal class CryptoWorker(
             val senderAddress = decryptionResult.senderAddress
             val senderId = senderAddress.identityKey.toString()
 
-            if (transferMsg.contentCase != Model.TransferMessage.ContentCase.HELLO &&
-                !tx.contains(senderId.directContactPath)
-            ) {
-                throw UnknownSenderException(senderId)
+            when (transferMsg.contentCase) {
+                Model.TransferMessage.ContentCase.HELLO ->
+                    if (!tx.contains(senderId.directContactPath) &&
+                        !tx.contains(senderId.provisionalContactPath)) {
+                        throw UnknownProvisionalSenderException()
+                    }
+                else ->
+                    if (!tx.contains(senderId.directContactPath)) {
+                        throw UnknownSenderException(senderId)
+                    }
             }
 
             if (transferMsg.contentCase == Model.TransferMessage.ContentCase.MESSAGE) {

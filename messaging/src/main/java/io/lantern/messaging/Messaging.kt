@@ -42,6 +42,12 @@ class UnknownSenderException(internal val senderId: String) :
     Exception("Unknown sender")
 
 /**
+ * This exception indicates that a provisional message like a hello was received from an unknown
+ * sender (i.e. someone not in the list of provisional contacts)
+ */
+class UnknownProvisionalSenderException() : Exception("Unknown provisional sender")
+
+/**
  * This exception indicates that an attempt was made to upload an attachment larger than the
  * supported size.
  */
