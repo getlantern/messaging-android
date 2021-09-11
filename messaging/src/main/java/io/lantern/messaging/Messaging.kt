@@ -274,11 +274,12 @@ class Messaging(
         val displayName = unsafeDisplayName.sanitizedDisplayName
 
         val path = contactId.contactPath
-        return db.mutate { tx ->
+        var isNew = false
+        val contact = db.mutate { tx ->
             val existingContact = tx.get<Model.Contact>(path)
             val contactBuilder = existingContact?.toBuilder() ?: Model.Contact.newBuilder()
                 .setContactId(contactId)
-            val isNew = existingContact == null
+            isNew = existingContact == null
             if (isNew) {
                 contactBuilder.createdTs = now
                 contactBuilder.messagesDisappearAfterSeconds =
@@ -294,16 +295,18 @@ class Messaging(
                     cryptoWorker.doDecryptAndStore(unidentifiedSenderMessage)
                     tx.delete(spamPath)
                 }
-            if (isNew) {
-                // send our disappear settings as a kind of "hello", that also makes sure we're in sync on retention period
-                sendDisappearSettings(
-                    tx,
-                    contact.contactId.id,
-                    contact.messagesDisappearAfterSeconds
-                )
-            }
             contact
         }
+
+        if (isNew) {
+            // send our disappear settings as a kind of "hello", that also makes sure we're in sync on retention period
+            sendDisappearSettings(
+                contact.contactId.id,
+                contact.messagesDisappearAfterSeconds
+            )
+        }
+
+        return contact
     }
 
     // Adds a provisional contact.
@@ -327,8 +330,9 @@ class Messaging(
             } ?: run {
                 tx.put(contactId.provisionalContactPath, provisionalContact)
             }
-            sendHello(tx, contactId)
         }
+
+        sendHello(contactId)
 
         return ProvisionalContactResult(
             mostRecentHelloTs,
@@ -671,7 +675,7 @@ class Messaging(
      */
     fun setDisappearSettings(contactPath: String, disappearAfterSeconds: Int) {
         // TODO: support group contacts
-        db.mutate { tx ->
+        val contact = db.mutate { tx ->
             db.get<Model.Contact>(contactPath)?.let { contact ->
                 tx.put(
                     contactPath,
@@ -679,13 +683,15 @@ class Messaging(
                         .setMessagesDisappearAfterSeconds(disappearAfterSeconds)
                         .build()
                 )
-                sendDisappearSettings(tx, contact.contactId.id, disappearAfterSeconds)
+                contact
             }
+        }
+        contact?.let {
+            sendDisappearSettings(it.contactId.id, disappearAfterSeconds)
         }
     }
 
     private fun sendDisappearSettings(
-        tx: Transaction,
         unsafeContactId: String,
         disappearAfterSeconds: Int
     ) {
@@ -693,29 +699,27 @@ class Messaging(
         val disappearSettings = Model.DisappearSettings.newBuilder()
             .setMessagesDisappearAfterSeconds(disappearAfterSeconds)
             .build().toByteString()
-        send(tx, contactId) { out ->
+        send(contactId) { out ->
             out.disappearSettings = disappearSettings
         }
     }
 
     internal fun sendHello(
-        tx: Transaction,
         contactId: String,
         final: Boolean = false,
     ) {
-        tx.get<Model.Contact>(Schema.PATH_ME).let { me ->
+        db.get<Model.Contact>(Schema.PATH_ME).let { me ->
             val hello = Model.Hello.newBuilder()
                 .setDisplayName(me!!.displayName)
                 .setFinal(final)
                 .build().toByteString()
-            send(tx, contactId) { out ->
+            send(contactId) { out ->
                 out.hello = hello
             }
         }
     }
 
     internal fun send(
-        tx: Transaction,
         to: String,
         build: (Model.OutboundMessage.Builder) -> Unit,
     ) {
@@ -725,7 +729,6 @@ class Messaging(
                 .setSenderId(myId.id)
                 .setRecipientId(to) // TODO: this will need to change for groups
         build(out)
-        tx.put(out.dbPath, out.build())
         cryptoWorker.submit { cryptoWorker.processOutbound(out) }
     }
 

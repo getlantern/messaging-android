@@ -968,7 +968,7 @@ internal class CryptoWorker(
             tx.delete(senderId.provisionalContactPath)
             if (!hello.final) {
                 // send a hello just in case they couldn't process our first one
-                messaging.sendHello(tx, senderId, final = true)
+                messaging.sendHello(senderId, final = true)
             }
         } ?: tx.get<Model.Contact>(senderId.directContactPath)?.let {
             // just update teh mostRecentHelloTs
@@ -976,7 +976,7 @@ internal class CryptoWorker(
                 senderId.directContactPath, it.toBuilder().setMostRecentHelloTs(now).build()
             )
             if (!hello.final) {
-                messaging.sendHello(tx, senderId, final = true)
+                messaging.sendHello(senderId, final = true)
             }
         }
     }

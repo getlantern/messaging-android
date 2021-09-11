@@ -234,6 +234,9 @@ class MessagingTest : BaseMessagingTest() {
                             val dogId = dog.myId.id
                             val catId = cat.myId.id
 
+                            logger.debug("Dog is $dogId")
+                            logger.debug("Cat is $catId")
+
                             // We use unsafeSetMyDisplayName to keep the name from being sanitized
                             // here, which allows us to test that it gets sanitized when the
                             // provisional contact turns into a real contact.
@@ -309,7 +312,9 @@ class MessagingTest : BaseMessagingTest() {
                                 "no provisional contact should be stored for an existing contact"
                             )
 
+                            logger.debug("deleting dog contact")
                             cat.deleteDirectContact(dogId)
+                            logger.debug("adding back provisional dog contact")
                             assertEquals(
                                 0,
                                 cat.addProvisionalContact(dogId).mostRecentHelloTsMillis
