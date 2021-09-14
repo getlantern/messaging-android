@@ -1516,8 +1516,22 @@ class MessagingTest : BaseMessagingTest() {
             dog.db.introductionMessage(ownerId, catId)?.value?.value?.introduction?.status
         )
 
+        // send a message to cat
+        dog.sendToDirectContact(catId, text = "Hi Cat")
+        val catContactAfterSend = dog.db.get<Model.Contact>(catId.directContactPath)
+        assertFalse(
+            catContactAfterSend?.hasReceivedMessage == true,
+            "Should not have received message from cat prior to cat accepting introduction"
+        )
+
         dog.acceptIntroduction(ownerId, fishId)
         cat.acceptIntroduction(ownerId, dogId.toUpperCase())
+        dog.waitFor<Model.Contact>(
+            catId.directContactPath,
+            "dog's cat contact should show that it received a message after cat accepted introduction" // ktlint-disable max-line-length
+        ) {
+            it.hasReceivedMessage
+        }
 
         // send a duplicate introduction for fish from dog to cat (but with a different displayName)
         dog.addOrUpdateDirectContact(fishId, "Dogfish")

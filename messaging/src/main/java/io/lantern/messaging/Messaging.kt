@@ -1006,7 +1006,9 @@ class Messaging(
             .setMostRecentMessageTs(msg.ts)
             .setMostRecentMessageDirection(msg.direction)
             .setMostRecentMessageText(msg.text)
-            .setHasReceivedMessage(true)
+        if (msg.direction == Model.MessageDirection.IN) {
+            updatedContactBuilder.hasReceivedMessage = true
+        }
         if (msg.attachmentsCount > 0) {
             updatedContactBuilder.mostRecentAttachmentMimeType =
                 msg.attachmentsMap.values.iterator().next().attachment.mimeType
