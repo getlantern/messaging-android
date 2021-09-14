@@ -237,6 +237,14 @@ class MessagingTest : BaseMessagingTest() {
                             logger.debug("Cat is $catId")
                             logger.debug("Dog is $dogId")
 
+                            dog.unsafeSetMyDisplayName("")
+                            try {
+                                dog.addProvisionalContact(catId)
+                                fail("should not be allowed to add provisional contacts while our displayName is blank") // ktlint-disable max-line-length
+                            } catch (e: InvalidDisplayNameException) {
+                                // okay
+                            }
+
                             // We use unsafeSetMyDisplayName to keep the name from being sanitized
                             // here, which allows us to test that it gets sanitized when the
                             // provisional contact turns into a real contact.

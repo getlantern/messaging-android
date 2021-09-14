@@ -316,8 +316,14 @@ class Messaging(
     //
     // If they're already a contact, this simply sends them a hello but doesn't add a provisional
     // contact.
-    @Throws(InvalidKeyException::class)
+    @Throws(InvalidKeyException::class, InvalidDisplayNameException::class)
     fun addProvisionalContact(unsafeContactId: String): ProvisionalContactResult {
+        db.get<Model.Contact>(Schema.PATH_ME)?.let { me ->
+            if (me.displayName.isNullOrEmpty()) {
+                throw InvalidDisplayNameException()
+            }
+        }
+
         val contactId = unsafeContactId.sanitizedContactId
 
         val expiresAt = now + provisionalContactsExpireAfterSeconds.secondsToMillis

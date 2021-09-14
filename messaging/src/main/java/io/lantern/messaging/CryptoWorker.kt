@@ -786,7 +786,8 @@ internal class CryptoWorker(
             when (transferMsg.contentCase) {
                 Model.TransferMessage.ContentCase.HELLO ->
                     if (!tx.contains(senderId.directContactPath) &&
-                        !tx.contains(senderId.provisionalContactPath)) {
+                        !tx.contains(senderId.provisionalContactPath)
+                    ) {
                         throw UnknownProvisionalSenderException()
                     }
                 else ->
