@@ -251,8 +251,14 @@ class MessagingTest : BaseMessagingTest() {
                                 // okay
                             }
 
-                            assertEquals(0, dog.addProvisionalContact(catId))
-                            assertEquals(0, cat.addProvisionalContact(dogId))
+                            assertEquals(
+                                0,
+                                dog.addProvisionalContact(catId).mostRecentHelloTsMillis
+                            )
+                            assertEquals(
+                                0,
+                                cat.addProvisionalContact(dogId).mostRecentHelloTsMillis
+                            )
 
                             val catContact = dog.waitFor<Model.Contact>(
                                 catId.directContactPath,
@@ -294,14 +300,20 @@ class MessagingTest : BaseMessagingTest() {
                                 "cat should have no remaining provisional contacts"
                             )
 
-                            assertNotEquals(0, dog.addProvisionalContact(catId))
+                            assertNotEquals(
+                                0,
+                                dog.addProvisionalContact(catId).mostRecentHelloTsMillis
+                            )
                             assertFalse(
                                 dog.db.contains(catId.provisionalContactPath),
                                 "no provisional contact should be stored for an existing contact"
                             )
 
                             cat.deleteDirectContact(dogId)
-                            assertEquals(0, cat.addProvisionalContact(dogId))
+                            assertEquals(
+                                0,
+                                cat.addProvisionalContact(dogId).mostRecentHelloTsMillis
+                            )
                             cat.waitFor<Model.Contact>(
                                 dogId.directContactPath,
                                 "cat should end up with dog contact again after having deleted dog"

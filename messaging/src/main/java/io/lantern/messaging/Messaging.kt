@@ -25,7 +25,6 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.collections.HashSet
 import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.InvalidKeyException
@@ -59,6 +58,18 @@ class AttachmentPlainTextMissingException : Exception("Attachment Plaintext File
  * forth, the display name was empty.
  */
 class InvalidDisplayNameException : Exception("Invalid display name")
+
+/**
+ * The result of adding a provisional contact.
+ */
+data class ProvisionalContactResult(
+    // The timestamp of the most recent hello we received from this contact prior to adding a
+    // provisional contact. A value greater than 0 means that we already have a Contact entry.
+    val mostRecentHelloTsMillis: Long,
+    // The timestamp in milliseconds since epoch when the provisional contact expires. A value of 0
+    // means that  we didn't add a provisional contact and don't have to worry about it expiring.
+    val expiresAtMillis: Long
+)
 
 /**
  * Messaging provides an API for End to End Encrypted (E2EE) messaging, using a tassis server for
@@ -299,15 +310,14 @@ class Messaging(
     //
     // If they're already a contact, this simply sends them a hello but doesn't add a provisional
     // contact.
-    //
-    // @return the timestamp of the most recent hello received from this contact.
     @Throws(InvalidKeyException::class)
-    fun addProvisionalContact(unsafeContactId: String): Long {
+    fun addProvisionalContact(unsafeContactId: String): ProvisionalContactResult {
         val contactId = unsafeContactId.sanitizedContactId
 
+        val expiresAt = now + provisionalContactsExpireAfterSeconds.secondsToMillis
         val provisionalContact = Model.ProvisionalContact.newBuilder()
             .setContactId(contactId)
-            .setExpiresAt(now + provisionalContactsExpireAfterSeconds.secondsToMillis)
+            .setExpiresAt(expiresAt)
             .build()
 
         var mostRecentHelloTs = 0L
@@ -319,7 +329,11 @@ class Messaging(
             }
             sendHello(tx, contactId)
         }
-        return mostRecentHelloTs
+
+        return ProvisionalContactResult(
+            mostRecentHelloTs,
+            if (mostRecentHelloTs == 0L) expiresAt else 0
+        )
     }
 
     fun deleteProvisionalContact(unsafeContactId: String) {
