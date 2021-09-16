@@ -42,6 +42,12 @@ class UnknownSenderException(internal val senderId: String) :
     Exception("Unknown sender")
 
 /**
+ * This exception indicates that a provisional message like a hello was received from an unknown
+ * sender (i.e. someone not in the list of provisional contacts)
+ */
+class UnknownProvisionalSenderException() : Exception("Unknown provisional sender")
+
+/**
  * This exception indicates that an attempt was made to upload an attachment larger than the
  * supported size.
  */
@@ -310,8 +316,14 @@ class Messaging(
     //
     // If they're already a contact, this simply sends them a hello but doesn't add a provisional
     // contact.
-    @Throws(InvalidKeyException::class)
+    @Throws(InvalidKeyException::class, InvalidDisplayNameException::class)
     fun addProvisionalContact(unsafeContactId: String): ProvisionalContactResult {
+        db.get<Model.Contact>(Schema.PATH_ME)?.let { me ->
+            if (me.displayName.isNullOrEmpty()) {
+                throw InvalidDisplayNameException()
+            }
+        }
+
         val contactId = unsafeContactId.sanitizedContactId
 
         val expiresAt = now + provisionalContactsExpireAfterSeconds.secondsToMillis

@@ -234,6 +234,17 @@ class MessagingTest : BaseMessagingTest() {
                             val dogId = dog.myId.id
                             val catId = cat.myId.id
 
+                            logger.debug("Cat is $catId")
+                            logger.debug("Dog is $dogId")
+
+                            dog.unsafeSetMyDisplayName("")
+                            try {
+                                dog.addProvisionalContact(catId)
+                                fail("should not be allowed to add provisional contacts while our displayName is blank") // ktlint-disable max-line-length
+                            } catch (e: InvalidDisplayNameException) {
+                                // okay
+                            }
+
                             // We use unsafeSetMyDisplayName to keep the name from being sanitized
                             // here, which allows us to test that it gets sanitized when the
                             // provisional contact turns into a real contact.
@@ -309,7 +320,9 @@ class MessagingTest : BaseMessagingTest() {
                                 "no provisional contact should be stored for an existing contact"
                             )
 
+                            logger.debug("cat is deleting dog contact")
                             cat.deleteDirectContact(dogId)
+                            logger.debug("cat is adding back dog provisional contact")
                             assertEquals(
                                 0,
                                 cat.addProvisionalContact(dogId).mostRecentHelloTsMillis
@@ -1873,7 +1886,7 @@ class MessagingTest : BaseMessagingTest() {
 internal suspend fun <T : Any> Messaging.waitFor(
     path: String,
     testCase: String,
-    duration: Duration = 10.seconds,
+    duration: Duration = 20.seconds,
     check: ((T) -> Boolean)? = null
 ): T {
     val maxWait = duration.toLongMilliseconds()
