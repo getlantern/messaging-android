@@ -1653,22 +1653,22 @@ class MessagingTest : BaseMessagingTest() {
                     val wildcard = otherContactId.substring(0, otherContactId.length - 2) + "*"
                     assertEquals(
                         otherContactId,
-                        dog.searchContacts(wildcard).firstOrNull()?.value?.contactId?.id,
+                        dog.searchContacts(wildcard).firstOrNull()?.value?.value?.contactId?.id,
                         "search for existing contact by id should yield that contact"
                     )
                     assertEquals(
                         otherContactId,
-                        dog.searchContacts("appid").firstOrNull()?.value?.contactId?.id,
+                        dog.searchContacts("appid").firstOrNull()?.value?.value?.contactId?.id,
                         "search for existing contact by application id should yield that contact"
                     )
                     assertEquals(
                         "The *Dud*e",
-                        dog.searchContacts("dud*").firstOrNull()?.value?.displayName,
+                        dog.searchContacts("dud*").firstOrNull()?.snippet,
                         "search for existing contact by display name should yield that contact"
                     )
                     assertEquals(
                         "*Woo*f",
-                        dog.searchMessages("woo*").firstOrNull()?.value?.text,
+                        dog.searchMessages("woo*").firstOrNull()?.snippet,
                         "search for existing message by text should yield that message"
                     )
                 }

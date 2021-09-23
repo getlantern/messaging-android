@@ -2,7 +2,8 @@ package io.lantern.messaging
 
 import com.google.protobuf.ByteString
 import io.lantern.db.DB
-import io.lantern.db.PathAndValue
+import io.lantern.db.SearchResult
+import io.lantern.db.SnippetConfig
 import io.lantern.db.Transaction
 import io.lantern.messaging.conversions.byteString
 import io.lantern.messaging.metadata.Metadata
@@ -1221,15 +1222,29 @@ class Messaging(
         }
     }
 
-    fun searchContacts(query: String): List<PathAndValue<Model.Contact>> =
-        db.list(Schema.PATH_CONTACTS.path("%"), fullTextSearch = query) { contact, highlight ->
-            contact.toBuilder().setDisplayName(highlight(contact.displayName)).build()
+    /**
+     * Searches contacts using the given full-text query.
+     */
+    fun searchContacts(
+        query: String,
+        snippetConfig: SnippetConfig = SnippetConfig(numTokens = 10),
+    ): List<SearchResult<Model.Contact>> =
+        db.search<Model.Contact>(
+            Schema.PATH_CONTACTS.path("%"),
+            query,
+            snippetConfig
+        ).map {
+            SearchResult(it.path, it.value, it.snippet.split("\n")[0])
         }
 
-    fun searchMessages(query: String): List<PathAndValue<Model.StoredMessage>> =
-        db.list(Schema.PATH_MESSAGES.path("%"), fullTextSearch = query) { msg, highlight ->
-            msg.toBuilder().setText(highlight(msg.text)).build()
-        }
+    /**
+     * Searches messages using the given full-text query.
+     */
+    fun searchMessages(
+        query: String,
+        snippetConfig: SnippetConfig = SnippetConfig(numTokens = 10),
+    ): List<SearchResult<Model.StoredMessage>> =
+        db.search(Schema.PATH_MESSAGES.path("%"), query, snippetConfig)
 
     /**
      * Closes this Messaging instance, including stopping all workers and disconnecting from tassis.
