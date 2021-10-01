@@ -189,7 +189,7 @@ class Metadata(
             }
             val totalDurationUs = format.getLong(MediaFormat.KEY_DURATION)
             val mimeType = format.getString(MediaFormat.KEY_MIME)
-            if (mimeType!! != "application/ogg" && !mimeType!!.startsWith("audio/")) {
+            if (mimeType!! != "application/ogg" && !mimeType.startsWith("audio/")) {
                 throw IOException("Mime not audio")
             }
             val fileSize = file.length()

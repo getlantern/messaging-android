@@ -159,7 +159,13 @@ fun Queryable.introductionMessage(from: String, to: String): Detail<Raw<Model.St
     listDetailsRaw<Model.StoredMessage>(from.introductionIndexPathByFrom(to)).firstOrNull()
 
 val Model.Contact.fullText: String
-    get() = "$displayName $contactId.id"
+    get() {
+        val result = "$displayName\n${contactId.id}"
+        return applicationIdsMap?.let {
+            val idsString = it.values.joinToString("\n")
+            "$result\n$idsString"
+        } ?: result
+    }
 
 val Model.StoredMessage.fullText: String?
     get() = text

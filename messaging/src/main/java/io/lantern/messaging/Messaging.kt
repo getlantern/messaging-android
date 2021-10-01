@@ -2,7 +2,8 @@ package io.lantern.messaging
 
 import com.google.protobuf.ByteString
 import io.lantern.db.DB
-import io.lantern.db.PathAndValue
+import io.lantern.db.SearchResult
+import io.lantern.db.SnippetConfig
 import io.lantern.db.Transaction
 import io.lantern.messaging.conversions.byteString
 import io.lantern.messaging.metadata.Metadata
@@ -45,7 +46,7 @@ class UnknownSenderException(internal val senderId: String) :
  * This exception indicates that a provisional message like a hello was received from an unknown
  * sender (i.e. someone not in the list of provisional contacts)
  */
-class UnknownProvisionalSenderException() : Exception("Unknown provisional sender")
+class UnknownProvisionalSenderException : Exception("Unknown provisional sender")
 
 /**
  * This exception indicates that an attempt was made to upload an attachment larger than the
@@ -191,7 +192,11 @@ class Messaging(
         myId = me.contactId
 
         // add myself as a contact to record notes to myself
-        doAddOrUpdateContact(myId, "Note to self")
+        doAddOrUpdateContact(myId) { contact, isNew ->
+            if (isNew) {
+                contact.displayName = "Note to self"
+            }
+        }
 
         // immediately request some upload authorizations so that we're ready to upload attachments
         cryptoWorker.submit { cryptoWorker.getMoreUploadAuthorizationsIfNecessary() }
@@ -248,8 +253,13 @@ class Messaging(
     /**
      * Adds or updates the given direct contact.
      *
-     * @param id the base32 encoded public identity key of the contact
+     * @param unsafeId the base32 encoded public identity key of the contact
      * @param displayName the human-friendly display name for this contact
+     * @param source optional identifier of the source of this contact
+     *               (if unspecified, existing source is left alone)
+     * @param applicationIds optional map of application-specific ids to associate with the user.
+     *                       ID is limited to int32.
+     *                       (application IDs are added to existing set)
      * @return the created or updated Contact
      */
     @Throws(
@@ -257,29 +267,40 @@ class Messaging(
         InvalidCharacterException::class,
         InvalidDisplayNameException::class
     )
-    fun addOrUpdateDirectContact(unsafeId: String, displayName: String): Model.Contact =
-        addOrUpdateContact(unsafeId.directContactId, displayName)
+    fun addOrUpdateDirectContact(
+        unsafeId: String,
+        displayName: String,
+        source: Model.ContactSource? = null,
+        applicationIds: Map<Int, String>? = null
+    ): Model.Contact =
+        addOrUpdateContact(unsafeId.directContactId, displayName, source, applicationIds)
 
     @Throws(InvalidKeyException::class, InvalidDisplayNameException::class)
     private fun addOrUpdateContact(
         unsafeContactId: Model.ContactId,
-        displayName: String
+        displayName: String,
+        source: Model.ContactSource?,
+        applicationIds: Map<Int, String>?
     ): Model.Contact {
         return cryptoWorker.submitForValue {
-            doAddOrUpdateContact(unsafeContactId, displayName)
+            doAddOrUpdateContact(unsafeContactId) { contact, _ ->
+                contact.displayName = displayName
+                source?.let { it -> contact.source = it }
+                applicationIds?.let { it ->
+                    contact.putAllApplicationIds(it)
+                }
+            }
         }
     }
 
     @Throws(InvalidKeyException::class, InvalidDisplayNameException::class)
     internal fun doAddOrUpdateContact(
         unsafeContactId: Model.ContactId,
-        unsafeDisplayName: String,
-        mostRecentHelloTs: Long? = null,
+        update: (Model.Contact.Builder, Boolean) -> Unit,
     ): Model.Contact {
         val contactId = unsafeContactId.sanitized
-        val displayName = unsafeDisplayName.sanitizedDisplayName
-
         val path = contactId.contactPath
+
         return db.mutate { tx ->
             val existingContact = tx.get<Model.Contact>(path)
             val contactBuilder = existingContact?.toBuilder() ?: Model.Contact.newBuilder()
@@ -290,9 +311,9 @@ class Messaging(
                 contactBuilder.messagesDisappearAfterSeconds =
                     defaultMessagesDisappearAfterSeconds
             }
-            mostRecentHelloTs?.let { contactBuilder.setMostRecentHelloTs(it) }
-            val contact =
-                contactBuilder.setContactId(contactId).setDisplayName(displayName).build()
+            update(contactBuilder, isNew)
+            contactBuilder.displayName = contactBuilder.displayName.sanitizedDisplayName
+            val contact = contactBuilder.build()
             tx.put(path, contact, fullText = contact.fullText)
             // decrypt any "spam" we received from this Contact prior to adding them
             db.list<ByteArray>(contact.spamQuery)
@@ -317,7 +338,10 @@ class Messaging(
     // If they're already a contact, this simply sends them a hello but doesn't add a provisional
     // contact.
     @Throws(InvalidKeyException::class, InvalidDisplayNameException::class)
-    fun addProvisionalContact(unsafeContactId: String): ProvisionalContactResult {
+    fun addProvisionalContact(
+        unsafeContactId: String,
+        source: Model.ContactSource? = null
+    ): ProvisionalContactResult {
         db.get<Model.Contact>(Schema.PATH_ME)?.let { me ->
             if (me.displayName.isNullOrEmpty()) {
                 throw InvalidDisplayNameException()
@@ -327,10 +351,11 @@ class Messaging(
         val contactId = unsafeContactId.sanitizedContactId
 
         val expiresAt = now + provisionalContactsExpireAfterSeconds.secondsToMillis
-        val provisionalContact = Model.ProvisionalContact.newBuilder()
+        val provisionalContactBuilder = Model.ProvisionalContact.newBuilder()
             .setContactId(contactId)
             .setExpiresAt(expiresAt)
-            .build()
+        source?.let { it -> provisionalContactBuilder.source = source }
+        val provisionalContact = provisionalContactBuilder.build()
 
         var mostRecentHelloTs = 0L
         db.mutate { tx ->
@@ -1163,7 +1188,12 @@ class Messaging(
                     ?: throw IllegalArgumentException("Introduction not found")
 
                 val introduction = introductionMessage.introduction
-                doAddOrUpdateContact(introduction.to.id.directContactId, introduction.displayName)
+                doAddOrUpdateContact(introduction.to.id.directContactId) { contact, isNew ->
+                    if (isNew) {
+                        contact.displayName = introduction.displayName
+                        contact.source = Model.ContactSource.INTRODUCTION
+                    }
+                }
 
                 // Update status on all introductions
                 tx.introductionMessagesTo(toId).forEach {
@@ -1192,15 +1222,29 @@ class Messaging(
         }
     }
 
-    fun searchContacts(query: String): List<PathAndValue<Model.Contact>> =
-        db.list(Schema.PATH_CONTACTS.path("%"), fullTextSearch = query) { contact, highlight ->
-            contact.toBuilder().setDisplayName(highlight(contact.displayName)).build()
+    /**
+     * Searches contacts using the given full-text query.
+     */
+    fun searchContacts(
+        query: String,
+        snippetConfig: SnippetConfig = SnippetConfig(numTokens = 10),
+    ): List<SearchResult<Model.Contact>> =
+        db.search<Model.Contact>(
+            Schema.PATH_CONTACTS.path("%"),
+            query,
+            snippetConfig
+        ).map {
+            SearchResult(it.path, it.value, it.snippet.split("\n")[0])
         }
 
-    fun searchMessages(query: String): List<PathAndValue<Model.StoredMessage>> =
-        db.list(Schema.PATH_MESSAGES.path("%"), fullTextSearch = query) { msg, highlight ->
-            msg.toBuilder().setText(highlight(msg.text)).build()
-        }
+    /**
+     * Searches messages using the given full-text query.
+     */
+    fun searchMessages(
+        query: String,
+        snippetConfig: SnippetConfig = SnippetConfig(numTokens = 10),
+    ): List<SearchResult<Model.StoredMessage>> =
+        db.search(Schema.PATH_MESSAGES.path("%"), query, snippetConfig)
 
     /**
      * Closes this Messaging instance, including stopping all workers and disconnecting from tassis.

@@ -74,14 +74,20 @@ class MessagingTest : BaseMessagingTest() {
                             val catId = cat.myId.id
 
                             try {
-                                dog.addOrUpdateDirectContact("blub", "Bogus")
+                                dog.addOrUpdateDirectContact(
+                                    "blub",
+                                    "Bogus"
+                                )
                                 fail("adding an invalid contact ID should fail")
                             } catch (e: InvalidKeyException) {
                                 // okay
                             }
 
                             try {
-                                dog.addOrUpdateDirectContact("${catId}aaa", "Bogus")
+                                dog.addOrUpdateDirectContact(
+                                    "${catId}aaa",
+                                    "Bogus"
+                                )
                                 fail("adding a too long contact ID should fail")
                             } catch (e: InvalidKeyException) {
                                 // okay
@@ -89,7 +95,7 @@ class MessagingTest : BaseMessagingTest() {
 
                             try {
                                 dog.addOrUpdateDirectContact("-${catId.substring(1, 52)}", "Bogus")
-                                fail("adding an contact ID with an invalid character should fail")
+                                fail("adding a contact ID with an invalid character should fail")
                             } catch (e: InvalidCharacterException) {
                                 // okay
                             }
@@ -98,7 +104,9 @@ class MessagingTest : BaseMessagingTest() {
                             var catContact =
                                 dog.addOrUpdateDirectContact(
                                     " ${catId.toUpperCase()} ",
-                                    "\uD83D\uDE00   Cat\n"
+                                    "\uD83D\uDE00   Cat\n",
+                                    source = Model.ContactSource.APP1,
+                                    applicationIds = mapOf(0 to "appid")
                                 )
                             val createdTs = catContact.createdTs
                             assertEquals(
@@ -116,13 +124,31 @@ class MessagingTest : BaseMessagingTest() {
                                 catContact.displayName,
                                 "displayName should have been set"
                             )
+                            assertEquals(
+                                Model.ContactSource.APP1,
+                                catContact.source,
+                                "cat should have correct source",
+                            )
+                            assertEquals(
+                                mapOf(0 to "appid"),
+                                catContact.applicationIdsMap,
+                                "cat should have correct application IDs"
+                            )
                             assertTrue(createdTs >= now, "createdTime should have been set")
 
-                            catContact = dog.addOrUpdateDirectContact(catId, "New     Cat")
+                            catContact = dog.addOrUpdateDirectContact(
+                                catId, "New     Cat",
+                                applicationIds = mapOf(1 to "otherappid")
+                            )
                             assertEquals(
                                 "New Cat",
                                 catContact.displayName,
                                 "displayName should have been changed"
+                            )
+                            assertEquals(
+                                mapOf(0 to "appid", 1 to "otherappid"),
+                                catContact.applicationIdsMap,
+                                "cat should have full set of application IDs"
                             )
                             assertEquals(
                                 createdTs,
@@ -264,7 +290,10 @@ class MessagingTest : BaseMessagingTest() {
 
                             assertEquals(
                                 0,
-                                dog.addProvisionalContact(catId).mostRecentHelloTsMillis
+                                dog.addProvisionalContact(
+                                    catId,
+                                    Model.ContactSource.APP1
+                                ).mostRecentHelloTsMillis
                             )
                             assertEquals(
                                 0,
@@ -281,6 +310,11 @@ class MessagingTest : BaseMessagingTest() {
                                 "The Cat",
                                 catContact.displayName,
                                 "Cat contact should have the right display name"
+                            )
+                            assertEquals(
+                                Model.ContactSource.APP1,
+                                catContact.source,
+                                "Cat contact should have the right source"
                             )
 
                             val dogContact = cat.waitFor<Model.Contact>(
@@ -1439,11 +1473,6 @@ class MessagingTest : BaseMessagingTest() {
         val fishId = fish.myId.id
         val ownerId = owner.myId.id
 
-        // First connect owner with all the pets
-
-        // We use unsafeDoAddOrUpdateDirectContact so that the display name remains unsanitized.
-        // That allows us to make sure the display name gets sanitized when the introduction is
-        // accepted.
         // first connect owner with all the pets
         owner.addOrUpdateDirectContact(dogId, "Dog")
         dog.addOrUpdateDirectContact(ownerId, "Owner")
@@ -1511,6 +1540,7 @@ class MessagingTest : BaseMessagingTest() {
         assertNotNull(catContact, "dog should have a cat contact now")
         assertEquals(catId, catContact.contactId.id)
         assertEquals("Cat", catContact.displayName)
+        assertEquals(Model.ContactSource.INTRODUCTION, catContact.source)
         assertEquals(
             Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
             dog.db.introductionMessage(ownerId, catId)?.value?.value?.introduction?.status
@@ -1602,7 +1632,11 @@ class MessagingTest : BaseMessagingTest() {
                     val dogId = dog.myId.id
                     val otherContactId = KeyHelper.generateIdentityKeyPair().publicKey.toString()
 
-                    dog.addOrUpdateDirectContact(otherContactId, "The Dude")
+                    dog.addOrUpdateDirectContact(
+                        otherContactId,
+                        "The Dude",
+                        applicationIds = mapOf(0 to "appid")
+                    )
                     dog.sendToDirectContact(dogId, text = "Woof")
 
                     assertEquals(
@@ -1619,17 +1653,22 @@ class MessagingTest : BaseMessagingTest() {
                     val wildcard = otherContactId.substring(0, otherContactId.length - 2) + "*"
                     assertEquals(
                         otherContactId,
-                        dog.searchContacts(wildcard).firstOrNull()?.value?.contactId?.id,
+                        dog.searchContacts(wildcard).firstOrNull()?.value?.value?.contactId?.id,
                         "search for existing contact by id should yield that contact"
                     )
                     assertEquals(
+                        otherContactId,
+                        dog.searchContacts("appid").firstOrNull()?.value?.value?.contactId?.id,
+                        "search for existing contact by application id should yield that contact"
+                    )
+                    assertEquals(
                         "The *Dud*e",
-                        dog.searchContacts("dud*").firstOrNull()?.value?.displayName,
+                        dog.searchContacts("dud*").firstOrNull()?.snippet,
                         "search for existing contact by display name should yield that contact"
                     )
                     assertEquals(
                         "*Woo*f",
-                        dog.searchMessages("woo*").firstOrNull()?.value?.text,
+                        dog.searchMessages("woo*").firstOrNull()?.snippet,
                         "search for existing message by text should yield that message"
                     )
                 }
