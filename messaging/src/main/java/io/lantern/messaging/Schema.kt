@@ -160,10 +160,10 @@ fun Queryable.introductionMessage(from: String, to: String): Detail<Raw<Model.St
 
 val Model.Contact.fullText: String
     get() {
-        val result = "$displayName $contactId.id"
+        val result = "$displayName\n${contactId.id}"
         return applicationIdsMap?.let {
-            val idsString = it.values.joinToString(" ")
-            "$result $idsString"
+            val idsString = it.values.joinToString("\n")
+            "$result\n$idsString"
         } ?: result
     }
 
