@@ -1092,10 +1092,21 @@ class Messaging(
 
     private fun deleteOrphanedAttachments() {
         // first build a set of all known attachment paths
-        val knownAttachmentPaths = db
-            .list<Model.StoredMessage>(Schema.PATH_MESSAGES.path("%"))
-            .flatMap { msg ->
-                msg.value.attachmentsMap.values.map { attachment -> attachment.encryptedFilePath }
+        val knownAttachmentPaths = mutableListOf<String>()
+        db.list<Model.StoredMessage>(Schema.PATH_MESSAGES.path("%"))
+            .forEach { msg ->
+                knownAttachmentPaths.addAll(
+                    msg.value.attachmentsMap.values.map {
+                        attachment ->
+                        attachment.encryptedFilePath
+                    }
+                )
+                knownAttachmentPaths.addAll(
+                    msg.value.attachmentsMap.values.map {
+                        attachment ->
+                        attachment.thumbnail.encryptedFilePath
+                    }
+                )
             }
         // the walk the attachments directory tree and delete any old files with no known attachment
         // path
