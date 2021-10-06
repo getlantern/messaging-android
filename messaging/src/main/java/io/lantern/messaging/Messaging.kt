@@ -30,17 +30,11 @@ import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.InvalidKeyException
 import org.whispersystems.libsignal.ecc.ECPublicKey
+import org.whispersystems.libsignal.fingerprint.NumericFingerprintGenerator
 import org.whispersystems.libsignal.util.InvalidCharacterException
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherInputStream
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
 import org.whispersystems.signalservice.internal.util.Util
-
-/**
- * This exception indicates that a message was received from an unknown sender (i.e. someone not in
- * the local contact list).
- */
-class UnknownSenderException(internal val senderId: String) :
-    Exception("Unknown sender")
 
 /**
  * This exception indicates that a provisional message like a hello was received from an unknown
@@ -60,13 +54,6 @@ class AttachmentTooBigException(val maxAttachmentBytes: Long) : Exception("Attac
 class AttachmentPlainTextMissingException : Exception("Attachment Plaintext File Is Missing")
 
 /**
- * This exception indicates that a display name was invalid. We sanitize display names before
- * validating them, so this error means that after removing special characters, whitespace and so
- * forth, the display name was empty.
- */
-class InvalidDisplayNameException : Exception("Invalid display name")
-
-/**
  * The result of adding a provisional contact.
  */
 data class ProvisionalContactResult(
@@ -77,6 +64,11 @@ data class ProvisionalContactResult(
     // means that  we didn't add a provisional contact and don't have to worry about it expiring.
     val expiresAtMillis: Long
 )
+
+private val emptyBytes = ByteArray(0)
+
+// we use 5200 fingerprint iterations just like Signal does
+private const val fingerprintIterations = 5200
 
 /**
  * Messaging provides an API for End to End Encrypted (E2EE) messaging, using a tassis server for
@@ -136,6 +128,9 @@ class Messaging(
         db.registerType(23, Model.OutboundMessage::class.java)
         db.registerType(24, Model.InboundAttachment::class.java)
         db.registerType(25, Model.ProvisionalContact::class.java)
+
+        // apply migrations
+        Migrations(this).apply()
     }
 
     private val cfg = AtomicReference<Messages.Configuration>()
@@ -230,27 +225,6 @@ class Messaging(
     }
 
     /**
-     * Updates the displayName associated with the "me" contact entry.
-     */
-    @Throws(InvalidDisplayNameException::class)
-    fun setMyDisplayName(unsafeDisplayName: String) {
-        unsafeSetMyDisplayName(unsafeDisplayName.sanitizedDisplayName)
-    }
-
-    /**
-     * Version of setMyDisplayName that does not sanitize the displayName, used only for testing.
-     */
-    internal fun unsafeSetMyDisplayName(displayName: String) {
-        db.mutate { tx ->
-            tx.put(
-                Schema.PATH_ME,
-                tx.get<Model.Contact>(Schema.PATH_ME)!!.toBuilder()
-                    .setDisplayName(displayName).build()
-            )
-        }
-    }
-
-    /**
      * Adds or updates the given direct contact.
      *
      * @param unsafeId the base32 encoded public identity key of the contact
@@ -260,40 +234,69 @@ class Messaging(
      * @param applicationIds optional map of application-specific ids to associate with the user.
      *                       ID is limited to int32.
      *                       (application IDs are added to existing set)
+     * @param initialVerificationLevel verification level to set for new contact
      * @return the created or updated Contact
      */
     @Throws(
         InvalidKeyException::class,
         InvalidCharacterException::class,
-        InvalidDisplayNameException::class
     )
     fun addOrUpdateDirectContact(
         unsafeId: String,
         displayName: String,
         source: Model.ContactSource? = null,
-        applicationIds: Map<Int, String>? = null
+        applicationIds: Map<Int, String>? = null,
+        initialVerificationLevel: Model.VerificationLevel =
+            Model.VerificationLevel.UNVERIFIED
     ): Model.Contact =
-        addOrUpdateContact(unsafeId.directContactId, displayName, source, applicationIds)
+        cryptoWorker.submitForValue {
+            addOrUpdateContact(
+                unsafeId.directContactId,
+                displayName,
+                source,
+                applicationIds,
+                initialVerificationLevel
+            )
+        }
 
-    @Throws(InvalidKeyException::class, InvalidDisplayNameException::class)
-    private fun addOrUpdateContact(
+    @Throws(InvalidKeyException::class)
+    internal fun addOrUpdateContact(
         unsafeContactId: Model.ContactId,
         displayName: String,
-        source: Model.ContactSource?,
-        applicationIds: Map<Int, String>?
-    ): Model.Contact {
-        return cryptoWorker.submitForValue {
-            doAddOrUpdateContact(unsafeContactId) { contact, _ ->
-                contact.displayName = displayName
-                source?.let { it -> contact.source = it }
-                applicationIds?.let { it ->
-                    contact.putAllApplicationIds(it)
-                }
+        source: Model.ContactSource? = null,
+        applicationIds: Map<Int, String>? = null,
+        initialVerificationLevel: Model.VerificationLevel
+    ): Model.Contact =
+        doAddOrUpdateContact(unsafeContactId) { contact, isNew ->
+            contact.displayName = displayName
+            source?.let { it -> contact.source = it }
+            applicationIds?.let { it ->
+                contact.putAllApplicationIds(it)
+            }
+            if (isNew) {
+                contact.verificationLevel = initialVerificationLevel
             }
         }
-    }
 
-    @Throws(InvalidKeyException::class, InvalidDisplayNameException::class)
+    /**
+     * Accepts a previously unaccepted Contact, putting it into UNVERIFIED status.
+     */
+    fun acceptDirectContact(unsafeId: String) =
+        doAddOrUpdateContact(unsafeId.directContactId) { contact, _ ->
+            if (contact.verificationLevel == Model.VerificationLevel.UNACCEPTED) {
+                contact.verificationLevel = Model.VerificationLevel.UNVERIFIED
+            }
+        }
+
+    /**
+     * Marks a contact as VERIFIED.
+     */
+    fun markContactVerified(unsafeId: String) =
+        doAddOrUpdateContact(unsafeId.directContactId) { contact, _ ->
+            contact.verificationLevel = Model.VerificationLevel.VERIFIED
+        }
+
+    @Throws(InvalidKeyException::class)
     internal fun doAddOrUpdateContact(
         unsafeContactId: Model.ContactId,
         update: (Model.Contact.Builder, Boolean) -> Unit,
@@ -310,17 +313,12 @@ class Messaging(
                 contactBuilder.createdTs = now
                 contactBuilder.messagesDisappearAfterSeconds =
                     defaultMessagesDisappearAfterSeconds
+                contactBuilder.numericFingerprint = numericFingerprintFor(contactId)
             }
             update(contactBuilder, isNew)
             contactBuilder.displayName = contactBuilder.displayName.sanitizedDisplayName
             val contact = contactBuilder.build()
             tx.put(path, contact, fullText = contact.fullText)
-            // decrypt any "spam" we received from this Contact prior to adding them
-            db.list<ByteArray>(contact.spamQuery)
-                .forEach { (spamPath, unidentifiedSenderMessage) ->
-                    cryptoWorker.doDecryptAndStore(unidentifiedSenderMessage)
-                    tx.delete(spamPath)
-                }
             if (isNew) {
                 // send our disappear settings as a kind of "hello", that also makes sure we're in sync on retention period
                 sendDisappearSettings(
@@ -337,24 +335,20 @@ class Messaging(
     //
     // If they're already a contact, this simply sends them a hello but doesn't add a provisional
     // contact.
-    @Throws(InvalidKeyException::class, InvalidDisplayNameException::class)
+    @Throws(InvalidKeyException::class)
     fun addProvisionalContact(
         unsafeContactId: String,
-        source: Model.ContactSource? = null
+        source: Model.ContactSource? = null,
+        verificationLevel: Model.VerificationLevel = Model.VerificationLevel.VERIFIED,
     ): ProvisionalContactResult {
-        db.get<Model.Contact>(Schema.PATH_ME)?.let { me ->
-            if (me.displayName.isNullOrEmpty()) {
-                throw InvalidDisplayNameException()
-            }
-        }
-
         val contactId = unsafeContactId.sanitizedContactId
 
         val expiresAt = now + provisionalContactsExpireAfterSeconds.secondsToMillis
         val provisionalContactBuilder = Model.ProvisionalContact.newBuilder()
             .setContactId(contactId)
             .setExpiresAt(expiresAt)
-        source?.let { it -> provisionalContactBuilder.source = source }
+            .setVerificationLevel(verificationLevel)
+        source?.let { _ -> provisionalContactBuilder.source = source }
         val provisionalContact = provisionalContactBuilder.build()
 
         var mostRecentHelloTs = 0L
@@ -740,14 +734,11 @@ class Messaging(
         contactId: String,
         final: Boolean = false,
     ) {
-        tx.get<Model.Contact>(Schema.PATH_ME).let { me ->
-            val hello = Model.Hello.newBuilder()
-                .setDisplayName(me!!.displayName)
-                .setFinal(final)
-                .build().toByteString()
-            send(tx, contactId) { out ->
-                out.hello = hello
-            }
+        val hello = Model.Hello.newBuilder()
+            .setFinal(final)
+            .build().toByteString()
+        send(tx, contactId) { out ->
+            out.hello = hello
         }
     }
 
@@ -1096,14 +1087,12 @@ class Messaging(
         db.list<Model.StoredMessage>(Schema.PATH_MESSAGES.path("%"))
             .forEach { msg ->
                 knownAttachmentPaths.addAll(
-                    msg.value.attachmentsMap.values.map {
-                        attachment ->
+                    msg.value.attachmentsMap.values.map { attachment ->
                         attachment.encryptedFilePath
                     }
                 )
                 knownAttachmentPaths.addAll(
-                    msg.value.attachmentsMap.values.map {
-                        attachment ->
+                    msg.value.attachmentsMap.values.map { attachment ->
                         attachment.thumbnail.encryptedFilePath
                     }
                 )
@@ -1152,7 +1141,8 @@ class Messaging(
         doIntroduce(unsafeRecipientIds) { to ->
             Model.IntroductionDetails.newBuilder()
                 .setTo(to.contactId)
-                .setDisplayName(to.displayName).build()
+                .setDisplayName(to.displayName)
+                .setVerificationLevel(to.verificationLevel).build()
         }
     }
 
@@ -1197,12 +1187,18 @@ class Messaging(
             db.mutate { tx ->
                 val introductionMessage = tx.introductionMessage(fromId, toId)?.value?.value
                     ?: throw IllegalArgumentException("Introduction not found")
+                val introducer = tx.get<Model.Contact>(fromId.directContactPath)
+                    ?: throw IllegalArgumentException("Introducer not found")
 
                 val introduction = introductionMessage.introduction
                 doAddOrUpdateContact(introduction.to.id.directContactId) { contact, isNew ->
                     if (isNew) {
                         contact.displayName = introduction.displayName
                         contact.source = Model.ContactSource.INTRODUCTION
+                        contact.verificationLevelValue =
+                            introducer.verificationLevelValue.coerceAtMost(
+                                introduction.verificationLevelValue
+                            )
                     }
                 }
 
@@ -1231,6 +1227,10 @@ class Messaging(
         db.get<String>(fromId.introductionIndexPathByFrom(toId))?.let { path ->
             deleteLocally(path)
         }
+
+        db.get<String>(toId.introductionIndexPathByTo(fromId))?.let { path ->
+            deleteLocally(path)
+        }
     }
 
     /**
@@ -1256,6 +1256,16 @@ class Messaging(
         snippetConfig: SnippetConfig = SnippetConfig(numTokens = 10),
     ): List<SearchResult<Model.StoredMessage>> =
         db.search(Schema.PATH_MESSAGES.path("%"), query, snippetConfig)
+
+    internal fun numericFingerprintFor(contactId: Model.ContactId): String =
+        NumericFingerprintGenerator(fingerprintIterations)
+            .createFor(
+                0,
+                emptyBytes,
+                listOf(ECPublicKey(myId.id)),
+                emptyBytes,
+                listOf(ECPublicKey(contactId.id))
+            ).displayableFingerprint.displayText
 
     /**
      * Closes this Messaging instance, including stopping all workers and disconnecting from tassis.
@@ -1329,15 +1339,10 @@ internal val invalidDisplayNameCharacters = Regex("[^\\p{L}\\p{N} ]")
 internal val multipleSpaces = Regex(" +")
 
 internal val String.sanitizedDisplayName: String
-    @Throws(InvalidDisplayNameException::class)
     get() {
-        val sanitized = this.replace(invalidDisplayNameCharacters, "")
+        return this.replace(invalidDisplayNameCharacters, "")
             .replace(multipleSpaces, " ")
             .trim()
-        if (sanitized.isEmpty()) {
-            throw InvalidDisplayNameException()
-        }
-        return sanitized
     }
 
 val Model.StoredAttachment.inputStream: InputStream

@@ -173,7 +173,8 @@ internal class CryptoWorker(
             if (hasIntroduction()) {
                 msgBuilder.introduction = Model.Introduction.newBuilder()
                     .setId(introduction.to.id.fromBase32.byteString())
-                    .setDisplayName(introduction.displayName).build()
+                    .setDisplayName(introduction.displayName)
+                    .setVerificationLevel(introduction.verificationLevel).build()
             }
             return msgBuilder.build()
         }
@@ -760,14 +761,6 @@ internal class CryptoWorker(
     internal fun doDecryptAndStore(unidentifiedSenderMessage: ByteArray) {
         try {
             attemptDecryptAndStore(unidentifiedSenderMessage)
-        } catch (e: UnknownSenderException) {
-            logger.error("message from unknown sender, saving to spam")
-            db.mutate { tx ->
-                tx.put(
-                    e.senderId.randomSpamPath,
-                    unidentifiedSenderMessage
-                )
-            }
         } catch (e: Exception) {
             logger.error(
                 "unexpected problem decrypting and storing message, dropping: ${e.message}", e
@@ -792,7 +785,13 @@ internal class CryptoWorker(
                     }
                 else ->
                     if (!tx.contains(senderId.directContactPath)) {
-                        throw UnknownSenderException(senderId)
+                        // automatically add unaccepted contact
+                        messaging.addOrUpdateContact(
+                            senderId.directContactId,
+                            "",
+                            Model.ContactSource.UNSOLICITED,
+                            initialVerificationLevel = Model.VerificationLevel.UNACCEPTED
+                        )
                     }
             }
 
@@ -863,7 +862,8 @@ internal class CryptoWorker(
             val introduction = Model.IntroductionDetails.newBuilder()
                 .setTo(toId)
                 .setDisplayName(sanitizedDisplayName)
-                .setOriginalDisplayName(sanitizedDisplayName).build()
+                .setOriginalDisplayName(sanitizedDisplayName)
+                .setVerificationLevel(msg.introduction.verificationLevel).build()
             storedMsgBuilder.introduction = introduction
 
             // Delete any existing introduction message of this kind
@@ -967,13 +967,13 @@ internal class CryptoWorker(
         hello: Model.Hello
     ) {
         val provisionalContactPath = senderId.provisionalContactPath
-        tx.get<Model.ProvisionalContact>(provisionalContactPath)?.let {
+        tx.get<Model.ProvisionalContact>(provisionalContactPath)?.let { provisionalContact ->
             messaging.doAddOrUpdateContact(senderId.directContactId) { contact, isNew ->
                 if (isNew) {
-                    contact.displayName = hello.displayName
-                    it.source?.let { contact.source = it }
+                    provisionalContact.source?.let { source -> contact.source = source }
                 }
                 contact.mostRecentHelloTs = now
+                contact.verificationLevel = provisionalContact.verificationLevel
             }
             tx.delete(senderId.provisionalContactPath)
             if (!hello.final) {
