@@ -55,12 +55,7 @@ class MessagingTest : BaseMessagingTest() {
             "The Name 經被這些工業 5",
             " \n\tThe    \uD83D\uDE00\n\tName 經被這些工業 5\n\t  ".sanitizedDisplayName
         )
-        try {
-            " \n\t\uD83D\uDE00\n\t\uD83D\uDE02\n\t  ".sanitizedDisplayName
-            fail("display name with only invalid characters should raise exception")
-        } catch (e: InvalidDisplayNameException) {
-            // expected
-        }
+        assertTrue(" \n\t\uD83D\uDE00\n\t\uD83D\uDE02\n\t  ".sanitizedDisplayName.isNullOrEmpty())
     }
 
     @Test
@@ -263,20 +258,6 @@ class MessagingTest : BaseMessagingTest() {
                             logger.debug("Cat is $catId")
                             logger.debug("Dog is $dogId")
 
-                            dog.unsafeSetMyDisplayName("")
-                            try {
-                                dog.addProvisionalContact(catId)
-                                fail("should not be allowed to add provisional contacts while our displayName is blank") // ktlint-disable max-line-length
-                            } catch (e: InvalidDisplayNameException) {
-                                // okay
-                            }
-
-                            // We use unsafeSetMyDisplayName to keep the name from being sanitized
-                            // here, which allows us to test that it gets sanitized when the
-                            // provisional contact turns into a real contact.
-                            dog.unsafeSetMyDisplayName("\uD83D\uDE00   The Dog\n")
-                            cat.unsafeSetMyDisplayName("\uD83D\uDE00   The Cat\n")
-
                             try {
                                 dog.addProvisionalContact(
                                     // This is the length of a real public key, but has some
@@ -297,19 +278,22 @@ class MessagingTest : BaseMessagingTest() {
                             )
                             assertEquals(
                                 0,
-                                cat.addProvisionalContact(dogId).mostRecentHelloTsMillis
+                                cat.addProvisionalContact(
+                                    dogId,
+                                    verificationLevel = Model.VerificationLevel.UNVERIFIED
+                                ).mostRecentHelloTsMillis
                             )
 
                             val catContact = dog.waitFor<Model.Contact>(
                                 catId.directContactPath,
-                                "dog should end up with cat contact"
+                                "dog should end up with verified cat contact"
                             ) {
-                                it.mostRecentHelloTs > 0
+                                it.mostRecentHelloTs > 0 &&
+                                    it.verificationLevel == Model.VerificationLevel.VERIFIED
                             }
-                            assertEquals(
-                                "The Cat",
-                                catContact.displayName,
-                                "Cat contact should have the right display name"
+                            assertTrue(
+                                catContact.displayName.isNullOrEmpty(),
+                                "Cat contact should have no display name"
                             )
                             assertEquals(
                                 Model.ContactSource.APP1,
@@ -319,14 +303,15 @@ class MessagingTest : BaseMessagingTest() {
 
                             val dogContact = cat.waitFor<Model.Contact>(
                                 dogId.directContactPath,
-                                "cat should end up with dog contact"
+                                "cat should end up with unverified dog contact"
                             ) {
-                                it.mostRecentHelloTs > 0
+                                it.mostRecentHelloTs > 0 &&
+                                    it.verificationLevel ==
+                                    Model.VerificationLevel.UNVERIFIED
                             }
-                            assertEquals(
-                                "The Dog",
-                                dogContact.displayName,
-                                "Dog contact should have the right display name"
+                            assertTrue(
+                                dogContact.displayName.isNullOrEmpty(),
+                                "Dog contact should have no display name"
                             )
 
                             assertEquals(
@@ -447,11 +432,6 @@ class MessagingTest : BaseMessagingTest() {
                             dog.db.get<Model.Contact>(Schema.PATH_ME),
                             "self-contact should exist"
                         )
-                        dog.setMyDisplayName("\uD83D\uDE00   Im a Dog\n")
-                        assertEquals(
-                            "Im a Dog",
-                            dog.db.get<Model.Contact>(Schema.PATH_ME)?.displayName
-                        )
 
                         val hugeLength = Long.MAX_VALUE -
                             AttachmentCipherOutputStream.MAXIMUM_ENCRYPTION_OVERHEAD
@@ -513,8 +493,8 @@ class MessagingTest : BaseMessagingTest() {
                         logger.debug("reopen dog to make sure we can pick up where we left off")
                         dog = newMessaging(dogDB, "dog")
 
-                        // start the Messaging system for cat, which will result in the registration of pre
-                        // keys, allowing the message to send successfully
+                        // start the Messaging system for cat, which will result in the registration\
+                        // of pre keys, allowing the message to send successfully
                         newMessaging(catDB, "cat").with { cat ->
                             val sentMsgFromDB =
                                 dog.waitFor<Model.StoredMessage>(
@@ -1476,9 +1456,14 @@ class MessagingTest : BaseMessagingTest() {
         // first connect owner with all the pets
         owner.addOrUpdateDirectContact(dogId, "Dog")
         dog.addOrUpdateDirectContact(ownerId, "Owner")
+        dog.markContactVerified(ownerId)
         owner.addOrUpdateDirectContact(catId, "Cat")
         cat.addOrUpdateDirectContact(ownerId, "Owner")
-        owner.addOrUpdateDirectContact(fishId, "Fish")
+        owner.addOrUpdateDirectContact(
+            fishId,
+            "Fish",
+            initialVerificationLevel = Model.VerificationLevel.VERIFIED
+        )
         fish.addOrUpdateDirectContact(ownerId, "Owner")
 
         // call introduce with too few arguments
@@ -1497,7 +1482,7 @@ class MessagingTest : BaseMessagingTest() {
                 .build()
         }
 
-        // introduce all pets, including dog and cat again, to make sure we can handle duplicate
+        // introduce all pets again, including dog and cat, to make sure we can handle duplicate
         // introductions
         owner.introduce(listOf(dogId, catId, fishId.toUpperCase()))
 
@@ -1555,6 +1540,11 @@ class MessagingTest : BaseMessagingTest() {
         )
 
         dog.acceptIntroduction(ownerId, fishId)
+        assertEquals(
+            Model.VerificationLevel.VERIFIED,
+            dog.db.get<Model.Contact>(fishId.directContactPath)?.verificationLevel,
+            "intro to verified contact from verified contact should look verified"
+        )
         cat.acceptIntroduction(ownerId, dogId.toUpperCase())
         dog.waitFor<Model.Contact>(
             catId.directContactPath,
@@ -1603,10 +1593,16 @@ class MessagingTest : BaseMessagingTest() {
             fishContact?.displayName,
             "displayName on Contact should match version from accepted introduction"
         )
+        assertEquals(
+            Model.VerificationLevel.UNVERIFIED,
+            cat.db.get<Model.Contact>(fishId.directContactPath)?.verificationLevel,
+            "intro to verified contact from unverified contact should look unverified"
+        )
 
         // test deleting introduction messages
         fish.rejectIntroduction(ownerId, dogId)
         fish.rejectIntroduction(ownerId, catId.toUpperCase())
+        fish.rejectIntroduction(dogId, catId)
         assertNull(
             fish.db.findOne(Schema.PATH_INTRODUCTIONS_BY_TO.path("%")),
             "all introductions by to index entries should be deleted"
