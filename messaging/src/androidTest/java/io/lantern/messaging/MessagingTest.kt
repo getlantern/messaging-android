@@ -1672,6 +1672,16 @@ class MessagingTest : BaseMessagingTest() {
         }
     }
 
+    @Test
+    fun testHue() {
+        for (i in 1..1000) {
+            val publicKey = KeyHelper.generateIdentityKeyPair().publicKey.toString()
+            val id = Model.ContactId.newBuilder().setId(publicKey).build()
+            val hue = id.hue
+            assertTrue(hue in 0..360)
+        }
+    }
+
     private fun testInCoroutine(fn: suspend () -> Unit) {
         var thrown: Throwable? = null
         runBlocking {

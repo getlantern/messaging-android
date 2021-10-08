@@ -20,7 +20,9 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.math.BigInteger
 import java.nio.ByteBuffer
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -314,6 +316,7 @@ class Messaging(
                 contactBuilder.messagesDisappearAfterSeconds =
                     defaultMessagesDisappearAfterSeconds
                 contactBuilder.numericFingerprint = numericFingerprintFor(contactId)
+                contactBuilder.hue = contactId.hue
             }
             update(contactBuilder, isNew)
             contactBuilder.displayName = contactBuilder.displayName.sanitizedDisplayName
@@ -1352,3 +1355,16 @@ val Model.StoredAttachment.inputStream: InputStream
         attachment.keyMaterial.toByteArray(),
         attachment.digest.toByteArray()
     )
+
+private val maxSha256Hash = BigInteger.valueOf(2).pow(256)
+
+private val numberOfHues = BigInteger.valueOf(360)
+
+/**
+ * Calculates a hue between 0 and 360 inclusive.
+ */
+val Model.ContactId.hue: Int
+    get() {
+        val bytes = MessageDigest.getInstance("SHA-256").digest(id.fromBase32)
+        return BigInteger(1, bytes).times(numberOfHues).div(maxSha256Hash).toInt()
+    }

@@ -56,6 +56,7 @@ message Contact {
   int64 mostRecentHelloTs = 12; // the timestamp of the most recent hello received from this Contact (used for bidirectional contact adding)
   VerificationLevel verificationLevel = 15; // how well do we know this contact
   string numericFingerprint = 16; // a numeric fingerprint of this contact (depends on our own messenger ID)
+  int32 hue = 17; // hue for colorizing this contact, value between 0 and 360 inclusive
 }
 
 // A provisional direct contact that is not yet in the address book. If we receive a Hello from that

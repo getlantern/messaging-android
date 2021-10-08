@@ -52,6 +52,17 @@ class Migrations(private val messaging: Messaging) {
                         tx.delete(spamPath)
                     }
             }
+        },
+
+        2 to { tx ->
+            // calculate new hue field for all contacts
+            tx.list<Model.Contact>(Schema.PATH_CONTACTS.path("%")).forEach { contact ->
+                tx.put(
+                    contact.path,
+                    contact.value.toBuilder()
+                        .setHue(contact.value.contactId.hue).build()
+                )
+            }
         }
     )
 }
