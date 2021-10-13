@@ -761,6 +761,8 @@ internal class CryptoWorker(
     internal fun doDecryptAndStore(unidentifiedSenderMessage: ByteArray) {
         try {
             attemptDecryptAndStore(unidentifiedSenderMessage)
+        } catch (e: BlockedSenderException) {
+            logger.error("message from blocked sender, dropping")
         } catch (e: Exception) {
             logger.error(
                 "unexpected problem decrypting and storing message, dropping: ${e.message}", e
@@ -775,16 +777,16 @@ internal class CryptoWorker(
             val transferMsg = Model.TransferMessage.parseFrom(plainText)
             val senderAddress = decryptionResult.senderAddress
             val senderId = senderAddress.identityKey.toString()
+            val sender = tx.get<Model.Contact>(senderId.directContactPath)
+            val senderUnknown = sender == null
 
             when (transferMsg.contentCase) {
                 Model.TransferMessage.ContentCase.HELLO ->
-                    if (!tx.contains(senderId.directContactPath) &&
-                        !tx.contains(senderId.provisionalContactPath)
-                    ) {
+                    if (senderUnknown && !tx.contains(senderId.provisionalContactPath)) {
                         throw UnknownProvisionalSenderException()
                     }
                 else ->
-                    if (!tx.contains(senderId.directContactPath)) {
+                    if (senderUnknown) {
                         // automatically add unaccepted contact
                         messaging.addOrUpdateContact(
                             senderId.directContactId,
@@ -792,6 +794,8 @@ internal class CryptoWorker(
                             Model.ContactSource.UNSOLICITED,
                             initialVerificationLevel = Model.VerificationLevel.UNACCEPTED
                         )
+                    } else if (sender!!.blocked) {
+                        throw BlockedSenderException(senderId)
                     }
             }
 
@@ -848,25 +852,23 @@ internal class CryptoWorker(
 
         // save the introduction if one was included
         if (msg.hasIntroduction()) {
+            val sender = tx.get<Model.Contact>(senderId.directContactPath)!!
             val toId = msg.introduction.id.directContactID.sanitized
-
-            val matchingContact = tx.findOne<Model.Contact>(
-                toId.contactPath
-            )
-            if (matchingContact != null) {
-                logger.debug("received introduction to known contact, ignoring")
-                return
-            }
+            val constrainedVerificationLevelValue =
+                msg.introduction.verificationLevelValue.coerceAtMost(
+                    sender.verificationLevelValue
+                )
 
             val sanitizedDisplayName = msg.introduction.displayName.sanitizedDisplayName
             val introduction = Model.IntroductionDetails.newBuilder()
                 .setTo(toId)
                 .setDisplayName(sanitizedDisplayName)
                 .setOriginalDisplayName(sanitizedDisplayName)
-                .setVerificationLevel(msg.introduction.verificationLevel).build()
+                .setVerificationLevel(msg.introduction.verificationLevel)
+                .setConstrainedVerificationLevelValue(constrainedVerificationLevelValue).build()
             storedMsgBuilder.introduction = introduction
 
-            // Delete any existing introduction message of this kind
+            // Delete any existing introduction message of this kind from the same sender.
             // This ensures that at any given time, we have at most one introduction message for
             // a given combination of from/to (i.e. each the conversation only has one introduction
             // message per distinct contact)
@@ -923,6 +925,18 @@ internal class CryptoWorker(
         messaging.updateContactMetaData(tx, storedMsg)
         // save a pointer to the message under the contact message path
         tx.put(storedMsg.contactMessagePath, storedMsg.dbPath)
+
+        if (msg.hasIntroduction()) {
+            messaging.updateBestIntroduction(tx, storedMsg.introduction.to)
+
+            val toId = msg.introduction.id.directContactID.sanitized
+            tx.findOne<Model.Contact>(toId.contactPath)?.let { existingContact ->
+                if (existingContact.verificationLevel > Model.VerificationLevel.UNACCEPTED) {
+                    // we got an introduction to an existing accepted contact, automatically accept
+                    messaging.doAcceptIntroduction(senderId, toId.id)
+                }
+            }
+        }
     }
 
     private fun storeReaction(tx: Transaction, senderId: String, reaction: Model.Reaction) {

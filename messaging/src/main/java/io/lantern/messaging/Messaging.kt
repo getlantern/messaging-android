@@ -24,6 +24,7 @@ import java.math.BigInteger
 import java.nio.ByteBuffer
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -43,6 +44,12 @@ import org.whispersystems.signalservice.internal.util.Util
  * sender (i.e. someone not in the list of provisional contacts)
  */
 class UnknownProvisionalSenderException : Exception("Unknown provisional sender")
+
+/**
+ * This exception indicates that a message was received from a blocked sender.
+ */
+class BlockedSenderException(internal val senderId: String) :
+    Exception("Blocked sender")
 
 /**
  * This exception indicates that an attempt was made to upload an attachment larger than the
@@ -275,9 +282,8 @@ class Messaging(
             applicationIds?.let { it ->
                 contact.putAllApplicationIds(it)
             }
-            if (isNew) {
-                contact.verificationLevel = initialVerificationLevel
-            }
+            contact.verificationLevelValue =
+                initialVerificationLevel.number.coerceAtLeast(contact.verificationLevelValue)
         }
 
     /**
@@ -285,17 +291,32 @@ class Messaging(
      */
     fun acceptDirectContact(unsafeId: String) =
         doAddOrUpdateContact(unsafeId.directContactId) { contact, _ ->
-            if (contact.verificationLevel == Model.VerificationLevel.UNACCEPTED) {
-                contact.verificationLevel = Model.VerificationLevel.UNVERIFIED
-            }
+            contact.verificationLevel = Model.VerificationLevel.UNVERIFIED
         }
 
     /**
      * Marks a contact as VERIFIED.
      */
-    fun markContactVerified(unsafeId: String) =
+    fun markDirectContactVerified(unsafeId: String) =
         doAddOrUpdateContact(unsafeId.directContactId) { contact, _ ->
             contact.verificationLevel = Model.VerificationLevel.VERIFIED
+        }
+
+    /**
+     * Blocks a direct contact, resulting in all of their past and future communication going into a
+     * spam folder.
+     */
+    fun blockDirectContact(unsafeId: String) =
+        doAddOrUpdateContact(unsafeId.directContactId) { contact, _ ->
+            contact.blocked = true
+        }
+
+    /**
+     * Unblocks a direct contact, allowing us to receive messages from this contact again.
+     */
+    fun unblockDirectContact(unsafeId: String) =
+        doAddOrUpdateContact(unsafeId.directContactId) { contact, _ ->
+            contact.blocked = false
         }
 
     @Throws(InvalidKeyException::class)
@@ -316,12 +337,47 @@ class Messaging(
                 contactBuilder.messagesDisappearAfterSeconds =
                     defaultMessagesDisappearAfterSeconds
                 contactBuilder.numericFingerprint = numericFingerprintFor(contactId)
-                contactBuilder.hue = contactId.hue
             }
             update(contactBuilder, isNew)
             contactBuilder.displayName = contactBuilder.displayName.sanitizedDisplayName
             val contact = contactBuilder.build()
             tx.put(path, contact, fullText = contact.fullText)
+
+            val wasBlocked = existingContact?.blocked == true
+            val becameBlocked = !wasBlocked && contact.blocked
+            if (becameBlocked) {
+                // contact became blocked, delete messages and such
+                deleteContactActivity(tx, contact.contactId)
+            }
+
+            val verificationLevelChanged =
+                existingContact != null &&
+                    existingContact.verificationLevel != contact.verificationLevel
+            if (verificationLevelChanged) {
+                // when verification level changes, update the constrained verification level on all
+                // invitations from this contact.
+                val introductions =
+                    tx.listDetails<Model.StoredMessage>(contactId.introductionMessagesFromQuery)
+                introductions.forEach { msg ->
+                    val updatedIntroduction = msg.value.introduction.toBuilder()
+                        .setConstrainedVerificationLevelValue(
+                            msg.value.introduction.verificationLevelValue.coerceAtMost(
+                                contact.verificationLevelValue
+                            )
+                        ).build()
+                    tx.put(
+                        msg.detailPath,
+                        msg.value.toBuilder().setIntroduction(updatedIntroduction).build()
+                    )
+                }
+
+                // also update the best introductions for all relevant introductions
+                tx.listDetails<Model.StoredMessage>(contactId.introductionMessagesFromQuery)
+                    .forEach { introduction ->
+                        updateBestIntroduction(tx, introduction.value.introduction.to)
+                    }
+            }
+
             if (isNew) {
                 // send our disappear settings as a kind of "hello", that also makes sure we're in sync on retention period
                 sendDisappearSettings(
@@ -330,6 +386,7 @@ class Messaging(
                     contact.messagesDisappearAfterSeconds
                 )
             }
+
             contact
         }
     }
@@ -404,12 +461,7 @@ class Messaging(
         // session
         return cryptoWorker.submitForValue {
             db.mutate { tx ->
-                tx.list<String>(contactId.contactMessagesQuery)
-                    .forEach { doDeleteLocally(tx, it.value) }
-                db.listPaths(contactId.contactByActivityQuery).forEach {
-                    tx.delete(it)
-                }
-                tx.listPaths(contactId.spamQuery).forEach { path -> tx.delete(path) }
+                deleteContactActivity(tx, contactId)
                 when (contactId.type) {
                     Model.ContactType.DIRECT -> {
                         store.deleteAllSessions(contactId.id)
@@ -421,6 +473,15 @@ class Messaging(
                 tx.delete(contactId.contactPath)
             }
         }
+    }
+
+    private fun deleteContactActivity(tx: Transaction, contactId: Model.ContactId) {
+        tx.list<String>(contactId.contactMessagesQuery)
+            .forEach { doDeleteLocally(tx, it.value) }
+        db.listPaths(contactId.contactByActivityQuery).forEach {
+            tx.delete(it)
+        }
+        tx.listPaths(contactId.introductionMessagesFromQuery).forEach { path -> tx.delete(path) }
     }
 
     // TODO: implement the below using a GroupCipher
@@ -845,6 +906,7 @@ class Messaging(
                     // Delete index entries for introductions
                     tx.delete(msg.senderId.introductionIndexPathByFrom(msg.introduction.to.id))
                     tx.delete(msg.introduction.to.id.introductionIndexPathByTo(msg.senderId))
+                    updateBestIntroduction(tx, msg.introduction.to)
                 }
 
                 // Update the Contact metadata based on the most recent remaining message
@@ -1171,10 +1233,7 @@ class Messaging(
             introducedParties.forEach { a ->
                 introducedParties.forEach { b ->
                     if (a.contactId.id != b.contactId.id) {
-                        sendToDirectContact(
-                            a.contactId.id,
-                            introduction = buildIntroduction(b)
-                        )
+                        sendToDirectContact(a.contactId.id, introduction = buildIntroduction(b))
                     }
                 }
             }
@@ -1187,39 +1246,49 @@ class Messaging(
         val toId = unsafeToId.sanitizedContactId
 
         cryptoWorker.submitForValue {
-            db.mutate { tx ->
-                val introductionMessage = tx.introductionMessage(fromId, toId)?.value?.value
-                    ?: throw IllegalArgumentException("Introduction not found")
-                val introducer = tx.get<Model.Contact>(fromId.directContactPath)
-                    ?: throw IllegalArgumentException("Introducer not found")
+            doAcceptIntroduction(fromId, toId)
+        }
+    }
 
-                val introduction = introductionMessage.introduction
-                doAddOrUpdateContact(introduction.to.id.directContactId) { contact, isNew ->
-                    if (isNew) {
-                        contact.displayName = introduction.displayName
-                        contact.source = Model.ContactSource.INTRODUCTION
-                        contact.verificationLevelValue =
-                            introducer.verificationLevelValue.coerceAtMost(
-                                introduction.verificationLevelValue
-                            )
-                    }
-                }
+    internal fun doAcceptIntroduction(fromId: String, toId: String) {
+        db.mutate { tx ->
+            val introductionMessage = tx.introductionMessage(fromId, toId)?.value?.value
+                ?: throw IllegalArgumentException("Introduction not found")
+            tx.get<Model.Contact>(fromId.directContactPath)
+                ?: throw IllegalArgumentException("Introducer not found")
 
-                // Update status on all introductions
-                tx.introductionMessagesTo(toId).forEach {
-                    val updatedIntroduction = it.value.introduction.toBuilder()
-                        .setStatus(
-                            Model.IntroductionDetails.IntroductionStatus.ACCEPTED
-                        )
-                        // we update the displayName on all introductions to match the name that we
-                        // accepted
-                        .setDisplayName(introduction.displayName.sanitizedDisplayName).build()
-                    tx.put(
-                        it.value.dbPath,
-                        it.value.toBuilder().setIntroduction(updatedIntroduction).build()
-                    )
+            val introduction = introductionMessage.introduction
+            doAddOrUpdateContact(introduction.to.id.directContactId) { contact, isNew ->
+                if (isNew) {
+                    contact.displayName = introduction.displayName
+                    contact.source = Model.ContactSource.INTRODUCTION
+                    contact.verificationLevel =
+                        introduction.constrainedVerificationLevel
+                } else if (
+                    introduction.constrainedVerificationLevel > contact.verificationLevel
+                ) {
+                    // auto-upgrade contact's verification level
+                    contact.verificationLevel = introduction.verificationLevel
                 }
             }
+
+            // Update status on all introductions
+            tx.introductionMessagesTo(toId).forEach { msg ->
+                val updatedIntroduction = msg.value.introduction.toBuilder()
+                    .setStatus(
+                        Model.IntroductionDetails.IntroductionStatus.ACCEPTED
+                    )
+                    // we update the displayName on all introductions to match the name that we
+                    // accepted
+                    .setDisplayName(introduction.displayName.sanitizedDisplayName).build()
+                tx.put(
+                    msg.detailPath,
+                    msg.value.toBuilder().setIntroduction(updatedIntroduction).build()
+                )
+            }
+
+            // Remove "best" introduction
+            tx.delete(introduction.to.id.introductionsIndexPathBest)
         }
     }
 
@@ -1233,6 +1302,23 @@ class Messaging(
 
         db.get<String>(toId.introductionIndexPathByTo(fromId))?.let { path ->
             deleteLocally(path)
+        }
+    }
+
+    internal fun updateBestIntroduction(tx: Transaction, to: Model.ContactId) {
+        val storedIntros = tx.introductionMessagesTo(to.id).map { it.value }
+        val introsByVerificationLevel = sortedSetOf<Model.StoredMessage>(
+            { a, b ->
+                b.introduction.constrainedVerificationLevelValue -
+                    a.introduction.constrainedVerificationLevelValue
+            },
+            *storedIntros.toTypedArray()
+        )
+        if (introsByVerificationLevel.isEmpty()) {
+            tx.delete(to.id.introductionsIndexPathBest)
+        } else {
+            val bestIntro = introsByVerificationLevel.first()
+            tx.put(bestIntro.introduction.to.id.introductionsIndexPathBest, bestIntro.dbPath)
         }
     }
 
@@ -1319,7 +1405,7 @@ val now: Long
 internal val String.sanitizedContactId: String
     @Throws(InvalidKeyException::class)
     get() {
-        return ECPublicKey(this.toLowerCase().trim()).toString()
+        return ECPublicKey(this.toLowerCase(Locale.ROOT).trim()).toString()
     }
 
 /**
@@ -1356,15 +1442,12 @@ val Model.StoredAttachment.inputStream: InputStream
         attachment.digest.toByteArray()
     )
 
-private val maxSha256Hash = BigInteger.valueOf(2).pow(256)
-
-private val numberOfHues = BigInteger.valueOf(360)
+private val maxSha1Hash = BigInteger.valueOf(2).pow(160)
 
 /**
- * Calculates a hue between 0 and 360 inclusive.
+ * Calculates a SHA1 hash of the string, coerced to a scaled integer between 0 and max inclusive.
  */
-val Model.ContactId.hue: Int
-    get() {
-        val bytes = MessageDigest.getInstance("SHA-256").digest(id.fromBase32)
-        return BigInteger(1, bytes).times(numberOfHues).div(maxSha256Hash).toInt()
-    }
+fun String.sha1(max: Long = 360): Long {
+    val bytes = MessageDigest.getInstance("SHA-1").digest(this.fromBase32)
+    return BigInteger(1, bytes).times(BigInteger.valueOf(max)).div(maxSha1Hash).toLong()
+}
