@@ -1892,7 +1892,7 @@ class MessagingTest : BaseMessagingTest() {
 
     @Test
     fun testSha1() {
-        assertEquals(251, "rtfr4noprty198jhdssetbegxq4y5fsh2rfrn96x7nx7tj8tutqy".sha1(360))
+        assertEquals(173, "rtfr4noprty198jhdssetbegxq4y5fsh2rfrn96x7nx7tj8tutqy".sha1(360))
     }
 
     private fun testInCoroutine(fn: suspend () -> Unit) {
