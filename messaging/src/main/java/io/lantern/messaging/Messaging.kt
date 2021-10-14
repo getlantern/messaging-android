@@ -1447,7 +1447,7 @@ private val maxSha1Hash = BigInteger.valueOf(2).pow(160)
 /**
  * Calculates a SHA1 hash of the string, coerced to a scaled integer between 0 and max inclusive.
  */
-fun String.sha1(max: Long = 360): Long {
+fun String.sha1(max: Long): Long {
     val bytes = MessageDigest.getInstance("SHA-1").digest(this.fromBase32)
     return BigInteger(1, bytes).times(BigInteger.valueOf(max)).div(maxSha1Hash).toLong()
 }
