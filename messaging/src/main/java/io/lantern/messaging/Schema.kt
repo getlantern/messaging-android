@@ -23,6 +23,7 @@ object Schema {
     const val PATH_SPAM = "/spam"
     const val PATH_INTRODUCTIONS_BY_FROM = "/intro/from"
     const val PATH_INTRODUCTIONS_BY_TO = "/intro/to"
+    const val PATH_INTRODUCTIONS_BEST = "/intro/best"
     const val PATH_PROVISIONAL_CONTACTS = "/pc"
 }
 
@@ -92,10 +93,6 @@ val Model.Contact.timestampedIdxPath: String
 val Model.ContactId.contactByActivityQuery: String
     get() = Schema.PATH_CONTACTS_BY_ACTIVITY.path("%", pathSegment)
 
-val Model.Contact.spamQuery: String get() = contactId.spamQuery
-
-val Model.ContactId.spamQuery: String get() = Schema.PATH_SPAM.path(id, "%")
-
 val Model.StoredMessage.contactMessagePath: String
     get() =
         Schema.PATH_CONTACT_MESSAGES.path(
@@ -125,6 +122,12 @@ fun String.introductionIndexPathByFrom(toId: String) =
 
 fun String.introductionIndexPathByTo(fromId: String) =
     Schema.PATH_INTRODUCTIONS_BY_TO.path(this, fromId)
+
+val String.introductionsIndexPathBest: String
+    get() = Schema.PATH_INTRODUCTIONS_BEST.path(this)
+
+val Model.ContactId.introductionMessagesFromQuery: String
+    get() = Schema.PATH_INTRODUCTIONS_BY_FROM.path(id, "%")
 
 val ByteArray.base32: String get() = Base32.humanFriendly.encodeToString(this)
 

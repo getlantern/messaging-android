@@ -42,7 +42,7 @@ An index of all messages for a given Contact, by the sent timestamp of the messa
 An index of all messages that are supposed to auto disappear by some time (in unix milliseconds)
 
 ### /spam/[senderIdentityKey]/[timestamp]/[randomId] (Model.StoredMessage)
-Messages that aren't worth showing to the user for one reason or another.
+Messages that aren't worth showing to the user for one reason or another (not actively used anymore).
 
 ### /o/[timestamp]/[messageId] (Model.OutboundMessage)
 A queue of outbound messages that are pending send. If sending to some recipients fails, messages
@@ -60,6 +60,10 @@ whom we're being introduced.
 ### /intro/to/[toIdentityKey]/[fromIdentityKey]
 An index of Introduction messages keyed to the contact to whom we're being introduced and then the
 contact who introduced us.
+
+### /intro/best/[toIdentityKey]
+An index to the "best" introduction message for a given contact to which we're being introduced.
+"Best" means most trusted (highest verification level).
 
 ## Included Signal Code
 The included Signal code (like AttachmentCipherInputStream) comes from https://github.com/signalapp/Signal-Android, not from https://github.com/signalapp/libsignal-service-java

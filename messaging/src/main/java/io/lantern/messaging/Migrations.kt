@@ -22,7 +22,7 @@ class Migrations(private val messaging: Messaging) {
             migrations.forEach { (version, apply) ->
                 if (version > currentVersion) {
                     logger.debug("applying migration to version $version")
-                    apply(tx)
+                    apply(tx, currentVersion)
                 }
             }
             val newVersion = migrations.lastKey()
@@ -34,8 +34,8 @@ class Migrations(private val messaging: Messaging) {
     // Define migrations here. Whenever you update the messaging-android library with changes that
     // are incompatible with the prior version, add a new migration function in here with a new
     // version number that's higher than the prior migration.
-    private val migrations = sortedMapOf<Int, (tx: Transaction) -> Unit> (
-        1 to { tx ->
+    private val migrations = sortedMapOf<Int, (tx: Transaction, startingVersion: Int) -> Unit> (
+        1 to { tx, _ ->
             // Prior to this, we did not allow messages from unrecognized contacts, nor did we allow
             // explicit verification of contacts, so we mark all existing contacts UNVERIFIED.
             tx.list<Model.Contact>(Schema.PATH_CONTACTS.path("%")).forEach { contact ->
@@ -46,7 +46,7 @@ class Migrations(private val messaging: Messaging) {
                 )
 
                 // decrypt any "spam" we received from this Contact prior to adding them
-                tx.list<ByteArray>(contact.value.spamQuery)
+                tx.list<ByteArray>(Schema.PATH_SPAM.path(contact.value.contactId.id, "%"))
                     .forEach { (spamPath, unidentifiedSenderMessage) ->
                         messaging.cryptoWorker.doDecryptAndStore(unidentifiedSenderMessage)
                         tx.delete(spamPath)
@@ -54,14 +54,31 @@ class Migrations(private val messaging: Messaging) {
             }
         },
 
-        2 to { tx ->
-            // calculate new hue field for all contacts
-            tx.list<Model.Contact>(Schema.PATH_CONTACTS.path("%")).forEach { contact ->
-                tx.put(
-                    contact.path,
-                    contact.value.toBuilder()
-                        .setHue(contact.value.contactId.hue).build()
-                )
+        2 to { tx, _ ->
+            // set new constrainedVerificationLevel field on all introductions
+            tx.listDetails<Model.StoredMessage>(
+                Schema.PATH_INTRODUCTIONS_BY_FROM.path('%')
+            ).forEach { msg ->
+                val sender = tx.get<Model.Contact>(msg.value.senderId.directContactPath)
+                val msgBuilder = msg.value.toBuilder()
+                msgBuilder.introduction =
+                    msg.value.introduction.toBuilder()
+                        .setConstrainedVerificationLevelValue(
+                            if (sender == null) {
+                                Model.VerificationLevel.UNACCEPTED.number
+                            } else {
+                                msg.value.introduction.verificationLevelValue.coerceAtMost(
+                                    sender.verificationLevelValue
+                                )
+                            }
+                        ).build()
+                tx.put(msg.value.dbPath, msgBuilder.build())
+            }
+
+            tx.listDetails<Model.StoredMessage>(
+                Schema.PATH_INTRODUCTIONS_BY_TO.path('%')
+            ).groupBy { it.value.introduction.to }.keys.forEach {
+                messaging.updateBestIntroduction(tx, it)
             }
         }
     )

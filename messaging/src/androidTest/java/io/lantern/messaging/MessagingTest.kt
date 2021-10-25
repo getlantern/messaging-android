@@ -55,7 +55,7 @@ class MessagingTest : BaseMessagingTest() {
             "The Name 經被這些工業 5",
             " \n\tThe    \uD83D\uDE00\n\tName 經被這些工業 5\n\t  ".sanitizedDisplayName
         )
-        assertTrue(" \n\t\uD83D\uDE00\n\t\uD83D\uDE02\n\t  ".sanitizedDisplayName.isNullOrEmpty())
+        assertTrue(" \n\t\uD83D\uDE00\n\t\uD83D\uDE02\n\t  ".sanitizedDisplayName.isEmpty())
     }
 
     @Test
@@ -416,6 +416,59 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
+    fun testBlocking() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newDB.use { catDB ->
+                    newMessaging(dogDB, "dog").with { dog ->
+                        newMessaging(catDB, "cat").with { cat ->
+                            val dogId = dog.myId.id
+                            val catId = cat.myId.id
+
+                            dog.addOrUpdateDirectContact(catId, "Cat")
+                            sendAndVerify(
+                                "dog sends unsolicited message to cat",
+                                dog,
+                                cat,
+                                "hi cat"
+                            )
+
+                            assertEquals(
+                                1,
+                                cat.db.listPaths(Schema.PATH_MESSAGES.path("%")).size,
+                                "cat should have one message prior to blocking"
+                            )
+
+                            cat.blockDirectContact(dogId)
+                            assertEquals(
+                                0,
+                                cat.db.listPaths(Schema.PATH_MESSAGES.path("%")).size,
+                                "cat should have no messages after blocking"
+                            )
+
+                            dog.sendToDirectContact(catId, "hello again")
+                            delay(10000)
+                            assertEquals(
+                                0,
+                                cat.db.listPaths(Schema.PATH_MESSAGES.path("%")).size,
+                                "cat should have no messages after blocking even though dog sent a message" // ktlint-disable max-line-length
+                            )
+
+                            cat.unblockDirectContact(dogId)
+                            sendAndVerify(
+                                "dog sends another message to cat after being unblocked",
+                                dog,
+                                cat,
+                                "trust me now?" // ktlint-disable max-line-length
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     fun testBasicFlowWithConnectivityIssues() {
         newDB.use { dogDB ->
             newDB.use { catDB ->
@@ -457,8 +510,6 @@ class MessagingTest : BaseMessagingTest() {
                         assertEquals("Cat", storedContact.displayName)
 
                         // now send a message from dog->cat before cat has come online
-                        // because cat hasn't yet added dog as a contact, this will first go to spam
-                        // but once cat adds dog as a contact, cat should get the message
                         val input = ByteArrayInputStream(
                             "attachment for cat".toByteArray(
                                 Charsets.UTF_8
@@ -1315,7 +1366,9 @@ class MessagingTest : BaseMessagingTest() {
                                 )
 
                                 assertTrue(
-                                    dog.db.listPaths(Schema.PATH_DISAPPEARING_MESSAGES.path("%"))
+                                    dog.db.listPaths(
+                                        Schema.PATH_DISAPPEARING_MESSAGES.path("%")
+                                    )
                                         .isEmpty(),
                                     "disappearing message entry should be gone locally"
                                 )
@@ -1419,8 +1472,9 @@ class MessagingTest : BaseMessagingTest() {
         }
     }
 
-    @Test
-    fun testIntroductions() {
+    private fun testIntroductionsWith(
+        fn: suspend (Messaging, Messaging, Messaging, Messaging) -> Unit
+    ) {
         testInCoroutine {
             newDB.use { dogDB ->
                 newDB.use { catDB ->
@@ -1430,7 +1484,12 @@ class MessagingTest : BaseMessagingTest() {
                                 newMessaging(catDB, "cat").with { cat ->
                                     newMessaging(fishDB, "fish").with { fish ->
                                         newMessaging(ownerDB, "owner").with { owner ->
-                                            doTestIntroductions(dog, cat, fish, owner)
+                                            logger.debug("dogId: ${dog.myId.id}")
+                                            logger.debug("catId: ${cat.myId.id}")
+                                            logger.debug("fishId: ${fish.myId.id}")
+                                            logger.debug("ownerId: ${owner.myId.id}")
+
+                                            fn(dog, cat, fish, owner)
                                         }
                                     }
                                 }
@@ -1442,181 +1501,340 @@ class MessagingTest : BaseMessagingTest() {
         }
     }
 
-    private suspend fun doTestIntroductions(
-        dog: Messaging,
-        cat: Messaging,
-        fish: Messaging,
-        owner: Messaging
-    ) {
-        val dogId = dog.myId.id
-        val catId = cat.myId.id
-        val fishId = fish.myId.id
-        val ownerId = owner.myId.id
+    @Test
+    fun testIntroductions() {
+        testIntroductionsWith { dog, cat, fish, owner ->
+            val dogId = dog.myId.id
+            val catId = cat.myId.id
+            val fishId = fish.myId.id
+            val ownerId = owner.myId.id
 
-        // first connect owner with all the pets
-        owner.addOrUpdateDirectContact(dogId, "Dog")
-        dog.addOrUpdateDirectContact(ownerId, "Owner")
-        dog.markContactVerified(ownerId)
-        owner.addOrUpdateDirectContact(catId, "Cat")
-        cat.addOrUpdateDirectContact(ownerId, "Owner")
-        owner.addOrUpdateDirectContact(
-            fishId,
-            "Fish",
-            initialVerificationLevel = Model.VerificationLevel.VERIFIED
-        )
-        fish.addOrUpdateDirectContact(ownerId, "Owner")
+            // first connect owner with all the pets
+            owner.addOrUpdateDirectContact(dogId, "Dog")
+            dog.addOrUpdateDirectContact(ownerId, "Owner")
+            dog.markDirectContactVerified(ownerId)
+            owner.addOrUpdateDirectContact(catId, "Cat")
+            cat.addOrUpdateDirectContact(ownerId, "Owner")
+            owner.addOrUpdateDirectContact(
+                fishId,
+                "Fish",
+                initialVerificationLevel = Model.VerificationLevel.VERIFIED
+            )
+            fish.addOrUpdateDirectContact(ownerId, "Owner")
 
-        // call introduce with too few arguments
-        try {
-            owner.introduce(listOf(dogId))
-            fail("Introducing only one contact should not work")
-        } catch (e: java.lang.IllegalArgumentException) {
-            // okay
-        }
+            // call introduce with too few arguments
+            try {
+                owner.introduce(listOf(dogId))
+                fail("Introducing only one contact should not work")
+            } catch (e: java.lang.IllegalArgumentException) {
+                // okay
+            }
 
-        // Introduce dog and cat to each other. We use a custom introduction builder to mess up the
-        // displayName on the introduction to test sanitizing inbound introductions.
-        owner.doIntroduce(listOf(dogId, catId.toUpperCase())) { to ->
-            Model.IntroductionDetails.newBuilder()
-                .setDisplayName("\uD83D\uDE00   ${to.displayName}  \n")
-                .build()
-        }
+            // Introduce dog and cat to each other. We use a custom introduction builder to mess up the
+            // displayName on the introduction to test sanitizing inbound introductions.
+            owner.doIntroduce(listOf(dogId, catId.toUpperCase())) { to ->
+                Model.IntroductionDetails.newBuilder()
+                    .setDisplayName("\uD83D\uDE00   ${to.displayName}  \n")
+                    .build()
+            }
 
-        // introduce all pets again, including dog and cat, to make sure we can handle duplicate
-        // introductions
-        owner.introduce(listOf(dogId, catId, fishId.toUpperCase()))
+            // introduce all pets again, including dog and cat, to make sure we can handle duplicate
+            // introductions
+            owner.introduce(listOf(dogId, catId, fishId.toUpperCase()))
 
-        // make sure everyone received an introduction to everyone
-        val introducedParties = listOf(dog, cat, fish)
-        introducedParties.forEach { me ->
-            introducedParties.forEach { them ->
-                if (me != them) {
-                    val msgPath = me.waitFor<String>(
-                        ownerId.introductionIndexPathByFrom(them.myId.id),
-                        "${me.myId.id} should have gotten an introduction to ${them.myId.id}",
-                        duration = 60.seconds,
-                    )
-                    val msg = me.db.get<Model.StoredMessage>(msgPath)
-                    assertNotNull(msg)
-                    assertTrue(msg.hasIntroduction())
-                    assertEquals(
-                        owner.introductionsDisappearAfterSeconds,
-                        msg.disappearAfterSeconds
-                    )
-                    val allIntroductionMessagesToThem = me.db
-                        .listDetails<Model.StoredMessage>(
-                            ownerId.directContactId.contactMessagesQuery
+            // make sure everyone received an introduction to everyone
+            val introducedParties = listOf(dog, cat, fish)
+            introducedParties.forEach { me ->
+                introducedParties.forEach { them ->
+                    if (me != them) {
+                        val msgPath = me.waitFor<String>(
+                            ownerId.introductionIndexPathByFrom(them.myId.id),
+                            "${me.myId.id} should have gotten an introduction to ${them.myId.id}",
+                            duration = 60.seconds,
                         )
-                        .filter {
-                            it.value.hasIntroduction() && it.value.introduction.to == them.myId
-                        }
-                    assertEquals(
-                        1,
-                        allIntroductionMessagesToThem.size,
-                        "should have only 1 introduction message from dog to them"
-                    )
+                        val msg = me.db.get<Model.StoredMessage>(msgPath)
+                        assertNotNull(msg)
+                        assertTrue(msg.hasIntroduction())
+                        assertEquals(
+                            owner.introductionsDisappearAfterSeconds,
+                            msg.disappearAfterSeconds
+                        )
+                        val allIntroductionMessagesToThem = me.db
+                            .listDetails<Model.StoredMessage>(
+                                ownerId.directContactId.contactMessagesQuery
+                            )
+                            .filter {
+                                it.value.hasIntroduction() && it.value.introduction.to == them.myId
+                            }
+                        assertEquals(
+                            1,
+                            allIntroductionMessagesToThem.size,
+                            "should have only 1 introduction message from dog to them"
+                        )
+                    }
                 }
             }
+
+            // test accepting introductions
+            dog.acceptIntroduction(ownerId, catId)
+            val catContact = dog.db.get<Model.Contact>(catId.directContactPath)
+            assertNotNull(catContact, "dog should have a cat contact now")
+            assertEquals(catId, catContact.contactId.id)
+            assertEquals("Cat", catContact.displayName)
+            assertEquals(Model.ContactSource.INTRODUCTION, catContact.source)
+            assertEquals(
+                Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
+                dog.db.introductionMessage(ownerId, catId)?.value?.value?.introduction?.status
+            )
+
+            // send a message to cat
+            dog.sendToDirectContact(catId, text = "Hi Cat")
+            val catContactAfterSend = dog.db.get<Model.Contact>(catId.directContactPath)
+            assertFalse(
+                catContactAfterSend?.hasReceivedMessage == true,
+                "Should not have received message from cat prior to cat accepting introduction"
+            )
+
+            dog.acceptIntroduction(ownerId, fishId)
+            assertEquals(
+                Model.VerificationLevel.VERIFIED,
+                dog.db.get<Model.Contact>(fishId.directContactPath)?.verificationLevel,
+                "intro to verified contact from verified contact should look verified"
+            )
+            cat.acceptIntroduction(ownerId, dogId.toUpperCase())
+            dog.waitFor<Model.Contact>(
+                catId.directContactPath,
+                "dog's cat contact should show that it received a message after cat accepted introduction" // ktlint-disable max-line-length
+            ) {
+                it.hasReceivedMessage
+            }
+
+            // send a duplicate introduction for fish from dog to cat (but with a different displayName)
+            dog.addOrUpdateDirectContact(fishId, "Dogfish")
+            dog.introduce(listOf(catId, fishId))
+            cat.waitFor<String>(
+                dogId.introductionIndexPathByFrom(fishId),
+                "cat should have gotten an introduction to fish from dog"
+            )
+            cat.waitFor<String>(
+                ownerId.introductionIndexPathByFrom(fishId),
+                "cat should have gotten an introduction to fish from owner"
+            )
+
+            // accept the introduction and make sure status on both introduction messages is updated
+            cat.acceptIntroduction(dogId, fishId)
+            assertEquals(
+                Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
+                cat.db.introductionMessage(dogId, fishId)?.value?.value?.introduction?.status
+            )
+            var catToFishFromDog =
+                cat.db.introductionMessage(ownerId, fishId)?.value?.value
+            assertEquals(
+                Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
+                catToFishFromDog?.introduction?.status
+            )
+            assertEquals(
+                "Fish",
+                catToFishFromDog?.introduction?.originalDisplayName,
+                "originalDisplayName on introduction should be retained"
+            )
+            assertEquals(
+                "Dogfish",
+                catToFishFromDog?.introduction?.displayName,
+                "introduction should have updated to reflect accepted displayName"
+            )
+            val fishContact = cat.db.get<Model.Contact>(fishId.directContactPath)
+            assertEquals(
+                "Dogfish",
+                fishContact?.displayName,
+                "displayName on Contact should match version from accepted introduction"
+            )
+            assertEquals(
+                Model.VerificationLevel.UNVERIFIED,
+                cat.db.get<Model.Contact>(fishId.directContactPath)?.verificationLevel,
+                "intro to verified contact from unverified contact should look unverified"
+            )
+
+            // test deleting introduction messages
+            fish.rejectIntroduction(ownerId, dogId)
+            fish.rejectIntroduction(ownerId, catId.toUpperCase())
+            fish.rejectIntroduction(dogId, catId)
+            assertNull(
+                fish.db.findOne(Schema.PATH_INTRODUCTIONS_BY_TO.path("%")),
+                "all introductions by to index entries should be deleted"
+            )
+            assertNull(
+                fish.db.findOne(Schema.PATH_INTRODUCTIONS_BY_FROM.path("%")),
+                "all introductions by from index entries should be deleted"
+            )
+
+            try {
+                fish.acceptIntroduction(ownerId, dogId)
+                fail("accepting deleted introduction should not work")
+            } catch (e: java.lang.IllegalArgumentException) {
+                // okay
+            }
         }
+    }
 
-        // test accepting introductions
-        dog.acceptIntroduction(ownerId, catId)
-        val catContact = dog.db.get<Model.Contact>(catId.directContactPath)
-        assertNotNull(catContact, "dog should have a cat contact now")
-        assertEquals(catId, catContact.contactId.id)
-        assertEquals("Cat", catContact.displayName)
-        assertEquals(Model.ContactSource.INTRODUCTION, catContact.source)
-        assertEquals(
-            Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
-            dog.db.introductionMessage(ownerId, catId)?.value?.value?.introduction?.status
-        )
+    @Test
+    fun testIntroductionsBest() {
+        testIntroductionsWith { dog, cat, fish, _ ->
+            val dogId = dog.myId.id
+            val catId = cat.myId.id
+            val fishId = fish.myId.id
 
-        // send a message to cat
-        dog.sendToDirectContact(catId, text = "Hi Cat")
-        val catContactAfterSend = dog.db.get<Model.Contact>(catId.directContactPath)
-        assertFalse(
-            catContactAfterSend?.hasReceivedMessage == true,
-            "Should not have received message from cat prior to cat accepting introduction"
-        )
+            // start with unsolicited introduction from dog
+            dog.addOrUpdateDirectContact(catId, "Cat")
+            dog.addOrUpdateDirectContact(fishId, "Fish")
+            dog.markDirectContactVerified(fishId)
+            fish.markDirectContactVerified(dogId)
+            dog.introduce(listOf(catId, fishId))
 
-        dog.acceptIntroduction(ownerId, fishId)
-        assertEquals(
-            Model.VerificationLevel.VERIFIED,
-            dog.db.get<Model.Contact>(fishId.directContactPath)?.verificationLevel,
-            "intro to verified contact from verified contact should look verified"
-        )
-        cat.acceptIntroduction(ownerId, dogId.toUpperCase())
-        dog.waitFor<Model.Contact>(
-            catId.directContactPath,
-            "dog's cat contact should show that it received a message after cat accepted introduction" // ktlint-disable max-line-length
-        ) {
-            it.hasReceivedMessage
+            cat.waitFor<String>(
+                dogId.introductionIndexPathByFrom(fishId),
+                "Cat should have gotten an introduction to fish",
+            )
+            assertEquals(
+                Model.VerificationLevel.UNACCEPTED,
+                cat.db.listDetails<Model.StoredMessage>(
+                    Schema.PATH_INTRODUCTIONS_BEST.path('%')
+                ).firstOrNull()?.value?.introduction?.constrainedVerificationLevel,
+                "cat's introduction should be unaccepted since dog is unaccepted"
+            )
+
+            fish.waitFor<String>(
+                dogId.introductionIndexPathByFrom(catId),
+                "Fish should have gotten an introduction to cat",
+            )
+            assertEquals(
+                Model.VerificationLevel.UNVERIFIED,
+                fish.db.listDetails<Model.StoredMessage>(
+                    Schema.PATH_INTRODUCTIONS_BEST.path('%')
+                ).firstOrNull()?.value?.introduction?.constrainedVerificationLevel,
+                "fish's introduction should be unverified since introduction is unverified"
+            )
+
+            cat.markDirectContactVerified(dogId)
+            assertEquals(
+                Model.VerificationLevel.VERIFIED,
+                cat.db.listDetails<Model.StoredMessage>(
+                    Schema.PATH_INTRODUCTIONS_BEST.path('%')
+                ).firstOrNull()?.value?.introduction?.constrainedVerificationLevel,
+                "after verifying dog, cat's introduction should be verified"
+            )
         }
+    }
 
-        // send a duplicate introduction for fish from dog to cat (but with a different displayName)
-        dog.addOrUpdateDirectContact(fishId, "Dogfish")
-        dog.introduce(listOf(catId, fishId))
-        cat.waitFor<String>(
-            dogId.introductionIndexPathByFrom(fishId),
-            "cat should have gotten an introduction to fish from dog"
-        )
-        cat.waitFor<String>(
-            ownerId.introductionIndexPathByFrom(fishId),
-            "cat should have gotten an introduction to fish from owner"
-        )
+    @Test
+    fun testIntroductionsAutoUpgrade() {
+        testIntroductionsWith { dog, cat, fish, owner ->
+            val dogId = dog.myId.id
+            val catId = cat.myId.id
+            val fishId = fish.myId.id
+            val ownerId = owner.myId.id
 
-        // accept the introduction and make sure status on both introduction messages is updated
-        cat.acceptIntroduction(dogId, fishId)
-        assertEquals(
-            Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
-            cat.db.introductionMessage(dogId, fishId)?.value?.value?.introduction?.status
-        )
-        var catToFishFromDog =
-            cat.db.introductionMessage(ownerId, fishId)?.value?.value
-        assertEquals(
-            Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
-            catToFishFromDog?.introduction?.status
-        )
-        assertEquals(
-            "Fish",
-            catToFishFromDog?.introduction?.originalDisplayName,
-            "originalDisplayName on introduction should be retained"
-        )
-        assertEquals(
-            "Dogfish",
-            catToFishFromDog?.introduction?.displayName,
-            "introduction should have updated to reflect accepted displayName"
-        )
-        val fishContact = cat.db.get<Model.Contact>(fishId.directContactPath)
-        assertEquals(
-            "Dogfish",
-            fishContact?.displayName,
-            "displayName on Contact should match version from accepted introduction"
-        )
-        assertEquals(
-            Model.VerificationLevel.UNVERIFIED,
-            cat.db.get<Model.Contact>(fishId.directContactPath)?.verificationLevel,
-            "intro to verified contact from unverified contact should look unverified"
-        )
+            // add unverified dog contact
+            fish.addOrUpdateDirectContact(dogId, "Dog")
+            // add verified owner contact
+            fish.addOrUpdateDirectContact(
+                ownerId,
+                "Owner",
+                initialVerificationLevel = Model.VerificationLevel.VERIFIED
+            )
 
-        // test deleting introduction messages
-        fish.rejectIntroduction(ownerId, dogId)
-        fish.rejectIntroduction(ownerId, catId.toUpperCase())
-        fish.rejectIntroduction(dogId, catId)
-        assertNull(
-            fish.db.findOne(Schema.PATH_INTRODUCTIONS_BY_TO.path("%")),
-            "all introductions by to index entries should be deleted"
-        )
-        assertNull(
-            fish.db.findOne(Schema.PATH_INTRODUCTIONS_BY_FROM.path("%")),
-            "all introductions by from index entries should be deleted"
-        )
+            // start with introduction to fish from dog
+            dog.addOrUpdateDirectContact(catId, "Cat")
+            dog.addOrUpdateDirectContact(fishId, "Fish")
+            dog.introduce(listOf(catId, fishId))
 
-        try {
-            fish.acceptIntroduction(ownerId, dogId)
-            fail("accepting deleted introduction should not work")
-        } catch (e: java.lang.IllegalArgumentException) {
-            // okay
+            cat.waitFor<String>(
+                dogId.introductionIndexPathByFrom(fishId),
+                "Cat should have gotten an introduction to fish",
+            )
+            assertEquals(
+                Model.VerificationLevel.UNACCEPTED,
+                cat.db.listDetails<Model.StoredMessage>(
+                    Schema.PATH_INTRODUCTIONS_BEST.path('%')
+                ).firstOrNull()?.value?.introduction?.constrainedVerificationLevel,
+                "cat's introduction should be unaccepted since dog is unaccepted"
+            )
+
+            fish.waitFor<String>(
+                dogId.introductionIndexPathByFrom(catId),
+                "Fish should have gotten an introduction to cat",
+            )
+            assertEquals(
+                Model.VerificationLevel.UNVERIFIED,
+                fish.db.listDetails<Model.StoredMessage>(
+                    Schema.PATH_INTRODUCTIONS_BEST.path('%')
+                ).firstOrNull()?.value?.introduction?.constrainedVerificationLevel,
+                "fish's introduction should be unverified since introduction is unverified"
+            )
+
+            // Now have owner introduce fish and cat also. Unaccepted contact should be left alone,
+            // unverified contact should auto-upgrade to verified
+            fish.acceptIntroduction(dogId, catId)
+            owner.addOrUpdateDirectContact(
+                catId,
+                "Cat",
+                initialVerificationLevel = Model.VerificationLevel.VERIFIED
+            )
+            owner.addOrUpdateDirectContact(
+                fishId,
+                "Fish",
+                initialVerificationLevel = Model.VerificationLevel.VERIFIED
+            )
+            cat.addOrUpdateDirectContact(
+                ownerId,
+                "Owner",
+                initialVerificationLevel = Model.VerificationLevel.VERIFIED
+            )
+            fish.addOrUpdateDirectContact(
+                ownerId,
+                "Owner",
+                initialVerificationLevel = Model.VerificationLevel.VERIFIED
+            )
+            owner.introduce(listOf(catId, fishId))
+
+            val introductionToFishPath = cat.waitFor<String>(
+                ownerId.introductionIndexPathByFrom(fishId),
+                "Cat should have gotten an introduction from owner to fish",
+            )
+            assertEquals(
+                Model.VerificationLevel.VERIFIED,
+                cat.db.get<Model.StoredMessage>(introductionToFishPath)
+                    ?.introduction?.constrainedVerificationLevel,
+                "Cat's introduction from owner to fish should be verified"
+            )
+            assertEquals(
+                Model.VerificationLevel.VERIFIED,
+                cat.db.listDetails<Model.StoredMessage>(
+                    Schema.PATH_INTRODUCTIONS_BEST.path('%')
+                ).firstOrNull()?.value?.introduction?.constrainedVerificationLevel,
+                "cat's best introduction should be verified since owner is verified"
+            )
+            cat.acceptIntroduction(ownerId, fishId)
+            assertEquals(
+                Model.VerificationLevel.VERIFIED,
+                fish.db.get<Model.Contact>(catId.directContactPath)?.verificationLevel,
+                "Fish should now be verified in cat's db"
+            )
+
+            val introductionToCatPath = fish.waitFor<String>(
+                ownerId.introductionIndexPathByFrom(catId),
+                "Fish should have gotten an introduction from owner to cat",
+            )
+            assertEquals(
+                Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
+                fish.db.get<Model.StoredMessage>(introductionToCatPath)?.introduction?.status,
+                "Fish's introduction from owner to cat should have been auto-accepted"
+            )
+            assertEquals(
+                Model.VerificationLevel.VERIFIED,
+                fish.db.get<Model.Contact>(catId.directContactPath)?.verificationLevel,
+                "Cat should now be automatically verified in Fish's db"
+            )
         }
     }
 
@@ -1673,13 +1891,8 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
-    fun testHue() {
-        for (i in 1..1000) {
-            val publicKey = KeyHelper.generateIdentityKeyPair().publicKey.toString()
-            val id = Model.ContactId.newBuilder().setId(publicKey).build()
-            val hue = id.hue
-            assertTrue(hue in 0..360)
-        }
+    fun testSha1() {
+        assertEquals(173, "rtfr4noprty198jhdssetbegxq4y5fsh2rfrn96x7nx7tj8tutqy".sha1(360))
     }
 
     private fun testInCoroutine(fn: suspend () -> Unit) {
@@ -1986,7 +2199,7 @@ internal suspend fun Messaging.waitForNull(
 
 internal fun DB.dump() {
     val dumpString = dumpToString()
-    println("DB Dump for ${this.get<Model.Contact>(Schema.PATH_ME)?.displayName}\n===============================================\n\n${dumpString}\n\n======================================") // ktlint-disable max-line-length
+    println("DB Dump for ${this.get<Model.Contact>(Schema.PATH_ME)?.contactId?.id}\n===============================================\n\n${dumpString}\n\n======================================") // ktlint-disable max-line-length
 }
 
 internal fun DB.dumpToString(): String =
