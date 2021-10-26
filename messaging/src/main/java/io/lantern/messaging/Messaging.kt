@@ -244,7 +244,8 @@ class Messaging(
      * @param applicationIds optional map of application-specific ids to associate with the user.
      *                       ID is limited to int32.
      *                       (application IDs are added to existing set)
-     * @param initialVerificationLevel verification level to set for new contact
+     * @param minimumVerificationLevel the contact's verification will be set to the greater of this
+     *                                 or the current verificationLevel (defaults to UNVERIFIED)
      * @param updateApplicationData optional function to manipulate application specific data on the
      *                              contact
      * @return the created or updated Contact
@@ -258,8 +259,8 @@ class Messaging(
         displayName: String? = null,
         source: Model.ContactSource? = null,
         applicationIds: Map<Int, String>? = null,
-        initialVerificationLevel: Model.VerificationLevel =
-            Model.VerificationLevel.UNVERIFIED,
+        minimumVerificationLevel: Model.VerificationLevel =
+            Model.VerificationLevel.UNACCEPTED,
         updateApplicationData: ((MutableMap<String, Any>) -> Unit)? = null
     ): Model.Contact =
         cryptoWorker.submitForValue {
@@ -268,7 +269,7 @@ class Messaging(
                 displayName,
                 source,
                 applicationIds,
-                initialVerificationLevel,
+                minimumVerificationLevel,
                 updateApplicationData
             )
         }
@@ -279,7 +280,7 @@ class Messaging(
         displayName: String? = null,
         source: Model.ContactSource? = null,
         applicationIds: Map<Int, String>? = null,
-        initialVerificationLevel: Model.VerificationLevel,
+        minimumVerificationLevel: Model.VerificationLevel,
         updateApplicationData: ((MutableMap<String, Any>) -> Unit)? = null
     ): Model.Contact =
         doAddOrUpdateContact(unsafeContactId) { contact, _ ->
@@ -289,7 +290,7 @@ class Messaging(
                 contact.putAllApplicationIds(it)
             }
             contact.verificationLevelValue =
-                initialVerificationLevel.number.coerceAtLeast(contact.verificationLevelValue)
+                minimumVerificationLevel.number.coerceAtLeast(contact.verificationLevelValue)
             updateApplicationData?.let { update ->
                 val appData = mutableMapOf<String, Any>()
                 contact.applicationDataMap.forEach { (key, value) ->

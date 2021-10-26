@@ -792,7 +792,7 @@ internal class CryptoWorker(
                             senderId.directContactId,
                             "",
                             Model.ContactSource.UNSOLICITED,
-                            initialVerificationLevel = Model.VerificationLevel.UNACCEPTED
+                            minimumVerificationLevel = Model.VerificationLevel.UNACCEPTED
                         )
                     } else if (sender!!.blocked) {
                         throw BlockedSenderException(senderId)

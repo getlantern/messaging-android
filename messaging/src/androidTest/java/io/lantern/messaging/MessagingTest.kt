@@ -101,6 +101,7 @@ class MessagingTest : BaseMessagingTest() {
                                 dog.addOrUpdateDirectContact(
                                     " ${catId.toUpperCase()} ",
                                     "\uD83D\uDE00   Cat\n",
+                                    minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED,
                                     source = Model.ContactSource.APP1,
                                     applicationIds = mapOf(0 to "appid")
                                 ) { appData ->
@@ -145,6 +146,7 @@ class MessagingTest : BaseMessagingTest() {
                             val bytes = arrayOf<Byte>(5).toByteArray()
                             catContact = dog.addOrUpdateDirectContact(
                                 catId, "New     Cat",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED,
                                 applicationIds = mapOf(1 to "otherappid")
                             ) { appData ->
                                 appData["string"] = "string2"
@@ -193,7 +195,11 @@ class MessagingTest : BaseMessagingTest() {
                                 "createdTime should have been left alone"
                             )
 
-                            cat.addOrUpdateDirectContact(dogId, "Dog")
+                            cat.addOrUpdateDirectContact(
+                                dogId,
+                                "Dog",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
                             sendAndVerify(
                                 "cat sends a message to dog",
                                 cat,
@@ -255,7 +261,11 @@ class MessagingTest : BaseMessagingTest() {
                                     )
                                 }
                             }
-                            dog.addOrUpdateDirectContact(catId, "New Cat")
+                            dog.addOrUpdateDirectContact(
+                                catId,
+                                "New Cat",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
                             cat.waitFor<Model.Contact>(
                                 dogId.directContactPath,
                                 "dog's initial disappear settings should arrive"
@@ -457,7 +467,11 @@ class MessagingTest : BaseMessagingTest() {
                             val dogId = dog.myId.id
                             val catId = cat.myId.id
 
-                            dog.addOrUpdateDirectContact(catId, "Cat")
+                            dog.addOrUpdateDirectContact(
+                                catId,
+                                "Cat",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
                             sendAndVerify(
                                 "dog sends unsolicited message to cat",
                                 dog,
@@ -534,7 +548,11 @@ class MessagingTest : BaseMessagingTest() {
                         }
 
                         // first add Cat as a contact
-                        dog.addOrUpdateDirectContact(catId, "Cat")
+                        dog.addOrUpdateDirectContact(
+                            catId,
+                            "Cat",
+                            minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                        )
                         // ensure that we immediately have a Contact
                         val storedContact = dog.db.get<Model.Contact>(catId.directContactPath)
                         assertTrue(storedContact != null)
@@ -593,7 +611,11 @@ class MessagingTest : BaseMessagingTest() {
                             )
 
                             // now have cat add dog as a contact
-                            cat.addOrUpdateDirectContact(dogId, "Dog")
+                            cat.addOrUpdateDirectContact(
+                                dogId,
+                                "Dog",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
 
                             // verify that cat now has message from dog
                             val mostRecentMsg =
@@ -679,7 +701,11 @@ class MessagingTest : BaseMessagingTest() {
                         val dogId = dog.myId.id
                         val catId = catStore.identityKeyPair.publicKey.toString()
 
-                        dog.addOrUpdateDirectContact(catId, "Cat")
+                        dog.addOrUpdateDirectContact(
+                            catId,
+                            "Cat",
+                            minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                        )
                         // Immediately try to send message before cat's messaging system has come
                         // online. At this point, there are not registered pre-keys for cat, so
                         // sending will fail.
@@ -692,7 +718,11 @@ class MessagingTest : BaseMessagingTest() {
                         }
 
                         newMessaging(catDB, "cat").with { cat ->
-                            cat.addOrUpdateDirectContact(dogId, "Dog")
+                            cat.addOrUpdateDirectContact(
+                                dogId,
+                                "Dog",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
 
                             // now that cat has come online, we should get pre-keys, so try to
                             // resend
@@ -738,8 +768,16 @@ class MessagingTest : BaseMessagingTest() {
                         newMessaging(catDB, "cat").with { cat ->
                             val dogId = dog.myId.id
                             val catId = cat.myId.id
-                            dog.addOrUpdateDirectContact(catId, "Cat")
-                            cat.addOrUpdateDirectContact(dogId, "Dog")
+                            dog.addOrUpdateDirectContact(
+                                catId,
+                                "Cat",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
+                            cat.addOrUpdateDirectContact(
+                                dogId,
+                                "Dog",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
                             // lazy attachment to a non-existent file
                             val badPlainTextFile = File(tempDir, UUID.randomUUID().toString())
                             val badAttachment = dog.createAttachment(
@@ -920,9 +958,21 @@ class MessagingTest : BaseMessagingTest() {
                             val dogId = dog.store.identityKeyPair.publicKey.toString()
                             val fakeId = KeyHelper.generateIdentityKeyPair().publicKey.toString()
 
-                            cat.addOrUpdateDirectContact(dogId, "Dog")
-                            dog.addOrUpdateDirectContact(catId, "Cat")
-                            dog.addOrUpdateDirectContact(fakeId, "Fake")
+                            cat.addOrUpdateDirectContact(
+                                dogId,
+                                "Dog",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
+                            dog.addOrUpdateDirectContact(
+                                catId,
+                                "Cat",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
+                            dog.addOrUpdateDirectContact(
+                                fakeId,
+                                "Fake",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
 
                             val msg1 = dog.sendToDirectContact(catId, "hi cat")
                             dog.waitFor<Model.StoredMessage>(
@@ -1060,8 +1110,16 @@ class MessagingTest : BaseMessagingTest() {
                             val catId = cat.myId.id
                             val dogId = dog.myId.id
 
-                            dog.addOrUpdateDirectContact(catId, "Cat")
-                            cat.addOrUpdateDirectContact(dogId, "Dog")
+                            dog.addOrUpdateDirectContact(
+                                catId,
+                                "Cat",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
+                            cat.addOrUpdateDirectContact(
+                                dogId,
+                                "Dog",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
 
                             val msgs = sendAndVerify("dog sends to cat", dog, cat, "hi cat")
                             assertNotNull(msgs.received)
@@ -1129,8 +1187,16 @@ class MessagingTest : BaseMessagingTest() {
                             val catId = cat.myId.id
                             val dogId = dog.myId.id
 
-                            dog.addOrUpdateDirectContact(catId, "Cat")
-                            cat.addOrUpdateDirectContact(dogId, "Dog")
+                            dog.addOrUpdateDirectContact(
+                                catId,
+                                "Cat",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
+                            cat.addOrUpdateDirectContact(
+                                dogId,
+                                "Dog",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
 
                             val initialMsgs = sendAndVerify(
                                 "dog sends to cat", dog, cat, "hi cat",
@@ -1299,8 +1365,16 @@ class MessagingTest : BaseMessagingTest() {
                             val catId = cat.myId.id
                             val dogId = dog.myId.id
 
-                            val catContact = dog.addOrUpdateDirectContact(catId, "Cat")
-                            val dogContact = cat.addOrUpdateDirectContact(dogId, "Dog")
+                            val catContact = dog.addOrUpdateDirectContact(
+                                catId,
+                                "Cat",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
+                            val dogContact = cat.addOrUpdateDirectContact(
+                                dogId,
+                                "Dog",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
                             assertEquals(
                                 86400,
                                 catContact.messagesDisappearAfterSeconds,
@@ -1427,8 +1501,16 @@ class MessagingTest : BaseMessagingTest() {
                             val catId = cat.store.identityKeyPair.publicKey.toString()
                             val dogId = dog.store.identityKeyPair.publicKey.toString()
 
-                            cat.addOrUpdateDirectContact(dogId, "Dog")
-                            dog.addOrUpdateDirectContact(catId, "Cat")
+                            cat.addOrUpdateDirectContact(
+                                dogId,
+                                "Dog",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
+                            dog.addOrUpdateDirectContact(
+                                catId,
+                                "Cat",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
 
                             // give some time for pre keys to register
                             // TODO: would be nice to check for this more explicitly so we don't
@@ -1542,17 +1624,37 @@ class MessagingTest : BaseMessagingTest() {
             val ownerId = owner.myId.id
 
             // first connect owner with all the pets
-            owner.addOrUpdateDirectContact(dogId, "Dog")
-            dog.addOrUpdateDirectContact(ownerId, "Owner")
+            owner.addOrUpdateDirectContact(
+                dogId,
+                "Dog",
+                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+            )
+            dog.addOrUpdateDirectContact(
+                ownerId,
+                "Owner",
+                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+            )
             dog.markDirectContactVerified(ownerId)
-            owner.addOrUpdateDirectContact(catId, "Cat")
-            cat.addOrUpdateDirectContact(ownerId, "Owner")
+            owner.addOrUpdateDirectContact(
+                catId,
+                "Cat",
+                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+            )
+            cat.addOrUpdateDirectContact(
+                ownerId,
+                "Owner",
+                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+            )
             owner.addOrUpdateDirectContact(
                 fishId,
                 "Fish",
-                initialVerificationLevel = Model.VerificationLevel.VERIFIED
+                minimumVerificationLevel = Model.VerificationLevel.VERIFIED
             )
-            fish.addOrUpdateDirectContact(ownerId, "Owner")
+            fish.addOrUpdateDirectContact(
+                ownerId,
+                "Owner",
+                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+            )
 
             // call introduce with too few arguments
             try {
@@ -1642,7 +1744,11 @@ class MessagingTest : BaseMessagingTest() {
             }
 
             // send a duplicate introduction for fish from dog to cat (but with a different displayName)
-            dog.addOrUpdateDirectContact(fishId, "Dogfish")
+            dog.addOrUpdateDirectContact(
+                fishId,
+                "Dogfish",
+                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+            )
             dog.introduce(listOf(catId, fishId))
             cat.waitFor<String>(
                 dogId.introductionIndexPathByFrom(fishId),
@@ -1717,8 +1823,16 @@ class MessagingTest : BaseMessagingTest() {
             val fishId = fish.myId.id
 
             // start with unsolicited introduction from dog
-            dog.addOrUpdateDirectContact(catId, "Cat")
-            dog.addOrUpdateDirectContact(fishId, "Fish")
+            dog.addOrUpdateDirectContact(
+                catId,
+                "Cat",
+                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+            )
+            dog.addOrUpdateDirectContact(
+                fishId,
+                "Fish",
+                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+            )
             dog.markDirectContactVerified(fishId)
             fish.markDirectContactVerified(dogId)
             dog.introduce(listOf(catId, fishId))
@@ -1767,17 +1881,29 @@ class MessagingTest : BaseMessagingTest() {
             val ownerId = owner.myId.id
 
             // add unverified dog contact
-            fish.addOrUpdateDirectContact(dogId, "Dog")
+            fish.addOrUpdateDirectContact(
+                dogId,
+                "Dog",
+                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+            )
             // add verified owner contact
             fish.addOrUpdateDirectContact(
                 ownerId,
                 "Owner",
-                initialVerificationLevel = Model.VerificationLevel.VERIFIED
+                minimumVerificationLevel = Model.VerificationLevel.VERIFIED
             )
 
             // start with introduction to fish from dog
-            dog.addOrUpdateDirectContact(catId, "Cat")
-            dog.addOrUpdateDirectContact(fishId, "Fish")
+            dog.addOrUpdateDirectContact(
+                catId,
+                "Cat",
+                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+            )
+            dog.addOrUpdateDirectContact(
+                fishId,
+                "Fish",
+                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+            )
             dog.introduce(listOf(catId, fishId))
 
             cat.waitFor<String>(
@@ -1810,22 +1936,22 @@ class MessagingTest : BaseMessagingTest() {
             owner.addOrUpdateDirectContact(
                 catId,
                 "Cat",
-                initialVerificationLevel = Model.VerificationLevel.VERIFIED
+                minimumVerificationLevel = Model.VerificationLevel.VERIFIED
             )
             owner.addOrUpdateDirectContact(
                 fishId,
                 "Fish",
-                initialVerificationLevel = Model.VerificationLevel.VERIFIED
+                minimumVerificationLevel = Model.VerificationLevel.VERIFIED
             )
             cat.addOrUpdateDirectContact(
                 ownerId,
                 "Owner",
-                initialVerificationLevel = Model.VerificationLevel.VERIFIED
+                minimumVerificationLevel = Model.VerificationLevel.VERIFIED
             )
             fish.addOrUpdateDirectContact(
                 ownerId,
                 "Owner",
-                initialVerificationLevel = Model.VerificationLevel.VERIFIED
+                minimumVerificationLevel = Model.VerificationLevel.VERIFIED
             )
             owner.introduce(listOf(catId, fishId))
 
@@ -1881,6 +2007,7 @@ class MessagingTest : BaseMessagingTest() {
                     dog.addOrUpdateDirectContact(
                         otherContactId,
                         "The Dude",
+                        minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED,
                         applicationIds = mapOf(0 to "appid")
                     )
                     dog.sendToDirectContact(dogId, text = "Woof")
