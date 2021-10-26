@@ -242,11 +242,6 @@ class MessagingTest : BaseMessagingTest() {
                                 dogDbString.contains(catId),
                                 "dog's db should have no mention of cat's ID"
                             )
-                            val dogStoreDbString = dog.store.db.dumpToString()
-                            assertFalse(
-                                dogStoreDbString.contains(catId),
-                                "dog's MessagingProtocolStore.db should have no mention of cat's ID"
-                            )
 
                             cat.sendToDirectContact(dogId, "cat sent this while not a contact")
 
@@ -276,9 +271,9 @@ class MessagingTest : BaseMessagingTest() {
                             )
 
                             assertEquals(
-                                1,
+                                2,
                                 dog.db.listPaths(Schema.PATH_CONTACT_MESSAGES.path("%")).count(),
-                                "dog should have only 1 message from cat, the message sent while cat was not a contact should have been lost because it couldn't be decrypted" // ktlint-disable max-line-length
+                                "dog should have 2 messages from cat, the message sent while cat was not a contact should have been included" // ktlint-disable max-line-length
                             )
                         }
                     }
@@ -427,11 +422,6 @@ class MessagingTest : BaseMessagingTest() {
                                     assertFalse(
                                         dogDbString.contains(mouseId),
                                         "dog's db should have no mention of mouse's ID"
-                                    )
-                                    val dogStoreDbString = dog.store.db.dumpToString()
-                                    assertFalse(
-                                        dogStoreDbString.contains(mouseId),
-                                        "dog's MessagingProtocolStore.db should have no mention of mouse's ID" // ktlint-disable max-line-length
                                     )
                                 }
                             }

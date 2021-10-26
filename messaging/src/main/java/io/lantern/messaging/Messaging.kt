@@ -484,9 +484,6 @@ class Messaging(
     internal fun doDeleteProvisionalContact(contactId: String) {
         db.mutate { tx ->
             tx.delete(contactId.provisionalContactPath)
-            if (!tx.contains(contactId.directContactPath)) {
-                store.deleteAllSessions(contactId)
-            }
         }
     }
 
@@ -501,21 +498,9 @@ class Messaging(
     }
 
     private fun deleteContact(contactId: Model.ContactId) {
-        // delete contacts in crypto worker's thread to avoid race conditions on managing Signal
-        // session
-        return cryptoWorker.submitForValue {
-            db.mutate { tx ->
-                deleteContactActivity(tx, contactId)
-                when (contactId.type) {
-                    Model.ContactType.DIRECT -> {
-                        store.deleteAllSessions(contactId.id)
-                    }
-                    else -> {
-                        // TODO: support group contacts
-                    }
-                }
-                tx.delete(contactId.contactPath)
-            }
+        db.mutate { tx ->
+            deleteContactActivity(tx, contactId)
+            tx.delete(contactId.contactPath)
         }
     }
 
