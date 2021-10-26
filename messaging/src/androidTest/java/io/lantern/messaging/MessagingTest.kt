@@ -2,6 +2,7 @@ package io.lantern.messaging
 
 import androidx.test.platform.app.InstrumentationRegistry
 import io.lantern.db.DB
+import io.lantern.messaging.conversions.byteString
 import io.lantern.messaging.tassis.MessageHandler
 import io.lantern.messaging.tassis.Transport
 import io.lantern.messaging.tassis.websocket.WSListener
@@ -102,7 +103,9 @@ class MessagingTest : BaseMessagingTest() {
                                     "\uD83D\uDE00   Cat\n",
                                     source = Model.ContactSource.APP1,
                                     applicationIds = mapOf(0 to "appid")
-                                )
+                                ) { appData ->
+                                    appData["string"] = "string"
+                                }
                             val createdTs = catContact.createdTs
                             assertEquals(
                                 Model.ContactType.DIRECT,
@@ -129,12 +132,29 @@ class MessagingTest : BaseMessagingTest() {
                                 catContact.applicationIdsMap,
                                 "cat should have correct application IDs"
                             )
+                            assertEquals(
+                                mapOf(
+                                    "string" to
+                                        Model.Datum.newBuilder().setString("string").build()
+                                ),
+                                catContact.applicationDataMap,
+                                "cat should have correct app data"
+                            )
                             assertTrue(createdTs >= now, "createdTime should have been set")
 
+                            val bytes = arrayOf<Byte>(5).toByteArray()
                             catContact = dog.addOrUpdateDirectContact(
                                 catId, "New     Cat",
                                 applicationIds = mapOf(1 to "otherappid")
-                            )
+                            ) { appData ->
+                                appData["string"] = "string2"
+                                appData["double"] = 1.0
+                                appData["float"] = 2.0.toFloat()
+                                appData["long"] = 3L
+                                appData["int"] = 4
+                                appData["bool"] = true
+                                appData["bytes"] = bytes
+                            }
                             assertEquals(
                                 "New Cat",
                                 catContact.displayName,
@@ -144,6 +164,28 @@ class MessagingTest : BaseMessagingTest() {
                                 mapOf(0 to "appid", 1 to "otherappid"),
                                 catContact.applicationIdsMap,
                                 "cat should have full set of application IDs"
+                            )
+                            assertEquals(
+                                mapOf(
+                                    "string" to
+                                        Model.Datum.newBuilder().setString("string2").build(),
+                                    "double" to
+                                        Model.Datum.newBuilder().setFloat(1.0).build(),
+                                    "float" to
+                                        Model.Datum.newBuilder().setFloat(2.0).build(),
+                                    "long" to
+                                        Model.Datum.newBuilder().setInt(3).build(),
+                                    "int" to
+                                        Model.Datum.newBuilder().setInt(4).build(),
+                                    "bool" to
+                                        Model.Datum.newBuilder().setBool(true).build(),
+                                    "bytes" to
+                                        Model.Datum.newBuilder().setBytes(
+                                            bytes.byteString()
+                                        ).build(),
+                                ),
+                                catContact.applicationDataMap,
+                                "cat should have full app data"
                             )
                             assertEquals(
                                 createdTs,

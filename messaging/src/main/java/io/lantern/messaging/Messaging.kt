@@ -237,13 +237,16 @@ class Messaging(
      * Adds or updates the given direct contact.
      *
      * @param unsafeId the base32 encoded public identity key of the contact
-     * @param displayName the human-friendly display name for this contact
+     * @param displayName optional human-friendly display name for this contact
+     *                    (if unspecified, existing displayName is left alone)
      * @param source optional identifier of the source of this contact
      *               (if unspecified, existing source is left alone)
      * @param applicationIds optional map of application-specific ids to associate with the user.
      *                       ID is limited to int32.
      *                       (application IDs are added to existing set)
      * @param initialVerificationLevel verification level to set for new contact
+     * @param updateApplicationData optional function to manipulate application specific data on the
+     *                              contact
      * @return the created or updated Contact
      */
     @Throws(
@@ -252,11 +255,12 @@ class Messaging(
     )
     fun addOrUpdateDirectContact(
         unsafeId: String,
-        displayName: String,
+        displayName: String? = null,
         source: Model.ContactSource? = null,
         applicationIds: Map<Int, String>? = null,
         initialVerificationLevel: Model.VerificationLevel =
-            Model.VerificationLevel.UNVERIFIED
+            Model.VerificationLevel.UNVERIFIED,
+        updateApplicationData: ((MutableMap<String, Any>) -> Unit)? = null
     ): Model.Contact =
         cryptoWorker.submitForValue {
             addOrUpdateContact(
@@ -264,26 +268,62 @@ class Messaging(
                 displayName,
                 source,
                 applicationIds,
-                initialVerificationLevel
+                initialVerificationLevel,
+                updateApplicationData
             )
         }
 
     @Throws(InvalidKeyException::class)
     internal fun addOrUpdateContact(
         unsafeContactId: Model.ContactId,
-        displayName: String,
+        displayName: String? = null,
         source: Model.ContactSource? = null,
         applicationIds: Map<Int, String>? = null,
-        initialVerificationLevel: Model.VerificationLevel
+        initialVerificationLevel: Model.VerificationLevel,
+        updateApplicationData: ((MutableMap<String, Any>) -> Unit)? = null
     ): Model.Contact =
-        doAddOrUpdateContact(unsafeContactId) { contact, isNew ->
-            contact.displayName = displayName
+        doAddOrUpdateContact(unsafeContactId) { contact, _ ->
+            displayName?.let { contact.displayName = it }
             source?.let { it -> contact.source = it }
             applicationIds?.let { it ->
                 contact.putAllApplicationIds(it)
             }
             contact.verificationLevelValue =
                 initialVerificationLevel.number.coerceAtLeast(contact.verificationLevelValue)
+            updateApplicationData?.let { update ->
+                val appData = mutableMapOf<String, Any>()
+                contact.applicationDataMap.forEach { (key, value) ->
+                    appData[key] = when (value.valueCase) {
+                        Model.Datum.ValueCase.STRING -> value.string
+                        Model.Datum.ValueCase.FLOAT -> value.float
+                        Model.Datum.ValueCase.INT -> value.int
+                        Model.Datum.ValueCase.BOOL -> value.bool
+                        Model.Datum.ValueCase.BYTES -> value.bytes.toByteArray()
+                        Model.Datum.ValueCase.VALUE_NOT_SET ->
+                            throw Error("Value on Datum should always be set")
+                    }
+                }
+                contact.clearApplicationData()
+                update(appData)
+                val updatedAppData = mutableMapOf<String, Model.Datum>()
+                appData.forEach { (key, value) ->
+                    val datum = Model.Datum.newBuilder()
+                    when (value) {
+                        is String -> datum.string = value
+                        is Double -> datum.float = value
+                        is Float -> datum.float = value.toDouble()
+                        is Long -> datum.int = value
+                        is Int -> datum.int = value.toLong()
+                        is Boolean -> datum.bool = value
+                        is ByteArray -> datum.bytes = value.byteString()
+                        else -> throw RuntimeException(
+                            "Unrecognized value type ${value.javaClass.name}"
+                        )
+                    }
+                    updatedAppData[key] = datum.build()
+                }
+                contact.putAllApplicationData(updatedAppData)
+            }
         }
 
     /**
@@ -319,6 +359,10 @@ class Messaging(
             contact.blocked = false
         }
 
+    /**
+     * Adds or updates the contact identified by the given unsafeContactId, using the provided
+     * update function to set properties of the Contact.
+     */
     @Throws(InvalidKeyException::class)
     internal fun doAddOrUpdateContact(
         unsafeContactId: Model.ContactId,
