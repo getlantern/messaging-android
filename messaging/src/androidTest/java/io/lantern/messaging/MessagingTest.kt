@@ -101,7 +101,6 @@ class MessagingTest : BaseMessagingTest() {
                                 dog.addOrUpdateDirectContact(
                                     " ${catId.toUpperCase()} ",
                                     "\uD83D\uDE00   Cat\n",
-                                    minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED,
                                     source = Model.ContactSource.APP1,
                                     applicationIds = mapOf(0 to "appid")
                                 ) { appData ->
@@ -141,12 +140,16 @@ class MessagingTest : BaseMessagingTest() {
                                 catContact.applicationDataMap,
                                 "cat should have correct app data"
                             )
+                            assertEquals(
+                                Model.VerificationLevel.UNACCEPTED,
+                                catContact.verificationLevel,
+                                "verificationLevel should have defaulted to UNACCEPTED",
+                            )
                             assertTrue(createdTs >= now, "createdTime should have been set")
 
                             val bytes = arrayOf<Byte>(5).toByteArray()
                             catContact = dog.addOrUpdateDirectContact(
                                 catId, "New     Cat",
-                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED,
                                 applicationIds = mapOf(1 to "otherappid")
                             ) { appData ->
                                 appData["string"] = "string2"
@@ -188,6 +191,11 @@ class MessagingTest : BaseMessagingTest() {
                                 ),
                                 catContact.applicationDataMap,
                                 "cat should have full app data"
+                            )
+                            assertEquals(
+                                Model.VerificationLevel.UNACCEPTED,
+                                catContact.verificationLevel,
+                                "verificationLevel should have been left as UNACCEPTED",
                             )
                             assertEquals(
                                 createdTs,
