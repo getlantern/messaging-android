@@ -1432,7 +1432,7 @@ val now: Long
  *
  * @throws InvalidKeyException if the ID doesn't decode to the right length (52 bytes)
  */
-internal val String.sanitizedContactId: String
+val String.sanitizedContactId: String
     @Throws(InvalidKeyException::class)
     get() {
         return ECPublicKey(this.toLowerCase(Locale.ROOT).trim()).toString()
@@ -1441,7 +1441,7 @@ internal val String.sanitizedContactId: String
 /**
  * Applies #String.sanitizedContactId to a Model.ContactId.
  */
-internal val Model.ContactId.sanitized: Model.ContactId
+val Model.ContactId.sanitized: Model.ContactId
     @Throws(InvalidKeyException::class)
     get() {
         return toBuilder().setId(id.sanitizedContactId).build()
@@ -1457,7 +1457,7 @@ internal val invalidDisplayNameCharacters = Regex("[^\\p{L}\\p{N} ]")
  */
 internal val multipleSpaces = Regex(" +")
 
-internal val String.sanitizedDisplayName: String
+val String.sanitizedDisplayName: String
     get() {
         return this.replace(invalidDisplayNameCharacters, "")
             .replace(multipleSpaces, " ")
