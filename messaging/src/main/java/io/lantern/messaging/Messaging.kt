@@ -237,13 +237,17 @@ class Messaging(
      * Adds or updates the given direct contact.
      *
      * @param unsafeId the base32 encoded public identity key of the contact
-     * @param displayName the human-friendly display name for this contact
+     * @param displayName optional human-friendly display name for this contact
+     *                    (if unspecified, existing displayName is left alone)
      * @param source optional identifier of the source of this contact
      *               (if unspecified, existing source is left alone)
      * @param applicationIds optional map of application-specific ids to associate with the user.
      *                       ID is limited to int32.
      *                       (application IDs are added to existing set)
-     * @param initialVerificationLevel verification level to set for new contact
+     * @param minimumVerificationLevel the contact's verification will be set to the greater of this
+     *                                 or the current verificationLevel (defaults to UNVERIFIED)
+     * @param updateApplicationData optional function to manipulate application specific data on the
+     *                              contact
      * @return the created or updated Contact
      */
     @Throws(
@@ -252,11 +256,12 @@ class Messaging(
     )
     fun addOrUpdateDirectContact(
         unsafeId: String,
-        displayName: String,
+        displayName: String? = null,
         source: Model.ContactSource? = null,
         applicationIds: Map<Int, String>? = null,
-        initialVerificationLevel: Model.VerificationLevel =
-            Model.VerificationLevel.UNVERIFIED
+        minimumVerificationLevel: Model.VerificationLevel =
+            Model.VerificationLevel.UNACCEPTED,
+        updateApplicationData: ((MutableMap<String, Any>) -> Unit)? = null
     ): Model.Contact =
         cryptoWorker.submitForValue {
             addOrUpdateContact(
@@ -264,26 +269,62 @@ class Messaging(
                 displayName,
                 source,
                 applicationIds,
-                initialVerificationLevel
+                minimumVerificationLevel,
+                updateApplicationData
             )
         }
 
     @Throws(InvalidKeyException::class)
     internal fun addOrUpdateContact(
         unsafeContactId: Model.ContactId,
-        displayName: String,
+        displayName: String? = null,
         source: Model.ContactSource? = null,
         applicationIds: Map<Int, String>? = null,
-        initialVerificationLevel: Model.VerificationLevel
+        minimumVerificationLevel: Model.VerificationLevel,
+        updateApplicationData: ((MutableMap<String, Any>) -> Unit)? = null
     ): Model.Contact =
-        doAddOrUpdateContact(unsafeContactId) { contact, isNew ->
-            contact.displayName = displayName
+        doAddOrUpdateContact(unsafeContactId) { contact, _ ->
+            displayName?.let { contact.displayName = it }
             source?.let { it -> contact.source = it }
             applicationIds?.let { it ->
                 contact.putAllApplicationIds(it)
             }
             contact.verificationLevelValue =
-                initialVerificationLevel.number.coerceAtLeast(contact.verificationLevelValue)
+                minimumVerificationLevel.number.coerceAtLeast(contact.verificationLevelValue)
+            updateApplicationData?.let { update ->
+                val appData = mutableMapOf<String, Any>()
+                contact.applicationDataMap.forEach { (key, value) ->
+                    appData[key] = when (value.valueCase) {
+                        Model.Datum.ValueCase.STRING -> value.string
+                        Model.Datum.ValueCase.FLOAT -> value.float
+                        Model.Datum.ValueCase.INT -> value.int
+                        Model.Datum.ValueCase.BOOL -> value.bool
+                        Model.Datum.ValueCase.BYTES -> value.bytes.toByteArray()
+                        Model.Datum.ValueCase.VALUE_NOT_SET ->
+                            throw Error("Value on Datum should always be set")
+                    }
+                }
+                contact.clearApplicationData()
+                update(appData)
+                val updatedAppData = mutableMapOf<String, Model.Datum>()
+                appData.forEach { (key, value) ->
+                    val datum = Model.Datum.newBuilder()
+                    when (value) {
+                        is String -> datum.string = value
+                        is Double -> datum.float = value
+                        is Float -> datum.float = value.toDouble()
+                        is Long -> datum.int = value
+                        is Int -> datum.int = value.toLong()
+                        is Boolean -> datum.bool = value
+                        is ByteArray -> datum.bytes = value.byteString()
+                        else -> throw RuntimeException(
+                            "Unrecognized value type ${value.javaClass.name}"
+                        )
+                    }
+                    updatedAppData[key] = datum.build()
+                }
+                contact.putAllApplicationData(updatedAppData)
+            }
         }
 
     /**
@@ -319,6 +360,10 @@ class Messaging(
             contact.blocked = false
         }
 
+    /**
+     * Adds or updates the contact identified by the given unsafeContactId, using the provided
+     * update function to set properties of the Contact.
+     */
     @Throws(InvalidKeyException::class)
     internal fun doAddOrUpdateContact(
         unsafeContactId: Model.ContactId,
@@ -440,9 +485,6 @@ class Messaging(
     internal fun doDeleteProvisionalContact(contactId: String) {
         db.mutate { tx ->
             tx.delete(contactId.provisionalContactPath)
-            if (!tx.contains(contactId.directContactPath)) {
-                store.deleteAllSessions(contactId)
-            }
         }
     }
 
@@ -457,21 +499,9 @@ class Messaging(
     }
 
     private fun deleteContact(contactId: Model.ContactId) {
-        // delete contacts in crypto worker's thread to avoid race conditions on managing Signal
-        // session
-        return cryptoWorker.submitForValue {
-            db.mutate { tx ->
-                deleteContactActivity(tx, contactId)
-                when (contactId.type) {
-                    Model.ContactType.DIRECT -> {
-                        store.deleteAllSessions(contactId.id)
-                    }
-                    else -> {
-                        // TODO: support group contacts
-                    }
-                }
-                tx.delete(contactId.contactPath)
-            }
+        db.mutate { tx ->
+            deleteContactActivity(tx, contactId)
+            tx.delete(contactId.contactPath)
         }
     }
 
@@ -1402,7 +1432,7 @@ val now: Long
  *
  * @throws InvalidKeyException if the ID doesn't decode to the right length (52 bytes)
  */
-internal val String.sanitizedContactId: String
+val String.sanitizedContactId: String
     @Throws(InvalidKeyException::class)
     get() {
         return ECPublicKey(this.toLowerCase(Locale.ROOT).trim()).toString()
@@ -1411,7 +1441,7 @@ internal val String.sanitizedContactId: String
 /**
  * Applies #String.sanitizedContactId to a Model.ContactId.
  */
-internal val Model.ContactId.sanitized: Model.ContactId
+val Model.ContactId.sanitized: Model.ContactId
     @Throws(InvalidKeyException::class)
     get() {
         return toBuilder().setId(id.sanitizedContactId).build()
@@ -1427,7 +1457,7 @@ internal val invalidDisplayNameCharacters = Regex("[^\\p{L}\\p{N} ]")
  */
 internal val multipleSpaces = Regex(" +")
 
-internal val String.sanitizedDisplayName: String
+val String.sanitizedDisplayName: String
     get() {
         return this.replace(invalidDisplayNameCharacters, "")
             .replace(multipleSpaces, " ")
