@@ -10,6 +10,7 @@ import io.lantern.messaging.metadata.Metadata
 import io.lantern.messaging.store.MessagingProtocolStore
 import io.lantern.messaging.tassis.Callback
 import io.lantern.messaging.tassis.Messages
+import io.lantern.messaging.tassis.TassisError
 import io.lantern.messaging.tassis.TransportFactory
 import io.lantern.messaging.time.hoursToMillis
 import io.lantern.messaging.time.secondsToMillis
@@ -231,6 +232,13 @@ class Messaging(
         // on startup, go through all attachments older than orphanedAttachmentCutoffSeconds and
         // delete any that are not in the database
         deleteOrphanedAttachments()
+
+        // on startup, request ChatNumbers for any direct contacts that don't yet have them
+        db.listPaths(
+            Schema.PATH_CONTACTS.path(Schema.CONTACT_DIRECT_PREFIX)
+        ).forEach { path ->
+            lookupChatNumberIfNecessary(path)
+        }
     }
 
     /**
@@ -253,26 +261,40 @@ class Messaging(
     @Throws(
         InvalidKeyException::class,
         InvalidCharacterException::class,
+        java.lang.IllegalArgumentException::class,
     )
     fun addOrUpdateDirectContact(
-        unsafeId: String,
+        unsafeId: String? = null,
         displayName: String? = null,
         source: Model.ContactSource? = null,
         applicationIds: Map<Int, String>? = null,
         minimumVerificationLevel: Model.VerificationLevel =
             Model.VerificationLevel.UNACCEPTED,
+        chatNumber: Model.ChatNumber? = null,
         updateApplicationData: ((MutableMap<String, Any>) -> Unit)? = null
-    ): Model.Contact =
-        cryptoWorker.submitForValue {
+    ): Model.Contact {
+        if (unsafeId == null && chatNumber == null) {
+            throw java.lang.IllegalArgumentException("Please specify either unsafeId or chatNumber")
+        }
+
+        val contactId = when {
+            unsafeId != null -> unsafeId.directContactId
+            chatNumber != null -> chatNumber.directContactId
+            else -> throw java.lang.IllegalArgumentException("Please specify either unsafeId or chatNumber") // ktlint-disable max-line-length
+        }
+
+        return cryptoWorker.submitForValue {
             addOrUpdateContact(
-                unsafeId.directContactId,
+                contactId,
                 displayName,
                 source,
                 applicationIds,
                 minimumVerificationLevel,
+                chatNumber,
                 updateApplicationData
             )
         }
+    }
 
     @Throws(InvalidKeyException::class)
     internal fun addOrUpdateContact(
@@ -281,9 +303,11 @@ class Messaging(
         source: Model.ContactSource? = null,
         applicationIds: Map<Int, String>? = null,
         minimumVerificationLevel: Model.VerificationLevel,
+        chatNumber: Model.ChatNumber? = null,
         updateApplicationData: ((MutableMap<String, Any>) -> Unit)? = null
     ): Model.Contact =
         doAddOrUpdateContact(unsafeContactId) { contact, _ ->
+            chatNumber?.let { contact.chatNumber = chatNumber }
             displayName?.let { contact.displayName = it }
             source?.let { it -> contact.source = it }
             applicationIds?.let { it ->
@@ -372,7 +396,7 @@ class Messaging(
         val contactId = unsafeContactId.sanitized
         val path = contactId.contactPath
 
-        return db.mutate { tx ->
+        val result = db.mutate { tx ->
             val existingContact = tx.get<Model.Contact>(path)
             val contactBuilder = existingContact?.toBuilder() ?: Model.Contact.newBuilder()
                 .setContactId(contactId)
@@ -433,6 +457,81 @@ class Messaging(
             }
 
             contact
+        }
+
+        lookupChatNumberIfNecessary(path)
+        return result
+    }
+
+    fun findChatNumberByShortNumber(
+        shortNumber: String,
+        cb: (Model.ChatNumber?, Throwable?) -> Unit
+    ) {
+        anonymousClientWorker.withClient { client ->
+            client.findChatNumberByShortNumber(
+                shortNumber,
+                object : Callback<Messages.ChatNumber> {
+                    override fun onSuccess(result: Messages.ChatNumber) {
+                        if (!result.number.startsWith(shortNumber)) {
+                            cb(
+                                null,
+                                RuntimeException("Server returned mismatched ChatNumber, this should not happen!") // ktlint-disable max-line-length
+                            )
+                        } else {
+                            cb(result.pbuf, null)
+                        }
+                    }
+
+                    override fun onError(err: Throwable) {
+                        cb(null, err)
+                    }
+                }
+            )
+        }
+    }
+
+    private fun lookupChatNumberIfNecessary(path: String) {
+        db.get<Model.Contact>(path)?.let { contact ->
+            if (
+                contact.contactId.type == Model.ContactType.DIRECT &&
+                contact.chatNumber.number.isEmpty()
+            ) {
+                val identityKey = ECPublicKey(contact.contactId.id)
+                anonymousClientWorker.withClient { client ->
+                    client.findChatNumberByIdentityKey(
+                        identityKey,
+                        object : Callback<Messages.ChatNumber> {
+                            override fun onSuccess(result: Messages.ChatNumber) {
+                                db.mutate { tx ->
+                                    tx.get<Model.Contact>(path)?.let { latestContact ->
+                                        if (
+                                            ChatNumberEncoding.identityKey(result.number) !=
+                                            identityKey ||
+                                            !result.number.startsWith(result.shortNumber)
+                                        ) {
+                                            logger.error("Server returned mismatched ChatNumber. This should not happen!") // ktlint-disable max-line-length
+                                        } else {
+                                            tx.put(
+                                                path,
+                                                latestContact.toBuilder().setChatNumber(result.pbuf)
+                                                    .build()
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            override fun onError(err: Throwable) {
+                                if (!(err is TassisError)) {
+                                    anonymousClientWorker.retryFailed {
+                                        lookupChatNumberIfNecessary(path)
+                                    }
+                                }
+                            }
+                        }
+                    )
+                }
+            }
         }
     }
 

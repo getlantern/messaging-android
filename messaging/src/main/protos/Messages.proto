@@ -15,7 +15,9 @@
  * Authentication is performed using a challenge-response pattern in which the server sends
  * an authentication challenge to the client and the client responds with a signed authentication
  * response identifying its identityKey and deviceId. On anonymous connections, clients simply ignore the
- * authentication challenge.
+ * authentication challenge. Successful authentications are acknowledged with a Number that gives information
+ * about the IdentityKey number under which the authenticated user is registered. This number is constant over
+ * time.
  *
  * Messages sent from clients to servers follow a request/response pattern. The server will always
  * respond to these with either an Ack or a typed response. In the event of an error, it will respond
@@ -160,6 +162,27 @@ message UploadAuthorizations {
   repeated UploadAuthorization authorizations = 1;
 }
 
+// Requires anonymous connection
+//
+// A request to look up a ChatNumber corresponding to a short number.
+message FindChatNumberByShortNumber {
+  string shortNumber = 1; // the short number for which to look up the ChatNumber
+}
+
+// Requires anonymous connection
+//
+// A request to look up a ChatNumber corresponding to an IdentityKey.
+message FindChatNumberByIdentityKey {
+  bytes identityKey = 1; // the identity key for which to look up the ChatNumber
+}
+
+// A number representing the IdentityKey in this system.
+message ChatNumber {
+  string number = 1; // a form of IdentityKey that looks like a phone number
+  string shortNumber = 2; // short version of the number
+  string domain = 3; // the domain within which the short number is registered
+}
+
 // The envelope for all messages sent to/from clients.
 message Message {
   uint32 sequence = 1; // the message sequence, either a unique number for request messages or the number of the request message to which a response message corresponds
@@ -179,6 +202,9 @@ message Message {
     UploadAuthorizations        uploadAuthorizations        = 14;
     OutboundMessage             outboundMessage             = 15;
     InboundMessage              inboundMessage              = 16;
+    FindChatNumberByShortNumber findChatNumberByShortNumber = 17;
+    FindChatNumberByIdentityKey findChatNumberByIdentityKey = 18;
+    ChatNumber                  chatNumber                  = 19;
   }
 }
 
