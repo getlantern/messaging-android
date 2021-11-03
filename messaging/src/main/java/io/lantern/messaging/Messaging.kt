@@ -242,9 +242,11 @@ class Messaging(
     }
 
     /**
-     * Adds or updates the given direct contact.
+     * Adds or updates the given direct contact. The contact is identified by either unsafeId or
+     * chatNumber.
      *
      * @param unsafeId the base32 encoded public identity key of the contact
+     *                 (if unspecified, chatNumber is used instead)
      * @param displayName optional human-friendly display name for this contact
      *                    (if unspecified, existing displayName is left alone)
      * @param source optional identifier of the source of this contact
@@ -254,6 +256,8 @@ class Messaging(
      *                       (application IDs are added to existing set)
      * @param minimumVerificationLevel the contact's verification will be set to the greater of this
      *                                 or the current verificationLevel (defaults to UNVERIFIED)
+     * @param chatNumber the ChatNumber to associate with this contact
+     *                   (if unspecified, the existing ChatNumber is left alone)
      * @param updateApplicationData optional function to manipulate application specific data on the
      *                              contact
      * @return the created or updated Contact
@@ -463,6 +467,12 @@ class Messaging(
         return result
     }
 
+    /**
+     * Looks up a ChatNumber from the short version of the number.
+     *
+     * @param shortNumber the short number by which to search
+     * @param cb callback that gets called with result (or exception if something went wrong)
+     */
     fun findChatNumberByShortNumber(
         shortNumber: String,
         cb: (Model.ChatNumber?, Throwable?) -> Unit
