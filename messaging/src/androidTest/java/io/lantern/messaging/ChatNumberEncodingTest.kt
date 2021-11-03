@@ -26,7 +26,9 @@ class ChatNumberEncodingTest {
             val expected = ChatNumberEncoding.encodeToString(b, 82)
             val actual = ChatNumberEncoding.encodeToString(
                 ChatNumberEncoding.decodeFromString(
-                    expected!!, 32
+                    // insert spurious 5's to make sure they're ignored
+                    "55${expected!!.substring(0, 12)}55${expected!!.substring(12)}",
+                    32
                 ),
                 82
             )
