@@ -181,3 +181,6 @@ val Model.ChatNumber.directContactId: Model.ContactId
     get() = ECPublicKey(
         ChatNumberEncoding.decodeFromString(number, 32)
     ).toString().directContactId
+
+val Model.ChatNumber.isComplete: Boolean
+    get() = number.isNotEmpty() && shortNumber.isNotEmpty() && domain.isNotEmpty()

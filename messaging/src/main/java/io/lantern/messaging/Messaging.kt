@@ -311,7 +311,13 @@ class Messaging(
         updateApplicationData: ((MutableMap<String, Any>) -> Unit)? = null
     ): Model.Contact =
         doAddOrUpdateContact(unsafeContactId) { contact, _ ->
-            chatNumber?.let { contact.chatNumber = chatNumber }
+            chatNumber?.let {
+                if (chatNumber.isComplete) {
+                    // only record complete ChatNumbers
+                    // if we don't have a complete ChatNumber, we'll later get it from the server
+                    contact.chatNumber = chatNumber
+                }
+            }
             displayName?.let { contact.displayName = it }
             source?.let { it -> contact.source = it }
             applicationIds?.let { it ->
