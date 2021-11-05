@@ -191,16 +191,16 @@ class Messaging(
             tx.get(Schema.PATH_ME) ?: tx.put(
                 Schema.PATH_ME,
                 Model.Contact.newBuilder()
-                    .setContactId(identityKeyPair.publicKey.toString().directContactId).build()
+                    .setContactId(identityKeyPair.publicKey.toString().directContactId)
+                    .setIsMe(true)
+                    .build()
             )
         }
         myId = me.contactId
 
         // add myself as a contact to record notes to myself
         doAddOrUpdateContact(myId) { contact, isNew ->
-            if (isNew) {
-                contact.displayName = "Note to self"
-            }
+            contact.isMe = true
         }
 
         // immediately request some upload authorizations so that we're ready to upload attachments

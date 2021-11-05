@@ -1074,6 +1074,9 @@ class MessagingTest : BaseMessagingTest() {
                 newMessaging(dogDB, "dog").with { dog ->
                     val msgs = sendAndVerify("dog sends note to dog", dog, dog, "hi myself")
                     assertNotNull(msgs.received)
+                    val me = dog.db.get<Model.Contact>(Schema.PATH_ME)!!
+                    assertEquals(true, me.isMe)
+                    assertEquals(true, dog.db.get<Model.Contact>(me.dbPath)?.isMe)
                 }
             }
         }
