@@ -11,7 +11,7 @@ abstract class BaseMessagingTest : BaseTest() {
         get() = DB.createOrOpen(
             InstrumentationRegistry.getInstrumentation().targetContext,
             File(tempDir, UUID.randomUUID().toString()).toString(),
-            "password"
+            arrayOf(1.toByte(), 2.toByte(), 3.toByte()).toByteArray()
         )
 
     protected fun newStore(db: DB): MessagingProtocolStore =
