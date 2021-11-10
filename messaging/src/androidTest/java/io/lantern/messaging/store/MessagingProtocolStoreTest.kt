@@ -22,7 +22,7 @@ class MessagingProtocolStoreTest : BaseMessagingTest() {
     @Test
     fun testIdentityKeyPair() {
         newDB.use { db ->
-            val ms = newStore(db = db)
+            val ms = MessagingProtocolStore(db)
             val kp1 = ms.identityKeyPair
             val kp2 = ms.identityKeyPair
             assertEquals(kp1.publicKey, kp2.publicKey)
@@ -43,13 +43,24 @@ class MessagingProtocolStoreTest : BaseMessagingTest() {
                     ).bytes
                 )
             )
+
+            newDB.use { nextDB ->
+                // create a new MessagingProtocolStore initialized with the key material of the
+                // first
+                val ms2 = MessagingProtocolStore(
+                    nextDB
+                )
+                val kp3 = ms2.identityKeyPair
+                assertEquals(kp1.publicKey, kp3.publicKey)
+                assertTrue(Arrays.equals(kp1.privateKey.bytes, kp3.privateKey.bytes))
+            }
         }
     }
 
     @Test
     fun testPreKeys() {
         newDB.use { db ->
-            val ms = newStore(db)
+            val ms = MessagingProtocolStore(db)
             try {
                 ms.storePreKey(1, KeyHelper.generatePreKeys(0, 1)[0])
                 fail("should not be allowed to directly store one time pre keys")
@@ -80,7 +91,7 @@ class MessagingProtocolStoreTest : BaseMessagingTest() {
     @Test
     fun testSignedPreKeys() {
         newDB.use { db ->
-            val ms = newStore(db)
+            val ms = MessagingProtocolStore(db)
             try {
                 ms.storeSignedPreKey(1, KeyHelper.generateSignedPreKey(ms.identityKeyPair, 1))
                 fail("should not be allowed to directly store signed pre keys")
@@ -109,7 +120,7 @@ class MessagingProtocolStoreTest : BaseMessagingTest() {
     @Test
     fun testSessions() {
         newDB.use { db ->
-            val ms = newStore(db)
+            val ms = MessagingProtocolStore(db)
             val address1 =
                 SignalProtocolAddress(Curve.generateKeyPair().publicKey, DeviceId.random())
             val address2 = SignalProtocolAddress(address1.identityKey, DeviceId.random())

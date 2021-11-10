@@ -31,6 +31,9 @@ import org.whispersystems.libsignal.state.SignedPreKeyRecord
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
 import org.whispersystems.signalservice.internal.util.Util
 
+private val disappearingMessagesSubscriberID = "disappearingMessagesSubscriber"
+private val provisionalContactsSubscriberID = "provisionalContactsSubscriber"
+
 /**
  * CryptoWorker handles all sending and receiving of messages.
  *
@@ -56,7 +59,7 @@ internal class CryptoWorker(
         // them for deletion
         db.subscribe(
             object : Subscriber<String>(
-                "disappearingMessagesSubscriber",
+                disappearingMessagesSubscriberID,
                 Schema.PATH_DISAPPEARING_MESSAGES.path('%')
             ) {
                 override fun onChanges(changes: ChangeSet<String>) {
@@ -86,7 +89,7 @@ internal class CryptoWorker(
         // them for deletion
         db.subscribe(
             object : Subscriber<Model.ProvisionalContact>(
-                "provisionalContactsSubscriber",
+                provisionalContactsSubscriberID,
                 Schema.PATH_PROVISIONAL_CONTACTS.path('%')
             ) {
                 override fun onChanges(changes: ChangeSet<Model.ProvisionalContact>) {
@@ -1123,6 +1126,8 @@ internal class CryptoWorker(
     }
 
     override fun close() {
+        db.unsubscribe(disappearingMessagesSubscriberID)
+        db.unsubscribe(provisionalContactsSubscriberID)
         encryptAttachmentsExecutor.shutdownNow()
         super.close()
     }

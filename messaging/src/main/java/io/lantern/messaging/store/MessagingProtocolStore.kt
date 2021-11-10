@@ -35,6 +35,15 @@ class MessagingProtocolStore(
         }
     }
 
+    internal fun setIdentityKeyPair(bytes: ByteArray) {
+        db.clear()
+        val keyPair = ECKeyPair.fromBytes(bytes)
+        db.mutate { tx ->
+            tx.put(PATH_IDENTITY_KEY_PUBLIC, keyPair.publicKey.bytes)
+            tx.put(PATH_IDENTITY_KEY_PRIVATE, keyPair.privateKey.bytes)
+        }
+    }
+
     val deviceId: DeviceId
         get() {
             return db.mutate { tx ->

@@ -3,6 +3,7 @@ package io.lantern.messaging
 import androidx.test.platform.app.InstrumentationRegistry
 import io.lantern.db.DB
 import io.lantern.messaging.conversions.byteString
+import io.lantern.messaging.store.MessagingProtocolStore
 import io.lantern.messaging.tassis.MessageHandler
 import io.lantern.messaging.tassis.Transport
 import io.lantern.messaging.tassis.websocket.WSListener
@@ -583,7 +584,7 @@ class MessagingTest : BaseMessagingTest() {
     fun testBasicFlowWithConnectivityIssues() {
         newDB.use { dogDB ->
             newDB.use { catDB ->
-                val catStore = newStore(catDB)
+                val catStore = MessagingProtocolStore(catDB)
                 val theDog = newMessaging(dogDB, "dog")
 
                 testInCoroutine {
@@ -762,7 +763,7 @@ class MessagingTest : BaseMessagingTest() {
                         "dog",
                         stopSendRetryAfterMillis = 5L.secondsToMillis
                     ).with { dog ->
-                        val catStore = newStore(catDB)
+                        val catStore = MessagingProtocolStore(catDB)
                         val dogId = dog.myId.id
                         val catId = catStore.identityKeyPair.publicKey.toString()
 
@@ -2112,6 +2113,56 @@ class MessagingTest : BaseMessagingTest() {
                         dog.searchMessages("woo*").firstOrNull()?.snippet,
                         "search for existing message by text should yield that message"
                     )
+                }
+            }
+        }
+    }
+
+    @Test
+    fun testRecovery() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newDB.use { cat1DB ->
+                    newDB.use { cat2DB ->
+                        newMessaging(dogDB, "dog").with { dog ->
+                            newMessaging(cat1DB, "cat").with { cat1 ->
+                                newMessaging(cat2DB, "cat").with { cat2 ->
+                                    val dogId = dog.myId.id
+                                    val cat1Id = cat1.myId.id
+
+                                    dog.addOrUpdateDirectContact(cat1Id)
+                                    val dogContact = cat1.addOrUpdateDirectContact(dogId)
+                                    sendAndVerify(
+                                        "dog sends a message to cat 1",
+                                        dog,
+                                        cat1,
+                                        "hi cat"
+                                    )
+
+                                    sendAndVerify(
+                                        "cat1 sends a message to dog",
+                                        cat1,
+                                        dog,
+                                        "hi dog"
+                                    )
+
+                                    cat1.recover(cat2.recoveryKey)
+                                    assertNull(
+                                        cat1.db.get<Model.Contact>(dogContact.dbPath),
+                                        "dog contact should be gone after recovery"
+                                    )
+
+                                    cat1.addOrUpdateDirectContact(dogId)
+                                    sendAndVerify(
+                                        "recovered cat1 sends a message to dog",
+                                        cat1,
+                                        dog,
+                                        "hello again dog"
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

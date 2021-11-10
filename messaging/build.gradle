@@ -74,8 +74,8 @@ dependencies {
     implementation 'com.android.support:exifinterface:28.0.0'
     implementation 'com.j256.simplemagic:simplemagic:1.16'
 
-    api 'com.github.getlantern:db-android:ed26eadd1c'
-    implementation 'com.github.getlantern:libsignal-protocol-java:e719f32934'
+    api 'com.github.getlantern:db-android:2f1b7bfea1'
+    implementation 'com.github.getlantern:libsignal-protocol-java:1801b0c3f4'
     implementation 'com.github.getlantern:libsignal-metadata-java:0066270c81'
 
     testImplementation 'junit:junit:4.13.2'

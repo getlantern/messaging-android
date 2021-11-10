@@ -33,6 +33,7 @@ import java.util.concurrent.atomic.AtomicReference
 import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.InvalidKeyException
+import org.whispersystems.libsignal.ecc.ECKeyPair
 import org.whispersystems.libsignal.ecc.ECPublicKey
 import org.whispersystems.libsignal.fingerprint.NumericFingerprintGenerator
 import org.whispersystems.libsignal.util.InvalidCharacterException
@@ -105,29 +106,69 @@ private const val fingerprintIterations = 5200
  * @param name a name to use for this Messaging instance in logs
  * @param defaultConfiguration the default configuration to use prior to receiving a configuration
  *                             from tassis
+ * @param keyPair if specified, initializes the messaging protocol store with this private key
  */
 class Messaging(
-    parentDB: DB,
+    private val parentDB: DB,
     private val attachmentsDirectory: File,
-    transportFactory: TransportFactory,
-    clientTimeoutMillis: Long = 10L.secondsToMillis,
-    redialBackoffMillis: Long = 500L,
-    maxRedialDelayMillis: Long = 15L.secondsToMillis,
-    failedSendRetryDelayMillis: Long = 5L.secondsToMillis,
-    stopSendRetryAfterMillis: Long = 1000 * 365 * 24L.hoursToMillis, // approximately 1000 years
-    numInitialPreKeysToRegister: Int = 5,
+    private val transportFactory: TransportFactory,
+    private val clientTimeoutMillis: Long = 10L.secondsToMillis,
+    private val redialBackoffMillis: Long = 500L,
+    private val maxRedialDelayMillis: Long = 15L.secondsToMillis,
+    private val failedSendRetryDelayMillis: Long = 5L.secondsToMillis,
+    private val stopSendRetryAfterMillis: Long =
+        1000 * 365 * 24L.hoursToMillis, // approximately 1000 years
+    private val numInitialPreKeysToRegister: Int = 5,
     private val defaultMessagesDisappearAfterSeconds: Int = 86400, // 1 day
     private val orphanedAttachmentCutoffSeconds: Int = 86400, // 1 day
     internal val introductionsDisappearAfterSeconds: Int = 86400 * 7, // 7 days
     internal val provisionalContactsExpireAfterSeconds: Long = 300, // 5 minutes
     internal val name: String = "messaging",
-    defaultConfiguration: Messages.Configuration = Messages.Configuration.newBuilder()
-        .setMaxAttachmentSize(100000000).build()
+    private val defaultConfiguration: Messages.Configuration = Messages.Configuration.newBuilder()
+        .setMaxAttachmentSize(100000000).build(),
 ) : Closeable {
     internal val logger = KotlinLogging.logger(name)
     internal val store = MessagingProtocolStore(parentDB)
     val db = parentDB.withSchema("messaging")
     private val webRTCSignalingSubscribers = ConcurrentHashMap<String, (WebRTCSignal) -> Unit>()
+
+    private val cfg = AtomicReference<Messages.Configuration>()
+
+    internal val identityKeyPair: ECKeyPair
+        get() = store.identityKeyPair
+
+    internal val deviceId: DeviceId
+        get() = store.deviceId
+
+    // All processing that involves crypto operations happens on this executor to keep the
+    // SignalProtocolStore in a consistent state
+    private val cryptoWorkerRef = AtomicReference<CryptoWorker>()
+
+    internal val cryptoWorker: CryptoWorker
+        get() = cryptoWorkerRef.get()
+
+    private val myIdRef = AtomicReference<Model.ContactId>()
+
+    val myId: Model.ContactId
+        get() = myIdRef.get()
+
+    internal val anonymousClientWorker =
+        AnonymousClientWorker(
+            transportFactory,
+            this,
+            clientTimeoutMillis,
+            redialBackoffMillis,
+            maxRedialDelayMillis
+        )
+
+    internal val authenticatedClientWorker =
+        AuthenticatedClientWorker(
+            transportFactory,
+            this,
+            clientTimeoutMillis,
+            redialBackoffMillis,
+            maxRedialDelayMillis
+        )
 
     init {
         // register protocol buffer types before starting crypto worker or doing anything else that
@@ -141,11 +182,21 @@ class Messaging(
 
         // apply migrations
         Migrations(this).apply()
+
+        initialize()
     }
 
-    private val cfg = AtomicReference<Messages.Configuration>()
+    private fun startCryptoWorker() {
+        cryptoWorkerRef.set(
+            CryptoWorker(
+                this,
+                failedSendRetryDelayMillis,
+                stopSendRetryAfterMillis
+            )
+        )
+    }
 
-    init {
+    private fun initialize() {
         // initialize configuration
         db.mutate { tx ->
             val latestCfg =
@@ -153,39 +204,9 @@ class Messaging(
             cfg.set(latestCfg)
             tx.put(Schema.PATH_CONFIG, latestCfg)
         }
-    }
 
-    internal val identityKeyPair = store.identityKeyPair
-    internal val deviceId: DeviceId = store.deviceId
+        startCryptoWorker()
 
-    // All processing that involves crypto operations happens on this executor to keep the
-    // SignalProtocolStore in a consistent state
-    internal val cryptoWorker =
-        CryptoWorker(
-            this,
-            failedSendRetryDelayMillis,
-            stopSendRetryAfterMillis
-        )
-    internal val anonymousClientWorker =
-        AnonymousClientWorker(
-            transportFactory,
-            this,
-            clientTimeoutMillis,
-            redialBackoffMillis,
-            maxRedialDelayMillis
-        )
-    internal val authenticatedClientWorker =
-        AuthenticatedClientWorker(
-            transportFactory,
-            this,
-            clientTimeoutMillis,
-            redialBackoffMillis,
-            maxRedialDelayMillis
-        )
-
-    val myId: Model.ContactId
-
-    init {
         // make sure we have a contact entry for ourselves
         val me = db.mutate { tx ->
             tx.get(Schema.PATH_ME) ?: tx.put(
@@ -196,10 +217,10 @@ class Messaging(
                     .build()
             )
         }
-        myId = me.contactId
+        myIdRef.set(me.contactId)
 
         // add myself as a contact to record notes to myself
-        doAddOrUpdateContact(myId) { contact, isNew ->
+        doAddOrUpdateContact(myId) { contact, _ ->
             contact.isMe = true
         }
 
@@ -239,6 +260,25 @@ class Messaging(
         ).forEach { path ->
             lookupChatNumberIfNecessary(path)
         }
+    }
+
+    /**
+     * Returns the recovery key used by this Messaging instance encoded in base32.
+     *
+     * TODO: use constant-time implementation of base32 encoding
+     */
+    val recoveryKey = identityKeyPair.bytes.base32
+
+    /**
+     * Recovers the messaging system using the given recoveryKey. All existing data will be erased.
+     */
+    fun recover(recoveryKey: String) {
+        cryptoWorker.close()
+        authenticatedClientWorker.disconnect()
+        db.clear()
+        // TODO: use constant-time implementation of base32 decoding
+        store.setIdentityKeyPair(recoveryKey.fromBase32)
+        initialize()
     }
 
     /**
