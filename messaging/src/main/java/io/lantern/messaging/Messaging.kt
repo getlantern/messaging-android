@@ -1604,7 +1604,7 @@ val now: Long
 val String.sanitizedContactId: String
     @Throws(InvalidKeyException::class)
     get() {
-        return ECPublicKey(this.lowercase(Locale.ROOT).trim()).toString()
+        return ECPublicKey(this.toLowerCase(Locale.ROOT).trim()).toString()
     }
 
 /**
