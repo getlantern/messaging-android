@@ -101,7 +101,7 @@ object ChatNumberEncoding {
             if (c < '5') {
                 result.append(c)
             } else {
-                result.append((c.toInt() + 1).toChar())
+                result.append((c.code + 1).toChar())
             }
         }
         return result.toString()
@@ -116,7 +116,7 @@ object ChatNumberEncoding {
             } else if (c == '5') {
                 // ignore 5s
             } else {
-                result.append((c.toInt() - 1).toChar())
+                result.append((c.code - 1).toChar())
             }
         }
         return result.toString()

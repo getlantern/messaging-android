@@ -18,6 +18,9 @@ The messaging-android data model is defined in [Model.proto](messaging/src/main/
 messaging-android stores data in an [encrypted key-value store](https://github.com/getlantern/db-android/)
 using keys that follow the below convention.
 
+### /rkey
+The recovery key from which all other keys are derived.
+
 ### /me (Model.Contact)
 The contact entry for the user themselves.
 
@@ -40,9 +43,6 @@ An index of all messages for a given Contact, by the sent timestamp of the messa
 
 ### /dm/[disappearAt]/[senderIdentityKey]/[messageId]
 An index of all messages that are supposed to auto disappear by some time (in unix milliseconds)
-
-### /spam/[senderIdentityKey]/[timestamp]/[randomId] (Model.StoredMessage)
-Messages that aren't worth showing to the user for one reason or another (not actively used anymore).
 
 ### /o/[timestamp]/[messageId] (Model.OutboundMessage)
 A queue of outbound messages that are pending send. If sending to some recipients fails, messages

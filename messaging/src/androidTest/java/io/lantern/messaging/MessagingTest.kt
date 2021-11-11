@@ -3,7 +3,6 @@ package io.lantern.messaging
 import androidx.test.platform.app.InstrumentationRegistry
 import io.lantern.db.DB
 import io.lantern.messaging.conversions.byteString
-import io.lantern.messaging.store.MessagingProtocolStore
 import io.lantern.messaging.tassis.MessageHandler
 import io.lantern.messaging.tassis.Transport
 import io.lantern.messaging.tassis.websocket.WSListener
@@ -584,14 +583,14 @@ class MessagingTest : BaseMessagingTest() {
     fun testBasicFlowWithConnectivityIssues() {
         newDB.use { dogDB ->
             newDB.use { catDB ->
-                val catStore = MessagingProtocolStore(catDB)
+                val cat = newMessaging(catDB, "cat")
                 val theDog = newMessaging(dogDB, "dog")
 
                 testInCoroutine {
                     theDog.with { it ->
                         var dog = it
-                        val catId = catStore.identityKeyPair.publicKey.toString()
-                        val dogId = dog.store.identityKeyPair.publicKey.toString()
+                        val catId = cat.identityKeyPair.publicKey.toString()
+                        val dogId = dog.identityKeyPair.publicKey.toString()
 
                         assertNotNull(
                             dog.db.get<Model.Contact>(Schema.PATH_ME),
@@ -763,9 +762,9 @@ class MessagingTest : BaseMessagingTest() {
                         "dog",
                         stopSendRetryAfterMillis = 5L.secondsToMillis
                     ).with { dog ->
-                        val catStore = MessagingProtocolStore(catDB)
+                        val cat = newMessaging(catDB, "cat")
                         val dogId = dog.myId.id
-                        val catId = catStore.identityKeyPair.publicKey.toString()
+                        val catId = cat.identityKeyPair.publicKey.toString()
 
                         dog.addOrUpdateDirectContact(
                             catId,
@@ -1020,8 +1019,8 @@ class MessagingTest : BaseMessagingTest() {
                 newDB.use { catDB ->
                     newMessaging(catDB, "cat").with { cat ->
                         newMessaging(dogDB, "dog", stopSendRetryAfterMillis = 5000).with { dog ->
-                            val catId = cat.store.identityKeyPair.publicKey.toString()
-                            val dogId = dog.store.identityKeyPair.publicKey.toString()
+                            val catId = cat.identityKeyPair.publicKey.toString()
+                            val dogId = dog.identityKeyPair.publicKey.toString()
                             val fakeId = KeyHelper.generateIdentityKeyPair().publicKey.toString()
 
                             cat.addOrUpdateDirectContact(
@@ -1567,8 +1566,8 @@ class MessagingTest : BaseMessagingTest() {
                 newDB.use { catDB ->
                     newMessaging(catDB, "cat").with { cat ->
                         newMessaging(dogDB, "dog", stopSendRetryAfterMillis = 5000).with { dog ->
-                            val catId = cat.store.identityKeyPair.publicKey.toString()
-                            val dogId = dog.store.identityKeyPair.publicKey.toString()
+                            val catId = cat.identityKeyPair.publicKey.toString()
+                            val dogId = dog.identityKeyPair.publicKey.toString()
 
                             cat.addOrUpdateDirectContact(
                                 dogId,
@@ -2146,7 +2145,7 @@ class MessagingTest : BaseMessagingTest() {
                                         "hi dog"
                                     )
 
-                                    cat1.recover(cat2.recoveryKey)
+                                    cat1.recover(cat2.recoveryCode)
                                     assertNull(
                                         cat1.db.get<Model.Contact>(dogContact.dbPath),
                                         "dog contact should be gone after recovery"
@@ -2197,7 +2196,7 @@ class MessagingTest : BaseMessagingTest() {
         ignoreSendsForMillis: Long = 0
     ): MessagePair {
         logger.debug("running case $testCase")
-        val fromId = from.store.identityKeyPair.publicKey.toString()
+        val fromId = from.identityKeyPair.publicKey.toString()
         val toId = to.myId.id
 
         if (ignoreSendsForMillis > 0) {

@@ -128,14 +128,15 @@ class Messaging(
         .setMaxAttachmentSize(100000000).build(),
 ) : Closeable {
     internal val logger = KotlinLogging.logger(name)
-    internal val store = MessagingProtocolStore(parentDB)
     val db = parentDB.withSchema("messaging")
+    val store = MessagingProtocolStore(parentDB, identityKeyPair)
+
     private val webRTCSignalingSubscribers = ConcurrentHashMap<String, (WebRTCSignal) -> Unit>()
 
     private val cfg = AtomicReference<Messages.Configuration>()
 
     internal val identityKeyPair: ECKeyPair
-        get() = store.identityKeyPair
+        get() = recoveryKey.keyPair("kp0")
 
     internal val deviceId: DeviceId
         get() = store.deviceId
@@ -262,22 +263,35 @@ class Messaging(
         }
     }
 
+    private val recoveryKey: RecoveryKey
+        get() = db.mutate { tx ->
+            tx.get(Schema.PATH_RECOVERY_KEY) ?: run {
+                val newRecoveryKey = generateRecoveryKey()
+                tx.put(Schema.PATH_RECOVERY_KEY, newRecoveryKey)
+                newRecoveryKey
+            }
+        }
+
     /**
-     * Returns the recovery key used by this Messaging instance encoded in base32.
+     * Returns the recovery code used by this Messaging instance encoded in base32.
      *
      * TODO: use constant-time implementation of base32 encoding
      */
-    val recoveryKey = identityKeyPair.bytes.base32
+    val recoveryCode = recoveryKey.base32
 
     /**
      * Recovers the messaging system using the given recoveryKey. All existing data will be erased.
      */
-    fun recover(recoveryKey: String) {
+    fun recover(recoveryCode: String) {
         cryptoWorker.close()
         authenticatedClientWorker.disconnect()
         db.clear()
         // TODO: use constant-time implementation of base32 decoding
-        store.setIdentityKeyPair(recoveryKey.fromBase32)
+        val rk = recoveryCode.fromBase32
+        db.mutate { tx ->
+            tx.put(Schema.PATH_RECOVERY_KEY, rk)
+        }
+        store.changeIdentityKeyPair(identityKeyPair)
         initialize()
     }
 
@@ -1590,7 +1604,7 @@ val now: Long
 val String.sanitizedContactId: String
     @Throws(InvalidKeyException::class)
     get() {
-        return ECPublicKey(this.toLowerCase(Locale.ROOT).trim()).toString()
+        return ECPublicKey(this.lowercase(Locale.ROOT).trim()).toString()
     }
 
 /**

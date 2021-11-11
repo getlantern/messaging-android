@@ -10,6 +10,7 @@ import org.whispersystems.libsignal.ecc.ECPublicKey
 import org.whispersystems.libsignal.util.Base32
 
 object Schema {
+    const val PATH_RECOVERY_KEY = "/rc"
     const val PATH_CONFIG = "/cfg"
     const val PATH_OUTBOUND = "/o"
     const val PATH_INBOUND_ATTACHMENTS = "/ia"
@@ -21,7 +22,6 @@ object Schema {
     const val PATH_CONTACTS_BY_ACTIVITY = "/cba"
     const val PATH_CONTACT_MESSAGES = "/cm"
     const val PATH_DISAPPEARING_MESSAGES = "/dm"
-    const val PATH_SPAM = "/spam"
     const val PATH_INTRODUCTIONS_BY_FROM = "/intro/from"
     const val PATH_INTRODUCTIONS_BY_TO = "/intro/to"
     const val PATH_INTRODUCTIONS_BEST = "/intro/best"
