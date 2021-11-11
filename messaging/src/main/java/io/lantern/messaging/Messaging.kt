@@ -106,15 +106,14 @@ private const val fingerprintIterations = 5200
  * @param name a name to use for this Messaging instance in logs
  * @param defaultConfiguration the default configuration to use prior to receiving a configuration
  *                             from tassis
- * @param keyPair if specified, initializes the messaging protocol store with this private key
  */
 class Messaging(
-    private val parentDB: DB,
+    parentDB: DB,
     private val attachmentsDirectory: File,
-    private val transportFactory: TransportFactory,
-    private val clientTimeoutMillis: Long = 10L.secondsToMillis,
-    private val redialBackoffMillis: Long = 500L,
-    private val maxRedialDelayMillis: Long = 15L.secondsToMillis,
+    transportFactory: TransportFactory,
+    clientTimeoutMillis: Long = 10L.secondsToMillis,
+    redialBackoffMillis: Long = 500L,
+    maxRedialDelayMillis: Long = 15L.secondsToMillis,
     private val failedSendRetryDelayMillis: Long = 5L.secondsToMillis,
     private val stopSendRetryAfterMillis: Long =
         1000 * 365 * 24L.hoursToMillis, // approximately 1000 years
@@ -129,14 +128,25 @@ class Messaging(
 ) : Closeable {
     internal val logger = KotlinLogging.logger(name)
     val db = parentDB.withSchema("messaging")
-    val store = MessagingProtocolStore(parentDB, identityKeyPair)
 
     private val webRTCSignalingSubscribers = ConcurrentHashMap<String, (WebRTCSignal) -> Unit>()
 
     private val cfg = AtomicReference<Messages.Configuration>()
 
+    private val identityKeyPairRef = AtomicReference<ECKeyPair>()
+
+    private fun deriveIdentityKeyPair() {
+        identityKeyPairRef.set(recoveryKey.keyPair("kp0"))
+    }
+
+    init {
+        deriveIdentityKeyPair()
+    }
+
     internal val identityKeyPair: ECKeyPair
-        get() = recoveryKey.keyPair("kp0")
+        get() = identityKeyPairRef.get()
+
+    val store = MessagingProtocolStore(parentDB, identityKeyPair)
 
     internal val deviceId: DeviceId
         get() = store.deviceId
@@ -291,6 +301,7 @@ class Messaging(
         db.mutate { tx ->
             tx.put(Schema.PATH_RECOVERY_KEY, rk)
         }
+        deriveIdentityKeyPair()
         store.changeIdentityKeyPair(identityKeyPair)
         initialize()
     }

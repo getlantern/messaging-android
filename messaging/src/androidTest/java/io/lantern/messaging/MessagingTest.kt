@@ -3,6 +3,7 @@ package io.lantern.messaging
 import androidx.test.platform.app.InstrumentationRegistry
 import io.lantern.db.DB
 import io.lantern.messaging.conversions.byteString
+import io.lantern.messaging.store.MessagingProtocolStore
 import io.lantern.messaging.tassis.MessageHandler
 import io.lantern.messaging.tassis.Transport
 import io.lantern.messaging.tassis.websocket.WSListener
@@ -762,9 +763,13 @@ class MessagingTest : BaseMessagingTest() {
                         "dog",
                         stopSendRetryAfterMillis = 5L.secondsToMillis
                     ).with { dog ->
-                        val cat = newMessaging(catDB, "cat")
+                        val recoveryKey = generateRecoveryKey()
+                        val catStore = MessagingProtocolStore(
+                            catDB,
+                            recoveryKey.keyPair("kp0")
+                        )
                         val dogId = dog.myId.id
-                        val catId = cat.identityKeyPair.publicKey.toString()
+                        val catId = catStore.identityKeyPair.publicKey.toString()
 
                         dog.addOrUpdateDirectContact(
                             catId,
@@ -783,6 +788,7 @@ class MessagingTest : BaseMessagingTest() {
                         }
 
                         newMessaging(catDB, "cat").with { cat ->
+                            cat.recover(recoveryKey.base32)
                             cat.addOrUpdateDirectContact(
                                 dogId,
                                 "Dog",

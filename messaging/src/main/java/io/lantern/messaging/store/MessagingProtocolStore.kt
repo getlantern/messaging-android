@@ -27,8 +27,9 @@ class MessagingProtocolStore(
     override fun getIdentityKeyPair(): ECKeyPair = keyPairRef.get()
 
     internal fun changeIdentityKeyPair(keyPair: ECKeyPair) {
-        db.clear()
+        // Clear the store since our old cryptographic material won't be valid with a new keyPair.
         keyPairRef.set(keyPair)
+        db.clear()
     }
 
     val deviceId: DeviceId
