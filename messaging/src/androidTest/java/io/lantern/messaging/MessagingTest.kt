@@ -61,6 +61,62 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
+    fun testStartAndKill() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newDB.use { catDB ->
+                    newMessaging(dogDB, "dog").with { dog ->
+                        newMessaging(catDB, "cat", start = false).with { cat ->
+                            assertEquals(
+                                0,
+                                cat.db.listPaths("%").size,
+                                "database should be empty before calling start()",
+                            )
+                            cat.start()
+                            // calling start twice should be safe
+                            cat.start()
+
+                            val dogId = dog.myId.id
+                            cat.addOrUpdateDirectContact(dogId, "dog")
+                            sendAndVerify(
+                                "cat sends a message to dog",
+                                cat,
+                                dog,
+                                "hi dog"
+                            )
+
+                            cat.close()
+                            newMessaging(catDB, "cat2", start = false).with { cat2 ->
+                                sendAndVerify(
+                                    "cat2 sends a message to dog after opening with auto-start", // ktlint-disable max-line-length
+                                    cat2,
+                                    dog,
+                                    "hi dog"
+                                )
+
+                                cat2.kill()
+                                assertEquals(
+                                    0,
+                                    cat2.db.listPaths("%").size,
+                                    "database should be empty after calling kill()",
+                                )
+                                assertEquals(
+                                    0,
+                                    catDB
+                                        .withSchema("messaging_protocol_store")
+                                        .listPaths("%")
+                                        .size,
+                                    "MessagingProtocolStore database should be empty after calling kill()", // ktlint-disable max-line-length
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     fun testManageDirectContact() {
         testInCoroutine {
             newDB.use { dogDB ->
@@ -2450,9 +2506,10 @@ class MessagingTest : BaseMessagingTest() {
         failedSendRetryDelayMillis: Long = 100,
         stopSendRetryAfterMillis: Long = 5L.minutesToMillis,
         orphanedAttachmentCutoffSeconds: Int = 1,
-        provisionalContactsExpireAfterSeconds: Long = 20
+        provisionalContactsExpireAfterSeconds: Long = 20,
+        start: Boolean = true
     ): Messaging {
-        return Messaging(
+        val result = Messaging(
             db,
             File(
                 InstrumentationRegistry.getInstrumentation().targetContext.filesDir,
@@ -2471,6 +2528,10 @@ class MessagingTest : BaseMessagingTest() {
             provisionalContactsExpireAfterSeconds = provisionalContactsExpireAfterSeconds,
             name = name
         )
+        if (start) {
+            result.start()
+        }
+        return result
     }
 }
 

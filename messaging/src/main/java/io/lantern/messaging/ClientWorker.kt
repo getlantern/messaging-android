@@ -31,10 +31,6 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
     private var consecutiveFailures = -1
     private val currentlyConnecting get() = cancelConnecting != null
 
-    init {
-        autoConnectIfNecessary()
-    }
-
     internal fun withClient(cb: (C) -> Unit) {
         submit {
             client?.let {
@@ -127,7 +123,7 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
         }
     }
 
-    private fun autoConnectIfNecessary() {
+    internal fun autoConnectIfNecessary() {
         if (!autoConnect) {
             return
         }

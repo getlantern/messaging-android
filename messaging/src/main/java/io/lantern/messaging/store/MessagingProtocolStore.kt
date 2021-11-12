@@ -29,6 +29,10 @@ class MessagingProtocolStore(
     internal fun changeIdentityKeyPair(keyPair: ECKeyPair) {
         // Clear the store since our old cryptographic material won't be valid with a new keyPair.
         keyPairRef.set(keyPair)
+        clear()
+    }
+
+    fun clear() {
         db.clear()
     }
 
