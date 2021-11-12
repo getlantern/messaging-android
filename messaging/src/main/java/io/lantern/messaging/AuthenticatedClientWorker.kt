@@ -12,8 +12,7 @@ internal class AuthenticatedClientWorker(
     messaging: Messaging,
     private val roundTripTimeoutMillis: Long,
     redialBackoffMillis: Long,
-    maxRedialDelayMillis: Long,
-    retryDelayMillis: Long
+    maxRedialDelayMillis: Long
 ) : ClientWorker<AuthenticatedClientDelegate, AuthenticatedClient>(
     transportFactory,
     messaging,
@@ -21,7 +20,6 @@ internal class AuthenticatedClientWorker(
     roundTripTimeoutMillis,
     redialBackoffMillis,
     maxRedialDelayMillis,
-    retryDelayMillis,
     autoConnect = true
 ),
     AuthenticatedClientDelegate {
