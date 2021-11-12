@@ -220,11 +220,12 @@ class Messaging(
 
         // make sure we have a contact entry for ourselves
         val me = db.mutate { tx ->
-            tx.get(Schema.PATH_ME) ?: tx.put(
+            tx.put(
                 Schema.PATH_ME,
-                Model.Contact.newBuilder()
+                (tx.get<Model.Contact>(Schema.PATH_ME)?.toBuilder() ?: Model.Contact.newBuilder())
                     .setContactId(identityKeyPair.publicKey.toString().directContactId)
                     .setIsMe(true)
+                    .setVerificationLevel(Model.VerificationLevel.VERIFIED)
                     .build()
             )
         }
