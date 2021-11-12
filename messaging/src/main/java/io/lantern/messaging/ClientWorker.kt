@@ -23,8 +23,9 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
     private val connectTimeoutMillis: Long,
     private val redialBackoffMillis: Long,
     private val maxRedialDelayMillis: Long,
-    private val autoConnect: Boolean = false
-) : Worker(messaging, "$name-client"), ClientDelegate {
+    retryDelayMillis: Long,
+    private val autoConnect: Boolean = false,
+) : Worker(messaging, "$name-client", retryDelayMillis), ClientDelegate {
     private var client: C? = null
     private var cancelConnecting: ScheduledFuture<*>? = null
     private val cbsAfterConnect = ArrayList<((C) -> Unit)>()

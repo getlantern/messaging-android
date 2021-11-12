@@ -10,14 +10,16 @@ internal class AnonymousClientWorker(
     messaging: Messaging,
     private val roundTripTimeoutMillis: Long,
     redialBackoffMillis: Long,
-    maxRedialDelayMillis: Long
+    maxRedialDelayMillis: Long,
+    retryDelayMillis: Long
 ) : ClientWorker<AnonymousClientDelegate, AnonymousClient>(
     transportFactory,
     messaging,
     "anonymous",
     roundTripTimeoutMillis,
     redialBackoffMillis,
-    maxRedialDelayMillis
+    maxRedialDelayMillis,
+    retryDelayMillis
 ),
     AnonymousClientDelegate {
     override fun buildClient(): AnonymousClient {

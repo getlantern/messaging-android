@@ -169,7 +169,8 @@ class Messaging(
             this,
             clientTimeoutMillis,
             redialBackoffMillis,
-            maxRedialDelayMillis
+            maxRedialDelayMillis,
+            failedSendRetryDelayMillis
         )
 
     internal val authenticatedClientWorker =
@@ -178,7 +179,8 @@ class Messaging(
             this,
             clientTimeoutMillis,
             redialBackoffMillis,
-            maxRedialDelayMillis
+            maxRedialDelayMillis,
+            failedSendRetryDelayMillis
         )
 
     init {
