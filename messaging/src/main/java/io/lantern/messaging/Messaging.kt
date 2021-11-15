@@ -277,6 +277,7 @@ class Messaging(
      * Starts the messaging system. Until start() is called the first time, the data remains
      * unitialized. start() must be called before attempting to use any of the other functions.
      */
+    @Synchronized
     fun start() {
         if (started.compareAndSet(false, true)) {
             logger.debug("starting")
@@ -287,6 +288,20 @@ class Messaging(
         } else {
             logger.debug("already started, not starting again")
         }
+    }
+
+    /**
+     * Kill disconnects from servers and wipes the database.
+     */
+    @Synchronized
+    fun kill() {
+        if (started.compareAndSet(true, false)) {
+            cryptoWorker.close()
+            authenticatedClientWorker.disconnect()
+            anonymousClientWorker.disconnect()
+        }
+        store.clear()
+        db.clear()
     }
 
     /**
@@ -308,17 +323,6 @@ class Messaging(
             tx.put(Schema.PATH_RECOVERY_KEY, rk)
         }
         start()
-    }
-
-    /**
-     * Kill disconnects from servers and wipes the database.
-     */
-    fun kill() {
-        cryptoWorker.close()
-        authenticatedClientWorker.disconnect()
-        anonymousClientWorker.disconnect()
-        store.clear()
-        db.clear()
     }
 
     /**
