@@ -28,18 +28,6 @@ class MessagingProtocolStoreTest : BaseMessagingTest() {
             val kp2 = ms.identityKeyPair
             assertEquals(kp1.publicKey, kp2.publicKey)
             assertTrue(Arrays.equals(kp1.privateKey.bytes, kp2.privateKey.bytes))
-
-            newDB.use { nextDB ->
-                // create a new MessagingProtocolStore initialized with some other key material
-                val ms2 = MessagingProtocolStore(
-                    nextDB,
-                    recoveryKey.keyPair("kp_other")
-                )
-                ms2.changeIdentityKeyPair(kp1)
-                val kp3 = ms2.identityKeyPair
-                assertEquals(kp1.publicKey, kp3.publicKey)
-                assertTrue(Arrays.equals(kp1.privateKey.bytes, kp3.privateKey.bytes))
-            }
         }
     }
 

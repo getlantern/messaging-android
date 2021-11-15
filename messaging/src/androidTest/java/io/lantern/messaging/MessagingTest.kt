@@ -2251,6 +2251,11 @@ class MessagingTest : BaseMessagingTest() {
                                         cat1.db.get<Model.Contact>(dogContact.dbPath),
                                         "dog contact should be gone after recovery"
                                     )
+                                    assertEquals(
+                                        cat1.identityKeyPair.publicKey,
+                                        cat2.identityKeyPair.publicKey,
+                                        "cat1 should now have cat2's identity key"
+                                    )
 
                                     cat1.addOrUpdateDirectContact(dogId)
                                     sendAndVerify(
@@ -2259,6 +2264,10 @@ class MessagingTest : BaseMessagingTest() {
                                         dog,
                                         "hello again dog"
                                     )
+
+                                    // test recovery in non-started state
+                                    val cat3 = newMessaging(cat2DB, "cat", start = false)
+                                    cat3.recover(cat2.recoveryCode)
                                 }
                             }
                         }

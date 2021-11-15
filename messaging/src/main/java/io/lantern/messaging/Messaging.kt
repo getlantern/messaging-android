@@ -282,7 +282,6 @@ class Messaging(
         if (started.compareAndSet(false, true)) {
             logger.debug("starting")
             deriveIdentityKeyPair()
-            store.changeIdentityKeyPair(identityKeyPair)
             authenticatedClientWorker.autoConnectIfNecessary()
             initialize()
         } else {
@@ -300,7 +299,7 @@ class Messaging(
             authenticatedClientWorker.disconnect()
             anonymousClientWorker.disconnect()
         }
-        store.clear()
+        db.withSchema("messaging_protocol_store").clear()
         db.clear()
     }
 
