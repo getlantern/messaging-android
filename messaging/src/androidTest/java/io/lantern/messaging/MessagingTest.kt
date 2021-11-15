@@ -415,6 +415,42 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
+    fun testDelayedChatNumber() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newDB.use { catDB ->
+                    newMessaging(dogDB, "dog").with { dog ->
+                        newMessaging(catDB, "cat").with { cat ->
+                            val catId = cat.myId.id
+
+                            delay(5000)
+                            logger.debug("before adding contact set dials to fail for a while")
+                            BrokenTransportFactory.closeAll()
+                            BrokenTransportFactory.succeedDialing.set(false)
+                            val catContact = dog.addOrUpdateDirectContact(catId)
+                            delay(5000)
+                            dog.waitFor<Model.Contact>(
+                                catContact.dbPath,
+                                "cat contact should not yet have a chat number"
+                            ) {
+                                !it.hasChatNumber()
+                            }
+                            logger.debug("allow dials to succeed again")
+                            BrokenTransportFactory.succeedDialing.set(true)
+                            dog.waitFor<Model.Contact>(
+                                catContact.dbPath,
+                                "cat contact should now have a chat number"
+                            ) {
+                                it.hasChatNumber()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     fun testProvisionalContacts() {
         testInCoroutine {
             newDB.use { dogDB ->

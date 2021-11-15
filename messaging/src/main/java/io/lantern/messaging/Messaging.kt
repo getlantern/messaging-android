@@ -10,7 +10,6 @@ import io.lantern.messaging.metadata.Metadata
 import io.lantern.messaging.store.MessagingProtocolStore
 import io.lantern.messaging.tassis.Callback
 import io.lantern.messaging.tassis.Messages
-import io.lantern.messaging.tassis.TassisError
 import io.lantern.messaging.tassis.TransportFactory
 import io.lantern.messaging.time.hoursToMillis
 import io.lantern.messaging.time.secondsToMillis
@@ -31,6 +30,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.pow
 import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.InvalidKeyException
@@ -585,7 +585,10 @@ class Messaging(
         }
     }
 
-    private fun lookupChatNumberIfNecessary(path: String) {
+    private fun lookupChatNumberIfNecessary(
+        path: String,
+        cumulativeDelay: Long = failedSendRetryDelayMillis
+    ) {
         db.get<Model.Contact>(path)?.let { contact ->
             if (
                 contact.contactId.type == Model.ContactType.DIRECT &&
@@ -617,10 +620,13 @@ class Messaging(
                             }
 
                             override fun onError(err: Throwable) {
-                                if (!(err is TassisError)) {
-                                    anonymousClientWorker.retryFailed {
-                                        lookupChatNumberIfNecessary(path)
-                                    }
+                                val delay = cumulativeDelay * 2
+                                if (delay > stopSendRetryAfterMillis) {
+                                    logger.error("Permanently failed to look up ChatNumber with error: ${err.message}") // ktlint-disable max-line-length
+                                    return
+                                }
+                                anonymousClientWorker.submitDelayed(delay) {
+                                    lookupChatNumberIfNecessary(path, delay)
                                 }
                             }
                         }
