@@ -1175,7 +1175,9 @@ class MessagingTest : BaseMessagingTest() {
                     val me = dog.db.get<Model.Contact>(Schema.PATH_ME)!!
                     assertEquals(true, me.isMe)
                     assertEquals(Model.VerificationLevel.VERIFIED, me.verificationLevel)
-                    assertEquals(true, dog.db.get<Model.Contact>(me.dbPath)?.isMe)
+                    val meInMainContactList = dog.db.get<Model.Contact>(me.dbPath)!!
+                    assertEquals(true, meInMainContactList.isMe)
+                    assertEquals(Model.VerificationLevel.VERIFIED, meInMainContactList.verificationLevel) // ktlint-disable max-line-length
                 }
             }
         }

@@ -223,6 +223,7 @@ class Messaging(
         // add myself as a contact to record notes to myself
         doAddOrUpdateContact(myId) { contact, _ ->
             contact.isMe = true
+            contact.verificationLevel = Model.VerificationLevel.VERIFIED
         }
 
         // immediately request some upload authorizations so that we're ready to upload attachments
