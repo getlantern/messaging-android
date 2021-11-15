@@ -53,23 +53,6 @@ internal abstract class Worker(
         }
     }
 
-    internal fun submitDelayed(delayMillis: Long, cmd: () -> Unit) {
-        try {
-            executor.schedule(
-                {
-                    try {
-                        cmd()
-                    } catch (t: Throwable) {
-                        logger.error(t.message, t)
-                    }
-                },
-                delayMillis, TimeUnit.MILLISECONDS
-            )
-        } catch (t: Throwable) {
-            logger.error(t.message, t)
-        }
-    }
-
     internal fun <T> submitForValue(cmd: () -> T): T {
         try {
             return executor.submit(Callable { cmd() }).get()
