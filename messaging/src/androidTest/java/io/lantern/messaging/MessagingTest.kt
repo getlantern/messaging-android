@@ -308,6 +308,11 @@ class MessagingTest : BaseMessagingTest() {
                                 0,
                                 dog.db.listPaths(Schema.PATH_CONTACTS_BY_ACTIVITY.path("%")).count()
                             )
+                            assertEquals(
+                                0,
+                                dog.store.getSubDeviceSessions(catId).size,
+                                "dog should have no sessions for cat in protocol store"
+                            )
                             val dogDbString = dog.db.dumpToString()
                             assertFalse(
                                 dogDbString.contains(catId),

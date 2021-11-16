@@ -705,6 +705,7 @@ class Messaging(
     private fun deleteContact(contactId: Model.ContactId) {
         db.mutate { tx ->
             deleteContactActivity(tx, contactId)
+            store.deleteAllSessions(contactId.id)
             tx.delete(contactId.contactPath)
         }
     }
