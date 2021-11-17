@@ -1449,6 +1449,7 @@ class Messaging(
     /**
      * Like introduce, but accepting a function that builds the introduction, used only for testing.
      */
+    @Throws(IllegalArgumentException::class)
     internal fun doIntroduce(
         unsafeRecipientIds: List<String>,
         buildIntroduction: (Model.Contact) -> Model.IntroductionDetails
@@ -1458,6 +1459,9 @@ class Messaging(
         }
 
         val recipientIds = unsafeRecipientIds.map { it.sanitizedContactId }
+        if (recipientIds.contains(myId.id)) {
+            throw IllegalArgumentException("You cannot introduce contacts to yourself")
+        }
 
         val introducedParties = recipientIds.map { recipientId ->
             db.get<Model.Contact>(recipientId.directContactPath)

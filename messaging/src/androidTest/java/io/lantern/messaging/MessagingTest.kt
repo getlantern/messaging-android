@@ -1838,6 +1838,13 @@ class MessagingTest : BaseMessagingTest() {
                 // okay
             }
 
+            // try to introduce to yourself
+            try {
+                dog.introduce(listOf(dogId, catId))
+            } catch (e: java.lang.IllegalArgumentException) {
+                // expected
+            }
+
             // Introduce dog and cat to each other. We use a custom introduction builder to mess up the
             // displayName on the introduction to test sanitizing inbound introductions.
             owner.doIntroduce(listOf(dogId, catId.toUpperCase())) { to ->
