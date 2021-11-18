@@ -2230,6 +2230,13 @@ class MessagingTest : BaseMessagingTest() {
         }
     }
 
+    // Assert account recovery:
+    //
+    // - Setup 3 messaging instances (dog, cat1, cat2) where two (cat1 and
+    //   cat2) are identical
+    // - Assert that communication between dog and cat1 works
+    // - Initiate an account recovery for cat1 using cat2
+    // - Assert cat1 can still talk to dog
     @Test
     fun testRecovery() {
         testInCoroutine {
