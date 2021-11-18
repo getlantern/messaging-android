@@ -313,8 +313,17 @@ class Messaging(
 
     /**
      * Recovers the messaging system using the given recoveryKey. All existing data will be erased.
+     *
+     * If an invalid recoveryCode is provided, this will throw an InvalidKeyException and leave the
+     * system in its current state.
      */
+    @Throws(InvalidKeyException::class)
     fun recover(recoveryCode: String) {
+        val newRecoveryKey = recoveryCode.fromBase32
+        if (newRecoveryKey.size != recoveryKey.size) {
+            throw InvalidKeyException("Invalid recovery code")
+        }
+
         kill()
         // TODO: use constant-time implementation of base32 decoding
         val rk = recoveryCode.fromBase32

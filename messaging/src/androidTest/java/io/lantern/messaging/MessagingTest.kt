@@ -2237,15 +2237,15 @@ class MessagingTest : BaseMessagingTest() {
                 newDB.use { cat1DB ->
                     newDB.use { cat2DB ->
                         newMessaging(dogDB, "dog").with { dog ->
-                            newMessaging(cat1DB, "cat").with { cat1 ->
-                                newMessaging(cat2DB, "cat").with { cat2 ->
+                            newMessaging(cat1DB, "cat1").with { cat1 ->
+                                newMessaging(cat2DB, "cat2").with { cat2 ->
                                     val dogId = dog.myId.id
                                     val cat1Id = cat1.myId.id
 
                                     dog.addOrUpdateDirectContact(cat1Id)
                                     val dogContact = cat1.addOrUpdateDirectContact(dogId)
                                     sendAndVerify(
-                                        "dog sends a message to cat 1",
+                                        "dog sends a message to cat1",
                                         dog,
                                         cat1,
                                         "hi cat"
@@ -2258,7 +2258,11 @@ class MessagingTest : BaseMessagingTest() {
                                         "hi dog"
                                     )
 
+                                    // Recover cat1 using a different recovery code than its own
+                                    assertNotEquals(cat1.recoveryCode, cat2.recoveryCode)
                                     cat1.recover(cat2.recoveryCode)
+                                    assertEquals(cat1.recoveryCode, cat2.recoveryCode)
+
                                     assertNull(
                                         cat1.db.get<Model.Contact>(dogContact.dbPath),
                                         "dog contact should be gone after recovery"
@@ -2280,6 +2284,27 @@ class MessagingTest : BaseMessagingTest() {
                                     // test recovery in non-started state
                                     val cat3 = newMessaging(cat2DB, "cat", start = false)
                                     cat3.recover(cat2.recoveryCode)
+                                    assertEquals(cat3.recoveryCode, cat2.recoveryCode)
+
+                                    // attempt to recover with invalid recovery code
+                                    try {
+                                        cat3.recover("asdfasd")
+                                        fail("attempt to recover with invalid recovery code should fail") // ktlint-disable max-line-length
+                                    } catch (e: InvalidKeyException) {
+                                        // okay
+                                    }
+                                    assertEquals(
+                                        cat3.recoveryCode,
+                                        cat2.recoveryCode,
+                                        "recovery code should remain unchanged after failed attempt to recover" // ktlint-disable max-line-length
+                                    )
+                                    cat3.addOrUpdateDirectContact(dogId)
+                                    sendAndVerify(
+                                        "should be able to send messages after failed recovery", // ktlint-disable max-line-length
+                                        cat3,
+                                        dog,
+                                        "hello again dog"
+                                    )
                                 }
                             }
                         }
