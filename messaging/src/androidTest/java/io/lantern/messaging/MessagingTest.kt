@@ -2137,7 +2137,7 @@ class MessagingTest : BaseMessagingTest() {
                 newDB.use { cat1DB ->
                     newDB.use { cat2DB ->
                         newMessaging(dogDB, "dog").with { dog ->
-                            newMessaging(cat1DB, "cat").with { cat1 ->
+                            newMessaging(cat1DB, "cat1").with { cat1 ->
                                 newMessaging(cat2DB, "cat").with { cat2 ->
                                     val dogId = dog.myId.id
                                     val cat1Id = cat1.myId.id
