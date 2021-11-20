@@ -30,7 +30,6 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.math.pow
 import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.InvalidKeyException
@@ -956,6 +955,17 @@ class Messaging(
                 )
             }
             tx.put(msgPath, builder.build())
+
+            if (builder.direction == Model.MessageDirection.IN) {
+                tx.get<Model.Contact>(builder.contactId.contactPath)?.let { contact ->
+                    tx.put(
+                        contact.dbPath,
+                        contact.toBuilder()
+                            .setNumUnviewedMessages(contact.numUnviewedMessages - 1)
+                            .build()
+                    )
+                }
+            }
         }
     }
 
@@ -1317,29 +1327,35 @@ class Messaging(
         tx: Transaction,
         msg: Model.StoredMessage,
         force: Boolean = false,
+        incrementUnviewed: Boolean = false,
     ) {
         val contactPath = msg.contactId.contactPath
         val contact = tx.get<Model.Contact>(contactPath)
             ?: throw IllegalArgumentException("unknown contact")
-        if (!force && msg.ts <= contact.mostRecentMessageTs) {
+        if (!force && !incrementUnviewed && msg.ts <= contact.mostRecentMessageTs) {
             return
         }
         // delete existing index entry
         tx.delete(contact.timestampedIdxPath)
         // update the contact
         val updatedContactBuilder = contact.toBuilder()
-            .setMostRecentMessageTs(msg.ts)
-            .setMostRecentMessageDirection(msg.direction)
-            .setMostRecentMessageText(msg.text)
+        if (force || msg.ts > contact.mostRecentMessageTs) {
+            updatedContactBuilder.mostRecentMessageTs = msg.ts
+            updatedContactBuilder.mostRecentMessageDirection = msg.direction
+            updatedContactBuilder.mostRecentMessageText = msg.text
+            if (msg.attachmentsCount > 0) {
+                updatedContactBuilder.mostRecentAttachmentMimeType =
+                    msg.attachmentsMap.values.iterator().next().attachment.mimeType
+            }
+        }
         if (msg.direction == Model.MessageDirection.IN) {
             updatedContactBuilder.hasReceivedMessage = true
         }
-        if (msg.attachmentsCount > 0) {
-            updatedContactBuilder.mostRecentAttachmentMimeType =
-                msg.attachmentsMap.values.iterator().next().attachment.mimeType
-        }
         if (contact.firstReceivedMessageTs == 0L && msg.direction == Model.MessageDirection.IN) {
             updatedContactBuilder.firstReceivedMessageTs = now
+        }
+        if (incrementUnviewed) {
+            updatedContactBuilder.numUnviewedMessages += 1
         }
         val updatedContact = updatedContactBuilder.build()
         tx.put(contactPath, updatedContact)

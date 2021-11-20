@@ -925,7 +925,7 @@ internal class CryptoWorker(
         tx.put(storedMsg.dbPath, storedMsg, fullText = storedMsg.fullText)
 
         // update the Contact metadata
-        messaging.updateContactMetaData(tx, storedMsg)
+        messaging.updateContactMetaData(tx, storedMsg, incrementUnviewed = true)
         // save a pointer to the message under the contact message path
         tx.put(storedMsg.contactMessagePath, storedMsg.dbPath)
 

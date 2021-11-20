@@ -1626,7 +1626,22 @@ class MessagingTest : BaseMessagingTest() {
                                 "message should not yet have disappeared remotely"
                             )
 
+                            assertEquals(
+                                0,
+                                dog.db.get<Model.Contact>(catContact.dbPath)?.numUnviewedMessages,
+                                "dog should show no unviewed message from sent message"
+                            )
+                            assertEquals(
+                                1,
+                                cat.db.get<Model.Contact>(dogContact.dbPath)?.numUnviewedMessages,
+                                "cat should show unviewed message from received message"
+                            )
                             cat.markViewed(msgs.received.dbPath)
+                            assertEquals(
+                                0,
+                                cat.db.get<Model.Contact>(dogContact.dbPath)?.numUnviewedMessages,
+                                "numUnviewedMessages should reduce by 1 after viewing"
+                            )
                             // close and reopen cat to make sure disappearing messages work after startup
                             cat.close()
                             newMessaging(catDB, "cat").with { theCat ->
