@@ -29,9 +29,7 @@ class MessagingProtocolStore(
             } else {
                 val keyPair = Curve.generateKeyPair()
                 tx.put(PATH_IDENTITY_KEY_PUBLIC, keyPair.publicKey.bytes)
-                tx.put(PATH_IDENTITY_KEY_PUBLIC_BASE32, keyPair.publicKey.toString())
                 tx.put(PATH_IDENTITY_KEY_PRIVATE, keyPair.privateKey.bytes)
-                tx.put(PATH_IDENTITY_KEY_PRIVATE_BASE32, keyPair.privateKey.toString())
                 keyPair
             }
         }
@@ -166,10 +164,8 @@ class MessagingProtocolStore(
         private const val PATH_SIGNAL_PROTOCOL_STORE = "/signalProtocolStore"
 
         private const val PATH_IDENTITY_KEY = "$PATH_SIGNAL_PROTOCOL_STORE/identityKeyPair"
-        private const val PATH_IDENTITY_KEY_PUBLIC = "$PATH_IDENTITY_KEY/public"
-        internal const val PATH_IDENTITY_KEY_PUBLIC_BASE32 = "$PATH_IDENTITY_KEY/publicBase32"
-        private const val PATH_IDENTITY_KEY_PRIVATE = "$PATH_IDENTITY_KEY/private"
-        internal const val PATH_IDENTITY_KEY_PRIVATE_BASE32 = "$PATH_IDENTITY_KEY/privateBase32"
+        internal const val PATH_IDENTITY_KEY_PUBLIC = "$PATH_IDENTITY_KEY/public"
+        internal const val PATH_IDENTITY_KEY_PRIVATE = "$PATH_IDENTITY_KEY/private"
 
         private const val PATH_DEVICE_ID = "$PATH_SIGNAL_PROTOCOL_STORE/deviceId"
 

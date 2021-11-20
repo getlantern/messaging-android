@@ -7,17 +7,13 @@ const val versionField = "_migrationsDbVersion"
 
 private val logger = KotlinLogging.logger {}
 
-private class Migration(val version: Int, val apply: () -> Unit) : Comparable<Migration> {
-    override fun compareTo(other: Migration): Int = this.version - other.version
-}
-
 /**
  * Migrations applies database migrations to keep schema and data up-to-date.
  */
 class Migrations(private val messaging: Messaging) {
     fun apply() {
         messaging.db.mutate { tx ->
-            val currentVersion = tx.get<Int>(versionField) ?: 0
+            val currentVersion = tx.get(versionField) ?: 0
             logger.debug("current database version is $currentVersion")
             migrations.forEach { (version, apply) ->
                 if (version > currentVersion) {
