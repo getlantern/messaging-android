@@ -1681,6 +1681,82 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
+    fun testNumUnviewed() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newDB.use { catDB ->
+                    newMessaging(dogDB, "dog").with { dog ->
+                        newMessaging(catDB, "cat").with { cat ->
+                            val catId = cat.myId.id
+                            val dogId = dog.myId.id
+
+                            val catContact = dog.addOrUpdateDirectContact(
+                                catId,
+                                "Cat",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
+                            val dogContact = cat.addOrUpdateDirectContact(
+                                dogId,
+                                "Dog",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
+
+                            val msgs1 = sendAndVerify(
+                                "first message",
+                                dog,
+                                cat,
+                                "first message"
+                            )
+                            val msgs2 = sendAndVerify(
+                                "second message",
+                                dog,
+                                cat,
+                                "second message"
+                            )
+
+                            assertEquals(
+                                0,
+                                dog.db.get<Model.Contact>(catContact.dbPath)?.numUnviewedMessages,
+                                "dog should show no unviewed message from sent messages"
+                            )
+                            assertEquals(
+                                2,
+                                cat.db.get<Model.Contact>(dogContact.dbPath)?.numUnviewedMessages,
+                                "cat should show 2 unviewed messages"
+                            )
+                            cat.markViewed(msgs1.received.dbPath)
+                            assertEquals(
+                                1,
+                                cat.db.get<Model.Contact>(dogContact.dbPath)?.numUnviewedMessages,
+                                "numUnviewedMessages should reduce by 1 after viewing"
+                            )
+                            cat.deleteLocally(msgs1.received.dbPath)
+                            assertEquals(
+                                1,
+                                cat.db.get<Model.Contact>(dogContact.dbPath)?.numUnviewedMessages,
+                                "deleting viewed message should have no impact on numUnviewedMessages" // ktlint-disable max-line-length
+                            )
+                            cat.deleteLocally(msgs2.received.dbPath)
+                            assertEquals(
+                                0,
+                                cat.db.get<Model.Contact>(dogContact.dbPath)?.numUnviewedMessages,
+                                "numUnviewedMessages should reduce by 1 after deleting unviewed message" // ktlint-disable max-line-length
+                            )
+                            dog.deleteLocally(msgs1.sent.dbPath)
+                            dog.deleteLocally(msgs2.sent.dbPath)
+                            assertEquals(
+                                0,
+                                dog.db.get<Model.Contact>(catContact.dbPath)?.numUnviewedMessages,
+                                "deleting sent messages should have no impact on numUnviewedMessages" // ktlint-disable max-line-length
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     fun testWebRTCSignaling() {
         testInCoroutine {
             newDB.use { dogDB ->
