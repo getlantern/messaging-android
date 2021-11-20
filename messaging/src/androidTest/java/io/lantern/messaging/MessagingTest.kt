@@ -3,6 +3,7 @@ package io.lantern.messaging
 import androidx.test.platform.app.InstrumentationRegistry
 import io.lantern.db.DB
 import io.lantern.messaging.conversions.byteString
+import io.lantern.messaging.store.MessagingProtocolStore
 import io.lantern.messaging.tassis.MessageHandler
 import io.lantern.messaging.tassis.Transport
 import io.lantern.messaging.tassis.websocket.WSListener
@@ -583,14 +584,14 @@ class MessagingTest : BaseMessagingTest() {
     fun testBasicFlowWithConnectivityIssues() {
         newDB.use { dogDB ->
             newDB.use { catDB ->
-                val catStore = newStore(catDB)
+                val cat = newMessaging(catDB, "cat")
                 val theDog = newMessaging(dogDB, "dog")
 
                 testInCoroutine {
                     theDog.with { it ->
                         var dog = it
-                        val catId = catStore.identityKeyPair.publicKey.toString()
-                        val dogId = dog.store.identityKeyPair.publicKey.toString()
+                        val catId = cat.identityKeyPair.publicKey.toString()
+                        val dogId = dog.identityKeyPair.publicKey.toString()
 
                         assertNotNull(
                             dog.db.get<Model.Contact>(Schema.PATH_ME),
@@ -762,7 +763,11 @@ class MessagingTest : BaseMessagingTest() {
                         "dog",
                         stopSendRetryAfterMillis = 5L.secondsToMillis
                     ).with { dog ->
-                        val catStore = newStore(catDB)
+                        val recoveryKey = generateRecoveryKey()
+                        val catStore = MessagingProtocolStore(
+                            catDB,
+                            recoveryKey.keyPair("kp0")
+                        )
                         val dogId = dog.myId.id
                         val catId = catStore.identityKeyPair.publicKey.toString()
 
@@ -783,6 +788,7 @@ class MessagingTest : BaseMessagingTest() {
                         }
 
                         newMessaging(catDB, "cat").with { cat ->
+                            cat.recover(recoveryKey.base32)
                             cat.addOrUpdateDirectContact(
                                 dogId,
                                 "Dog",
@@ -1019,8 +1025,8 @@ class MessagingTest : BaseMessagingTest() {
                 newDB.use { catDB ->
                     newMessaging(catDB, "cat").with { cat ->
                         newMessaging(dogDB, "dog", stopSendRetryAfterMillis = 5000).with { dog ->
-                            val catId = cat.store.identityKeyPair.publicKey.toString()
-                            val dogId = dog.store.identityKeyPair.publicKey.toString()
+                            val catId = cat.identityKeyPair.publicKey.toString()
+                            val dogId = dog.identityKeyPair.publicKey.toString()
                             val fakeId = KeyHelper.generateIdentityKeyPair().publicKey.toString()
 
                             cat.addOrUpdateDirectContact(
@@ -1566,8 +1572,8 @@ class MessagingTest : BaseMessagingTest() {
                 newDB.use { catDB ->
                     newMessaging(catDB, "cat").with { cat ->
                         newMessaging(dogDB, "dog", stopSendRetryAfterMillis = 5000).with { dog ->
-                            val catId = cat.store.identityKeyPair.publicKey.toString()
-                            val dogId = dog.store.identityKeyPair.publicKey.toString()
+                            val catId = cat.identityKeyPair.publicKey.toString()
+                            val dogId = dog.identityKeyPair.publicKey.toString()
 
                             cat.addOrUpdateDirectContact(
                                 dogId,
@@ -2117,6 +2123,63 @@ class MessagingTest : BaseMessagingTest() {
         }
     }
 
+    // Assert account recovery:
+    //
+    // - Setup 3 messaging instances (dog, cat1, cat2) where two (cat1 and
+    //   cat2) are identical
+    // - Assert that communication between dog and cat1 works
+    // - Initiate an account recovery for cat1 using cat2
+    // - Assert cat1 can still talk to dog
+    @Test
+    fun testRecovery() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newDB.use { cat1DB ->
+                    newDB.use { cat2DB ->
+                        newMessaging(dogDB, "dog").with { dog ->
+                            newMessaging(cat1DB, "cat1").with { cat1 ->
+                                newMessaging(cat2DB, "cat").with { cat2 ->
+                                    val dogId = dog.myId.id
+                                    val cat1Id = cat1.myId.id
+
+                                    dog.addOrUpdateDirectContact(cat1Id)
+                                    val dogContact = cat1.addOrUpdateDirectContact(dogId)
+                                    sendAndVerify(
+                                        "dog sends a message to cat 1",
+                                        dog,
+                                        cat1,
+                                        "hi cat"
+                                    )
+
+                                    sendAndVerify(
+                                        "cat1 sends a message to dog",
+                                        cat1,
+                                        dog,
+                                        "hi dog"
+                                    )
+
+                                    cat1.recover(cat2.recoveryCode)
+                                    assertNull(
+                                        cat1.db.get<Model.Contact>(dogContact.dbPath),
+                                        "dog contact should be gone after recovery"
+                                    )
+
+                                    cat1.addOrUpdateDirectContact(dogId)
+                                    sendAndVerify(
+                                        "recovered cat1 sends a message to dog",
+                                        cat1,
+                                        dog,
+                                        "hello again dog"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     @Test
     fun testSha1() {
         assertEquals(173, "rtfr4noprty198jhdssetbegxq4y5fsh2rfrn96x7nx7tj8tutqy".sha1(360))
@@ -2146,7 +2209,7 @@ class MessagingTest : BaseMessagingTest() {
         ignoreSendsForMillis: Long = 0
     ): MessagePair {
         logger.debug("running case $testCase")
-        val fromId = from.store.identityKeyPair.publicKey.toString()
+        val fromId = from.identityKeyPair.publicKey.toString()
         val toId = to.myId.id
 
         if (ignoreSendsForMillis > 0) {

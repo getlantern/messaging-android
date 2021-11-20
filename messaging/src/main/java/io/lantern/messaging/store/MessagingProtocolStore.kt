@@ -1,13 +1,11 @@
 package io.lantern.messaging.store
 
 import io.lantern.db.DB
+import java.util.concurrent.atomic.AtomicReference
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.InvalidKeyIdException
 import org.whispersystems.libsignal.SignalProtocolAddress
-import org.whispersystems.libsignal.ecc.Curve
 import org.whispersystems.libsignal.ecc.ECKeyPair
-import org.whispersystems.libsignal.ecc.ECPrivateKey
-import org.whispersystems.libsignal.ecc.ECPublicKey
 import org.whispersystems.libsignal.state.PreKeyRecord
 import org.whispersystems.libsignal.state.SessionRecord
 import org.whispersystems.libsignal.state.SignalProtocolStore
@@ -15,24 +13,23 @@ import org.whispersystems.libsignal.state.SignedPreKeyRecord
 import org.whispersystems.libsignal.util.KeyHelper
 
 class MessagingProtocolStore(
-    parentDB: DB
+    parentDB: DB,
+    identityKeyPair: ECKeyPair
 ) : SignalProtocolStore {
     val db = parentDB.withSchema("messaging_protocol_store")
 
-    override fun getIdentityKeyPair(): ECKeyPair {
-        return db.mutate { tx ->
-            val public = db.get<ByteArray>(PATH_IDENTITY_KEY_PUBLIC)
-            val private = db.get<ByteArray>(PATH_IDENTITY_KEY_PRIVATE)
+    private val keyPairRef = AtomicReference<ECKeyPair>()
 
-            if (public != null && private != null) {
-                ECKeyPair(ECPublicKey(public), ECPrivateKey(private))
-            } else {
-                val keyPair = Curve.generateKeyPair()
-                tx.put(PATH_IDENTITY_KEY_PUBLIC, keyPair.publicKey.bytes)
-                tx.put(PATH_IDENTITY_KEY_PRIVATE, keyPair.privateKey.bytes)
-                keyPair
-            }
-        }
+    init {
+        keyPairRef.set(identityKeyPair)
+    }
+
+    override fun getIdentityKeyPair(): ECKeyPair = keyPairRef.get()
+
+    internal fun changeIdentityKeyPair(keyPair: ECKeyPair) {
+        // Clear the store since our old cryptographic material won't be valid with a new keyPair.
+        keyPairRef.set(keyPair)
+        db.clear()
     }
 
     val deviceId: DeviceId
@@ -161,15 +158,9 @@ class MessagingProtocolStore(
     }
 
     companion object {
-        private const val PATH_SIGNAL_PROTOCOL_STORE = "/signalProtocolStore"
+        private const val PATH_DEVICE_ID = "deviceId"
 
-        private const val PATH_IDENTITY_KEY = "$PATH_SIGNAL_PROTOCOL_STORE/identityKeyPair"
-        internal const val PATH_IDENTITY_KEY_PUBLIC = "$PATH_IDENTITY_KEY/public"
-        internal const val PATH_IDENTITY_KEY_PRIVATE = "$PATH_IDENTITY_KEY/private"
-
-        private const val PATH_DEVICE_ID = "$PATH_SIGNAL_PROTOCOL_STORE/deviceId"
-
-        private const val PATH_PREKEYS = "$PATH_SIGNAL_PROTOCOL_STORE/preKeys"
+        private const val PATH_PREKEYS = "preKeys"
         private const val PATH_SIGNED_PREKEYS = "$PATH_PREKEYS/signed"
         private const val PATH_CURRENT_SIGNED_PREKEY_ID = "$PATH_SIGNED_PREKEYS/currentId"
         private const val PATH_CURRENT_SIGNED_PREKEY = "$PATH_SIGNED_PREKEYS/current"
@@ -181,7 +172,7 @@ class MessagingProtocolStore(
         private const val PATH_ALL_ONE_TIME_PREKEYS_BY_ID = "$PATH_ONE_TIME_PREKEYS/all"
         private fun oneTimePreKeyPath(id: Int) = "$PATH_ALL_ONE_TIME_PREKEYS_BY_ID/$id"
 
-        private const val PATH_ALL_SESSIONS_BY_ADDRESS = "$PATH_SIGNAL_PROTOCOL_STORE/sessions"
+        private const val PATH_ALL_SESSIONS_BY_ADDRESS = "sessions"
         private fun sessionPath(address: SignalProtocolAddress) =
             "$PATH_ALL_SESSIONS_BY_ADDRESS/$address"
 

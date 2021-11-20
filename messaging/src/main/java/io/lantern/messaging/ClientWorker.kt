@@ -112,12 +112,18 @@ internal abstract class ClientWorker<D : ClientDelegate, C : Client<D>>(
     }
 
     override fun close() {
-        submit {
+        disconnect {
+            super.close()
+        }
+    }
+
+    internal fun disconnect(afterDisconnect: (() -> Unit)? = null) {
+        submitForValue {
             client?.let {
                 it.close()
                 client = null
             }
-            super.close()
+            afterDisconnect?.let { it() }
         }
     }
 

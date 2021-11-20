@@ -2,6 +2,8 @@ package io.lantern.messaging.store
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.lantern.messaging.BaseMessagingTest
+import io.lantern.messaging.generateRecoveryKey
+import io.lantern.messaging.keyPair
 import java.util.Arrays
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -13,8 +15,6 @@ import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.InvalidKeyIdException
 import org.whispersystems.libsignal.SignalProtocolAddress
 import org.whispersystems.libsignal.ecc.Curve
-import org.whispersystems.libsignal.ecc.ECPrivateKey
-import org.whispersystems.libsignal.ecc.ECPublicKey
 import org.whispersystems.libsignal.util.KeyHelper
 
 @RunWith(AndroidJUnit4::class)
@@ -22,34 +22,31 @@ class MessagingProtocolStoreTest : BaseMessagingTest() {
     @Test
     fun testIdentityKeyPair() {
         newDB.use { db ->
-            val ms = newStore(db = db)
-            val kp1 = ms.identityKeyPair
+            val recoveryKey = generateRecoveryKey()
+            val kp1 = recoveryKey.keyPair("kp_default")
+            val ms = MessagingProtocolStore(db, kp1)
             val kp2 = ms.identityKeyPair
             assertEquals(kp1.publicKey, kp2.publicKey)
             assertTrue(Arrays.equals(kp1.privateKey.bytes, kp2.privateKey.bytes))
-            assertEquals(
-                kp1.publicKey,
-                ECPublicKey(
-                    db.withSchema("messaging_protocol_store")
-                        .get<ByteArray>(MessagingProtocolStore.PATH_IDENTITY_KEY_PUBLIC)
+
+            newDB.use { nextDB ->
+                // create a new MessagingProtocolStore initialized with some other key material
+                val ms2 = MessagingProtocolStore(
+                    nextDB,
+                    recoveryKey.keyPair("kp_other")
                 )
-            )
-            assertTrue(
-                Arrays.equals(
-                    kp1.privateKey.bytes,
-                    ECPrivateKey(
-                        db.withSchema("messaging_protocol_store")
-                            .get(MessagingProtocolStore.PATH_IDENTITY_KEY_PRIVATE)
-                    ).bytes
-                )
-            )
+                ms2.changeIdentityKeyPair(kp1)
+                val kp3 = ms2.identityKeyPair
+                assertEquals(kp1.publicKey, kp3.publicKey)
+                assertTrue(Arrays.equals(kp1.privateKey.bytes, kp3.privateKey.bytes))
+            }
         }
     }
 
     @Test
     fun testPreKeys() {
         newDB.use { db ->
-            val ms = newStore(db)
+            val ms = MessagingProtocolStore(db, generateRecoveryKey().keyPair("default"))
             try {
                 ms.storePreKey(1, KeyHelper.generatePreKeys(0, 1)[0])
                 fail("should not be allowed to directly store one time pre keys")
@@ -80,7 +77,7 @@ class MessagingProtocolStoreTest : BaseMessagingTest() {
     @Test
     fun testSignedPreKeys() {
         newDB.use { db ->
-            val ms = newStore(db)
+            val ms = MessagingProtocolStore(db, generateRecoveryKey().keyPair("default"))
             try {
                 ms.storeSignedPreKey(1, KeyHelper.generateSignedPreKey(ms.identityKeyPair, 1))
                 fail("should not be allowed to directly store signed pre keys")
@@ -109,7 +106,7 @@ class MessagingProtocolStoreTest : BaseMessagingTest() {
     @Test
     fun testSessions() {
         newDB.use { db ->
-            val ms = newStore(db)
+            val ms = MessagingProtocolStore(db, generateRecoveryKey().keyPair("default"))
             val address1 =
                 SignalProtocolAddress(Curve.generateKeyPair().publicKey, DeviceId.random())
             val address2 = SignalProtocolAddress(address1.identityKey, DeviceId.random())
