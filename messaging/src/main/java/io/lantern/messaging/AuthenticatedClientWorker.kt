@@ -49,4 +49,19 @@ internal class AuthenticatedClientWorker(
     override fun onConfigUpdate(cfg: Messages.Configuration) {
         messaging.updateConfig(cfg)
     }
+
+    override fun onConnected(client: AuthenticatedClient, number: Messages.ChatNumber) {
+        super.onConnected(client)
+        messaging.db.mutate { tx ->
+            tx.get<Model.Contact>(Schema.PATH_ME)?.let { me ->
+                // only set number once
+                if (!me.hasChatNumber()) {
+                    tx.put(
+                        Schema.PATH_ME,
+                        me.toBuilder().setChatNumber(number.pbuf).build()
+                    )
+                }
+            }
+        }
+    }
 }

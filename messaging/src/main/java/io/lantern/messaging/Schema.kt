@@ -4,6 +4,7 @@ import com.google.protobuf.ByteString
 import io.lantern.db.Detail
 import io.lantern.db.Queryable
 import io.lantern.db.Raw
+import io.lantern.messaging.tassis.Messages
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.ecc.ECPublicKey
 import org.whispersystems.libsignal.util.Base32
@@ -169,3 +170,17 @@ val Model.Contact.fullText: String
 
 val Model.StoredMessage.fullText: String?
     get() = text
+
+val Messages.ChatNumber.pbuf: Model.ChatNumber
+    get() = Model.ChatNumber.newBuilder()
+        .setNumber(number)
+        .setShortNumber(shortNumber)
+        .setDomain(domain).build()
+
+val Model.ChatNumber.directContactId: Model.ContactId
+    get() = ECPublicKey(
+        ChatNumberEncoding.decodeFromString(number, 32)
+    ).toString().directContactId
+
+val Model.ChatNumber.isComplete: Boolean
+    get() = number.isNotEmpty() && shortNumber.isNotEmpty() && domain.isNotEmpty()

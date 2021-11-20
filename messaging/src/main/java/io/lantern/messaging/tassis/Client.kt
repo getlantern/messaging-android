@@ -148,7 +148,7 @@ interface AuthenticatedClientDelegate : ClientDelegate {
     /**
      * Called once the client has been connected
      */
-    fun onConnected(client: AuthenticatedClient)
+    fun onConnected(client: AuthenticatedClient, number: Messages.ChatNumber)
 
     /**
      * Used to sign the response to an AuthChallenge
@@ -225,9 +225,8 @@ abstract class Client<D : ClientDelegate>(
 
     protected fun onMessage(msg: Messages.Message) {
         when (msg.payloadCase) {
-            Messages.Message.PayloadCase.ACK -> {
+            Messages.Message.PayloadCase.ACK ->
                 pending.remove(msg.sequence)?.onSuccess(msg.ack)
-            }
             Messages.Message.PayloadCase.ERROR -> pending.remove(msg.sequence)?.onError(
                 TassisError(
                     msg.error!!.name,
@@ -235,6 +234,8 @@ abstract class Client<D : ClientDelegate>(
                 )
             )
             Messages.Message.PayloadCase.CONFIGURATION -> delegate.onConfigUpdate(msg.configuration)
+            Messages.Message.PayloadCase.CHATNUMBER ->
+                pending.remove(msg.sequence)?.onSuccess(msg.chatNumber)
             else -> logger.debug("unknown payload type ${msg.payloadCase}")
         }
     }
@@ -349,11 +350,11 @@ class AuthenticatedClient(
             logger.debug("sending login")
             send(
                 authResponse,
-                object : Callback<Messages.Ack> {
-                    override fun onSuccess(result: Messages.Ack) {
-                        logger.debug("successfully logged in")
+                object : Callback<Messages.ChatNumber> {
+                    override fun onSuccess(result: Messages.ChatNumber) {
+                        logger.debug("successfully logged in, my number is ${result.number}")
                         if (isConnecting.compareAndSet(true, false)) {
-                            delegate.onConnected(this@AuthenticatedClient)
+                            delegate.onConnected(this@AuthenticatedClient, result)
                         }
                     }
 
@@ -405,21 +406,46 @@ class AnonymousClient(
         )
     }
 
-    fun requestUploadAuthorizations(
-        numRequested: Int,
-        cb: Callback<List<Messages.UploadAuthorization>>
+    fun findChatNumberByShortNumber(
+        shortNumber: String,
+        cb: Callback<Messages.ChatNumber>
     ) {
-        val requestUploadAuthorizations = Messages.RequestUploadAuthorizations.newBuilder()
-            .setNumRequested(numRequested).build()
-        val msg = nextMessage().setRequestUploadAuthorizations(requestUploadAuthorizations).build()
+        val request = Messages.FindChatNumberByShortNumber.newBuilder()
+            .setShortNumber(shortNumber).build()
+        val msg = nextMessage().setFindChatNumberByShortNumber(request).build()
         send(
             msg,
-            object : Callback<Messages.UploadAuthorizations> {
-                override fun onSuccess(result: Messages.UploadAuthorizations) {
+            object : Callback<Messages.ChatNumber> {
+                override fun onSuccess(result: Messages.ChatNumber) {
                     try {
-                        cb.onSuccess(result.authorizationsList)
+                        cb.onSuccess(result)
                     } catch (t: Throwable) {
-                        logger.error("error after receiving upload authorizations: $t.message", t)
+                        logger.error("error after finding chat number by short number: $t.message", t) // ktlint-disable max-line-length
+                    }
+                }
+
+                override fun onError(err: Throwable) {
+                    cb.onError(err)
+                }
+            }
+        )
+    }
+
+    fun findChatNumberByIdentityKey(
+        identityKey: ECPublicKey,
+        cb: Callback<Messages.ChatNumber>
+    ) {
+        val request = Messages.FindChatNumberByIdentityKey.newBuilder()
+            .setIdentityKey(identityKey.bytes.byteString()).build()
+        val msg = nextMessage().setFindChatNumberByIdentityKey(request).build()
+        send(
+            msg,
+            object : Callback<Messages.ChatNumber> {
+                override fun onSuccess(result: Messages.ChatNumber) {
+                    try {
+                        cb.onSuccess(result)
+                    } catch (t: Throwable) {
+                        logger.error("error after finding chat number by identity key: $t.message", t) // ktlint-disable max-line-length
                     }
                 }
 
@@ -443,6 +469,31 @@ class AnonymousClient(
             ).setUnidentifiedSenderMessage(unidentifiedSenderMessage.byteString())
         ).build()
         send(msg, AckCallback(cb))
+    }
+
+    fun requestUploadAuthorizations(
+        numRequested: Int,
+        cb: Callback<List<Messages.UploadAuthorization>>
+    ) {
+        val requestUploadAuthorizations = Messages.RequestUploadAuthorizations.newBuilder()
+            .setNumRequested(numRequested).build()
+        val msg = nextMessage().setRequestUploadAuthorizations(requestUploadAuthorizations).build()
+        send(
+            msg,
+            object : Callback<Messages.UploadAuthorizations> {
+                override fun onSuccess(result: Messages.UploadAuthorizations) {
+                    try {
+                        cb.onSuccess(result.authorizationsList)
+                    } catch (t: Throwable) {
+                        logger.error("error after receiving upload authorizations: $t.message", t)
+                    }
+                }
+
+                override fun onError(err: Throwable) {
+                    cb.onError(err)
+                }
+            }
+        )
     }
 
     override fun onMessage(data: ByteArray?) {

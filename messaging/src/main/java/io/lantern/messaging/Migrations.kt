@@ -80,6 +80,12 @@ class Migrations(private val messaging: Messaging) {
             ).groupBy { it.value.introduction.to }.keys.forEach {
                 messaging.updateBestIntroduction(tx, it)
             }
+        },
+
+        3 to { tx, _ ->
+            tx.get<Model.Contact>(Schema.PATH_ME)?.let { me ->
+                tx.put(Schema.PATH_ME, me.toBuilder().setIsMe(true).build())
+            }
         }
     )
 }

@@ -282,7 +282,7 @@ class MessagingTest : BaseMessagingTest() {
                             }
 
                             sendAndVerify(
-                                "cat sends a message to dog after having been removed and re-added",
+                                "cat sends a message to dog after having been removed and re-added", // ktlint-disable max-line-length
                                 cat,
                                 dog,
                                 "hello again dog"
@@ -292,6 +292,63 @@ class MessagingTest : BaseMessagingTest() {
                                 2,
                                 dog.db.listPaths(Schema.PATH_CONTACT_MESSAGES.path("%")).count(),
                                 "dog should have 2 messages from cat, the message sent while cat was not a contact should have been included" // ktlint-disable max-line-length
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun testChatNumber() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newDB.use { catDB ->
+                    newMessaging(dogDB, "dog").with { dog ->
+                        newMessaging(catDB, "cat").with { cat ->
+                            val catShortNumber = cat.waitFor<Model.Contact>(
+                                Schema.PATH_ME,
+                                "cat gets own ChatNumber)"
+                            ) {
+                                it.hasChatNumber()
+                            }.chatNumber.shortNumber
+
+                            val nonExistentNumber = CompletableFuture<Model.ChatNumber>()
+                            dog.findChatNumberByShortNumber("asd") { number, err ->
+                                if (err != null) {
+                                    nonExistentNumber.completeExceptionally(err)
+                                } else {
+                                    nonExistentNumber.complete(number)
+                                }
+                            }
+                            try {
+                                nonExistentNumber.get()
+                                fail("finding number using non-existent short number should fail")
+                            } catch (t: Throwable) {
+                                // okay
+                            }
+
+                            val catNumber = CompletableFuture<Model.ChatNumber>()
+                            dog.findChatNumberByShortNumber(catShortNumber) { number, err ->
+                                if (err != null) {
+                                    catNumber.completeExceptionally(err)
+                                } else {
+                                    catNumber.complete(number)
+                                }
+                            }
+                            assertEquals(catShortNumber, catNumber.get().shortNumber)
+
+                            dog.addOrUpdateDirectContact(
+                                chatNumber = catNumber.get(),
+                                displayName = "Cat",
+                                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+                            )
+                            sendAndVerify(
+                                "dog sends a message to cat",
+                                dog,
+                                cat,
+                                "hi cat"
                             )
                         }
                     }
@@ -1017,6 +1074,9 @@ class MessagingTest : BaseMessagingTest() {
                 newMessaging(dogDB, "dog").with { dog ->
                     val msgs = sendAndVerify("dog sends note to dog", dog, dog, "hi myself")
                     assertNotNull(msgs.received)
+                    val me = dog.db.get<Model.Contact>(Schema.PATH_ME)!!
+                    assertEquals(true, me.isMe)
+                    assertEquals(true, dog.db.get<Model.Contact>(me.dbPath)?.isMe)
                 }
             }
         }

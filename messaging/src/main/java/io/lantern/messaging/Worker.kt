@@ -61,7 +61,7 @@ internal abstract class Worker(
         }
     }
 
-    protected fun retryFailed(cmd: () -> Unit) {
+    internal fun retryFailed(cmd: () -> Unit) {
         if (retryDelayMillis == null) {
             throw Exception("Attempted to retry but retries are disabled")
         }
