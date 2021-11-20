@@ -10,7 +10,6 @@ import io.lantern.messaging.metadata.Metadata
 import io.lantern.messaging.store.MessagingProtocolStore
 import io.lantern.messaging.tassis.Callback
 import io.lantern.messaging.tassis.Messages
-import io.lantern.messaging.tassis.TassisError
 import io.lantern.messaging.tassis.TransportFactory
 import io.lantern.messaging.time.hoursToMillis
 import io.lantern.messaging.time.secondsToMillis
@@ -29,7 +28,9 @@ import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.pow
 import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.InvalidKeyException
@@ -108,7 +109,7 @@ private const val fingerprintIterations = 5200
  *                             from tassis
  */
 class Messaging(
-    parentDB: DB,
+    private val parentDB: DB,
     private val attachmentsDirectory: File,
     transportFactory: TransportFactory,
     clientTimeoutMillis: Long = 10L.secondsToMillis,
@@ -127,41 +128,21 @@ class Messaging(
         .setMaxAttachmentSize(100000000).build(),
 ) : Closeable {
     internal val logger = KotlinLogging.logger(name)
+    private val started = AtomicBoolean()
     val db = parentDB.withSchema("messaging")
-
     private val webRTCSignalingSubscribers = ConcurrentHashMap<String, (WebRTCSignal) -> Unit>()
-
     private val cfg = AtomicReference<Messages.Configuration>()
-
     private val identityKeyPairRef = AtomicReference<ECKeyPair>()
-
-    private fun deriveIdentityKeyPair() {
-        identityKeyPairRef.set(recoveryKey.keyPair("kp0"))
-    }
-
-    init {
-        deriveIdentityKeyPair()
-    }
-
-    internal val identityKeyPair: ECKeyPair
-        get() = identityKeyPairRef.get()
-
-    val store = MessagingProtocolStore(parentDB, identityKeyPair)
-
-    internal val deviceId: DeviceId
-        get() = store.deviceId
+    internal val identityKeyPair: ECKeyPair get() = identityKeyPairRef.get()
+    val store: MessagingProtocolStore get() = MessagingProtocolStore(parentDB, identityKeyPair)
+    internal val deviceId: DeviceId get() = store.deviceId
 
     // All processing that involves crypto operations happens on this executor to keep the
     // SignalProtocolStore in a consistent state
     private val cryptoWorkerRef = AtomicReference<CryptoWorker>()
-
-    internal val cryptoWorker: CryptoWorker
-        get() = cryptoWorkerRef.get()
-
+    internal val cryptoWorker: CryptoWorker get() = cryptoWorkerRef.get()
     private val myIdRef = AtomicReference<Model.ContactId>()
-
-    val myId: Model.ContactId
-        get() = myIdRef.get()
+    val myId: Model.ContactId get() = myIdRef.get()
 
     internal val anonymousClientWorker =
         AnonymousClientWorker(
@@ -194,7 +175,15 @@ class Messaging(
         // apply migrations
         Migrations(this).apply()
 
-        initialize()
+        // auto-start if database already contains recovery key
+        if (db.contains(Schema.PATH_RECOVERY_KEY)) {
+            logger.debug("auto-starting ")
+            start()
+        }
+    }
+
+    private fun deriveIdentityKeyPair() {
+        identityKeyPairRef.set(recoveryKey.keyPair("kp0"))
     }
 
     private fun startCryptoWorker() {
@@ -220,11 +209,12 @@ class Messaging(
 
         // make sure we have a contact entry for ourselves
         val me = db.mutate { tx ->
-            tx.get(Schema.PATH_ME) ?: tx.put(
+            tx.put(
                 Schema.PATH_ME,
-                Model.Contact.newBuilder()
+                (tx.get<Model.Contact>(Schema.PATH_ME)?.toBuilder() ?: Model.Contact.newBuilder())
                     .setContactId(identityKeyPair.publicKey.toString().directContactId)
                     .setIsMe(true)
+                    .setVerificationLevel(Model.VerificationLevel.VERIFIED)
                     .build()
             )
         }
@@ -233,6 +223,7 @@ class Messaging(
         // add myself as a contact to record notes to myself
         doAddOrUpdateContact(myId) { contact, _ ->
             contact.isMe = true
+            contact.verificationLevel = Model.VerificationLevel.VERIFIED
         }
 
         // immediately request some upload authorizations so that we're ready to upload attachments
@@ -283,27 +274,63 @@ class Messaging(
         }
 
     /**
+     * Starts the messaging system. Until start() is called the first time, the data remains
+     * unitialized. start() must be called before attempting to use any of the other functions.
+     */
+    @Synchronized
+    fun start() {
+        if (started.compareAndSet(false, true)) {
+            logger.debug("starting")
+            deriveIdentityKeyPair()
+            authenticatedClientWorker.autoConnectIfNecessary()
+            initialize()
+        } else {
+            logger.debug("already started, not starting again")
+        }
+    }
+
+    /**
+     * Kill disconnects from servers and wipes the database.
+     */
+    @Synchronized
+    fun kill() {
+        if (started.compareAndSet(true, false)) {
+            cryptoWorker.close()
+            authenticatedClientWorker.disconnect()
+            anonymousClientWorker.disconnect()
+        }
+        db.withSchema("messaging_protocol_store").clear()
+        db.clear()
+    }
+
+    /**
      * Returns the recovery code used by this Messaging instance encoded in base32.
      *
      * TODO: use constant-time implementation of base32 encoding
      */
-    val recoveryCode = recoveryKey.base32
+    val recoveryCode: String
+        get() = recoveryKey.base32
 
     /**
      * Recovers the messaging system using the given recoveryKey. All existing data will be erased.
+     *
+     * If an invalid recoveryCode is provided, this will throw an InvalidKeyException and leave the
+     * system in its current state.
      */
+    @Throws(InvalidKeyException::class)
     fun recover(recoveryCode: String) {
-        cryptoWorker.close()
-        authenticatedClientWorker.disconnect()
-        db.clear()
+        val newRecoveryKey = recoveryCode.fromBase32
+        if (newRecoveryKey.size != recoveryKey.size) {
+            throw InvalidKeyException("Invalid recovery code")
+        }
+
+        kill()
         // TODO: use constant-time implementation of base32 decoding
         val rk = recoveryCode.fromBase32
         db.mutate { tx ->
             tx.put(Schema.PATH_RECOVERY_KEY, rk)
         }
-        deriveIdentityKeyPair()
-        store.changeIdentityKeyPair(identityKeyPair)
-        initialize()
+        start()
     }
 
     /**
@@ -571,7 +598,10 @@ class Messaging(
         }
     }
 
-    private fun lookupChatNumberIfNecessary(path: String) {
+    private fun lookupChatNumberIfNecessary(
+        path: String,
+        cumulativeDelay: Long = failedSendRetryDelayMillis
+    ) {
         db.get<Model.Contact>(path)?.let { contact ->
             if (
                 contact.contactId.type == Model.ContactType.DIRECT &&
@@ -603,10 +633,13 @@ class Messaging(
                             }
 
                             override fun onError(err: Throwable) {
-                                if (!(err is TassisError)) {
-                                    anonymousClientWorker.retryFailed {
-                                        lookupChatNumberIfNecessary(path)
-                                    }
+                                val delay = cumulativeDelay * 2
+                                if (delay > stopSendRetryAfterMillis) {
+                                    logger.error("Permanently failed to look up ChatNumber with error: ${err.message}") // ktlint-disable max-line-length
+                                    return
+                                }
+                                anonymousClientWorker.submitDelayed(delay) {
+                                    lookupChatNumberIfNecessary(path, delay)
                                 }
                             }
                         }
@@ -681,6 +714,7 @@ class Messaging(
     private fun deleteContact(contactId: Model.ContactId) {
         db.mutate { tx ->
             deleteContactActivity(tx, contactId)
+            store.deleteAllSessions(contactId.id)
             tx.delete(contactId.contactPath)
         }
     }
@@ -1424,6 +1458,7 @@ class Messaging(
     /**
      * Like introduce, but accepting a function that builds the introduction, used only for testing.
      */
+    @Throws(IllegalArgumentException::class)
     internal fun doIntroduce(
         unsafeRecipientIds: List<String>,
         buildIntroduction: (Model.Contact) -> Model.IntroductionDetails
@@ -1433,6 +1468,9 @@ class Messaging(
         }
 
         val recipientIds = unsafeRecipientIds.map { it.sanitizedContactId }
+        if (recipientIds.contains(myId.id)) {
+            throw IllegalArgumentException("You cannot introduce contacts to yourself")
+        }
 
         val introducedParties = recipientIds.map { recipientId ->
             db.get<Model.Contact>(recipientId.directContactPath)

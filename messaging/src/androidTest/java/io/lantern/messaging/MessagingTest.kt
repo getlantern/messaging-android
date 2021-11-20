@@ -61,6 +61,62 @@ class MessagingTest : BaseMessagingTest() {
     }
 
     @Test
+    fun testStartAndKill() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newDB.use { catDB ->
+                    newMessaging(dogDB, "dog").with { dog ->
+                        newMessaging(catDB, "cat", start = false).with { cat ->
+                            assertEquals(
+                                0,
+                                cat.db.listPaths("%").size,
+                                "database should be empty before calling start()",
+                            )
+                            cat.start()
+                            // calling start twice should be safe
+                            cat.start()
+
+                            val dogId = dog.myId.id
+                            cat.addOrUpdateDirectContact(dogId, "dog")
+                            sendAndVerify(
+                                "cat sends a message to dog",
+                                cat,
+                                dog,
+                                "hi dog"
+                            )
+
+                            cat.close()
+                            newMessaging(catDB, "cat2", start = false).with { cat2 ->
+                                sendAndVerify(
+                                    "cat2 sends a message to dog after opening with auto-start", // ktlint-disable max-line-length
+                                    cat2,
+                                    dog,
+                                    "hi dog"
+                                )
+
+                                cat2.kill()
+                                assertEquals(
+                                    0,
+                                    cat2.db.listPaths("%").size,
+                                    "database should be empty after calling kill()",
+                                )
+                                assertEquals(
+                                    0,
+                                    catDB
+                                        .withSchema("messaging_protocol_store")
+                                        .listPaths("%")
+                                        .size,
+                                    "MessagingProtocolStore database should be empty after calling kill()", // ktlint-disable max-line-length
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     fun testManageDirectContact() {
         testInCoroutine {
             newDB.use { dogDB ->
@@ -252,6 +308,11 @@ class MessagingTest : BaseMessagingTest() {
                                 0,
                                 dog.db.listPaths(Schema.PATH_CONTACTS_BY_ACTIVITY.path("%")).count()
                             )
+                            assertEquals(
+                                0,
+                                dog.store.getSubDeviceSessions(catId).size,
+                                "dog should have no sessions for cat in protocol store"
+                            )
                             val dogDbString = dog.db.dumpToString()
                             assertFalse(
                                 dogDbString.contains(catId),
@@ -351,6 +412,42 @@ class MessagingTest : BaseMessagingTest() {
                                 cat,
                                 "hi cat"
                             )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun testDelayedChatNumber() {
+        testInCoroutine {
+            newDB.use { dogDB ->
+                newDB.use { catDB ->
+                    newMessaging(dogDB, "dog").with { dog ->
+                        newMessaging(catDB, "cat").with { cat ->
+                            val catId = cat.myId.id
+
+                            delay(5000)
+                            logger.debug("before adding contact set dials to fail for a while")
+                            BrokenTransportFactory.closeAll()
+                            BrokenTransportFactory.succeedDialing.set(false)
+                            val catContact = dog.addOrUpdateDirectContact(catId)
+                            delay(5000)
+                            dog.waitFor<Model.Contact>(
+                                catContact.dbPath,
+                                "cat contact should not yet have a chat number"
+                            ) {
+                                !it.hasChatNumber()
+                            }
+                            logger.debug("allow dials to succeed again")
+                            BrokenTransportFactory.succeedDialing.set(true)
+                            dog.waitFor<Model.Contact>(
+                                catContact.dbPath,
+                                "cat contact should now have a chat number"
+                            ) {
+                                it.hasChatNumber()
+                            }
                         }
                     }
                 }
@@ -1082,7 +1179,10 @@ class MessagingTest : BaseMessagingTest() {
                     assertNotNull(msgs.received)
                     val me = dog.db.get<Model.Contact>(Schema.PATH_ME)!!
                     assertEquals(true, me.isMe)
-                    assertEquals(true, dog.db.get<Model.Contact>(me.dbPath)?.isMe)
+                    assertEquals(Model.VerificationLevel.VERIFIED, me.verificationLevel)
+                    val meInMainContactList = dog.db.get<Model.Contact>(me.dbPath)!!
+                    assertEquals(true, meInMainContactList.isMe)
+                    assertEquals(Model.VerificationLevel.VERIFIED, meInMainContactList.verificationLevel) // ktlint-disable max-line-length
                 }
             }
         }
@@ -1738,6 +1838,13 @@ class MessagingTest : BaseMessagingTest() {
                 // okay
             }
 
+            // try to introduce to yourself
+            try {
+                dog.introduce(listOf(dogId, catId))
+            } catch (e: java.lang.IllegalArgumentException) {
+                // expected
+            }
+
             // Introduce dog and cat to each other. We use a custom introduction builder to mess up the
             // displayName on the introduction to test sanitizing inbound introductions.
             owner.doIntroduce(listOf(dogId, catId.toUpperCase())) { to ->
@@ -2138,14 +2245,14 @@ class MessagingTest : BaseMessagingTest() {
                     newDB.use { cat2DB ->
                         newMessaging(dogDB, "dog").with { dog ->
                             newMessaging(cat1DB, "cat1").with { cat1 ->
-                                newMessaging(cat2DB, "cat").with { cat2 ->
+                                newMessaging(cat2DB, "cat2").with { cat2 ->
                                     val dogId = dog.myId.id
                                     val cat1Id = cat1.myId.id
 
                                     dog.addOrUpdateDirectContact(cat1Id)
                                     val dogContact = cat1.addOrUpdateDirectContact(dogId)
                                     sendAndVerify(
-                                        "dog sends a message to cat 1",
+                                        "dog sends a message to cat1",
                                         dog,
                                         cat1,
                                         "hi cat"
@@ -2158,16 +2265,50 @@ class MessagingTest : BaseMessagingTest() {
                                         "hi dog"
                                     )
 
+                                    // Recover cat1 using a different recovery code than its own
+                                    assertNotEquals(cat1.recoveryCode, cat2.recoveryCode)
                                     cat1.recover(cat2.recoveryCode)
+                                    assertEquals(cat1.recoveryCode, cat2.recoveryCode)
+
                                     assertNull(
                                         cat1.db.get<Model.Contact>(dogContact.dbPath),
                                         "dog contact should be gone after recovery"
+                                    )
+                                    assertEquals(
+                                        cat1.identityKeyPair.publicKey,
+                                        cat2.identityKeyPair.publicKey,
+                                        "cat1 should now have cat2's identity key"
                                     )
 
                                     cat1.addOrUpdateDirectContact(dogId)
                                     sendAndVerify(
                                         "recovered cat1 sends a message to dog",
                                         cat1,
+                                        dog,
+                                        "hello again dog"
+                                    )
+
+                                    // test recovery in non-started state
+                                    val cat3 = newMessaging(cat2DB, "cat", start = false)
+                                    cat3.recover(cat2.recoveryCode)
+                                    assertEquals(cat3.recoveryCode, cat2.recoveryCode)
+
+                                    // attempt to recover with invalid recovery code
+                                    try {
+                                        cat3.recover("asdfasd")
+                                        fail("attempt to recover with invalid recovery code should fail") // ktlint-disable max-line-length
+                                    } catch (e: InvalidKeyException) {
+                                        // okay
+                                    }
+                                    assertEquals(
+                                        cat3.recoveryCode,
+                                        cat2.recoveryCode,
+                                        "recovery code should remain unchanged after failed attempt to recover" // ktlint-disable max-line-length
+                                    )
+                                    cat3.addOrUpdateDirectContact(dogId)
+                                    sendAndVerify(
+                                        "should be able to send messages after failed recovery", // ktlint-disable max-line-length
+                                        cat3,
                                         dog,
                                         "hello again dog"
                                     )
@@ -2420,9 +2561,10 @@ class MessagingTest : BaseMessagingTest() {
         failedSendRetryDelayMillis: Long = 100,
         stopSendRetryAfterMillis: Long = 5L.minutesToMillis,
         orphanedAttachmentCutoffSeconds: Int = 1,
-        provisionalContactsExpireAfterSeconds: Long = 20
+        provisionalContactsExpireAfterSeconds: Long = 20,
+        start: Boolean = true
     ): Messaging {
-        return Messaging(
+        val result = Messaging(
             db,
             File(
                 InstrumentationRegistry.getInstrumentation().targetContext.filesDir,
@@ -2441,6 +2583,10 @@ class MessagingTest : BaseMessagingTest() {
             provisionalContactsExpireAfterSeconds = provisionalContactsExpireAfterSeconds,
             name = name
         )
+        if (start) {
+            result.start()
+        }
+        return result
     }
 }
 
