@@ -30,7 +30,6 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.math.pow
 import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.InvalidKeyException
@@ -956,6 +955,17 @@ class Messaging(
                 )
             }
             tx.put(msgPath, builder.build())
+
+            if (builder.direction == Model.MessageDirection.IN) {
+                tx.get<Model.Contact>(builder.contactId.contactPath)?.let { contact ->
+                    tx.put(
+                        contact.dbPath,
+                        contact.toBuilder()
+                            .setNumUnviewedMessages(contact.numUnviewedMessages - 1)
+                            .build()
+                    )
+                }
+            }
         }
     }
 
@@ -1154,6 +1164,10 @@ class Messaging(
                 }
 
                 // Update the Contact metadata based on the most recent remaining message
+                val changeToUnviewed = if (
+                    msg.direction == Model.MessageDirection.IN && msg.firstViewedAt == 0L
+                ) -1
+                else 0
                 tx.listDetails<Model.StoredMessage>(
                     msg.contactMessagesQuery,
                     count = 1,
@@ -1161,9 +1175,14 @@ class Messaging(
                 ).let { storedMessages ->
                     val mostRecentMsg = storedMessages.firstOrNull()
                     if (mostRecentMsg != null) {
-                        updateContactMetaData(tx, mostRecentMsg.value, force = true)
+                        updateContactMetaData(
+                            tx,
+                            mostRecentMsg.value,
+                            force = true,
+                            changeToUnviewed = changeToUnviewed
+                        )
                     } else {
-                        clearContactMetaData(tx, msg.contactId)
+                        clearContactMetaData(tx, msg.contactId, changeToUnviewed)
                     }
                 }
             }
@@ -1317,30 +1336,34 @@ class Messaging(
         tx: Transaction,
         msg: Model.StoredMessage,
         force: Boolean = false,
+        changeToUnviewed: Int = 0,
     ) {
         val contactPath = msg.contactId.contactPath
         val contact = tx.get<Model.Contact>(contactPath)
             ?: throw IllegalArgumentException("unknown contact")
-        if (!force && msg.ts <= contact.mostRecentMessageTs) {
+        if (!force && changeToUnviewed == 0 && msg.ts <= contact.mostRecentMessageTs) {
             return
         }
         // delete existing index entry
         tx.delete(contact.timestampedIdxPath)
         // update the contact
         val updatedContactBuilder = contact.toBuilder()
-            .setMostRecentMessageTs(msg.ts)
-            .setMostRecentMessageDirection(msg.direction)
-            .setMostRecentMessageText(msg.text)
+        if (force || msg.ts > contact.mostRecentMessageTs) {
+            updatedContactBuilder.mostRecentMessageTs = msg.ts
+            updatedContactBuilder.mostRecentMessageDirection = msg.direction
+            updatedContactBuilder.mostRecentMessageText = msg.text
+            if (msg.attachmentsCount > 0) {
+                updatedContactBuilder.mostRecentAttachmentMimeType =
+                    msg.attachmentsMap.values.iterator().next().attachment.mimeType
+            }
+        }
         if (msg.direction == Model.MessageDirection.IN) {
             updatedContactBuilder.hasReceivedMessage = true
-        }
-        if (msg.attachmentsCount > 0) {
-            updatedContactBuilder.mostRecentAttachmentMimeType =
-                msg.attachmentsMap.values.iterator().next().attachment.mimeType
         }
         if (contact.firstReceivedMessageTs == 0L && msg.direction == Model.MessageDirection.IN) {
             updatedContactBuilder.firstReceivedMessageTs = now
         }
+        updatedContactBuilder.numUnviewedMessages += changeToUnviewed
         val updatedContact = updatedContactBuilder.build()
         tx.put(contactPath, updatedContact)
         // create a new index entry
@@ -1349,7 +1372,8 @@ class Messaging(
 
     private fun clearContactMetaData(
         tx: Transaction,
-        contactId: Model.ContactId
+        contactId: Model.ContactId,
+        changeToUnviewed: Int
     ) {
         val contactPath = contactId.contactPath
         tx.get<Model.Contact>(contactPath)?.let { contact ->
@@ -1361,7 +1385,8 @@ class Messaging(
                     .clearMostRecentMessageTs()
                     .clearMostRecentMessageDirection()
                     .clearMostRecentMessageText()
-                    .clearMostRecentAttachmentMimeType().build()
+                    .clearMostRecentAttachmentMimeType()
+                    .setNumUnviewedMessages(contact.numUnviewedMessages + changeToUnviewed).build()
             tx.put(contactPath, updatedContact)
         }
     }
