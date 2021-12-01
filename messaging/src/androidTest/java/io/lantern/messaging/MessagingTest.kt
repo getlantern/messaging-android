@@ -39,7 +39,6 @@ import okio.ByteString
 import org.junit.Test
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.InvalidKeyException
-import org.whispersystems.libsignal.util.InvalidCharacterException
 import org.whispersystems.libsignal.util.KeyHelper
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
 import org.whispersystems.signalservice.internal.util.Util
@@ -149,7 +148,7 @@ class MessagingTest : BaseMessagingTest() {
                             try {
                                 dog.addOrUpdateDirectContact("-${catId.substring(1, 52)}", "Bogus")
                                 fail("adding a contact ID with an invalid character should fail")
-                            } catch (e: InvalidCharacterException) {
+                            } catch (e: InvalidKeyException) {
                                 // okay
                             }
 
@@ -1826,7 +1825,7 @@ class MessagingTest : BaseMessagingTest() {
                             assertEquals(mapOf(dogId to "first"), receivedSignals)
 
                             // try to send to a non-existent device and make sure we get an error
-                            val badDeviceId = DeviceId("nonexistent")
+                            val badDeviceId = DeviceId.random().toString()
                             resultFuture = CompletableFuture<MultiDeviceResult>()
                             dog.sendWebRTCSignal(
                                 catId,
