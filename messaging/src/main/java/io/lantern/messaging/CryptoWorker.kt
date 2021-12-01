@@ -316,12 +316,13 @@ internal class CryptoWorker(
                     afterSuccess = ::afterSendSuccess
                 ) {
                     Model.TransferMessage.newBuilder()
+                        .setSent(now)
                         .setMessage(msg.message.toByteString()).build()
                         .toByteArray()
                 }
             }
         } else {
-            val transferMsg = Model.TransferMessage.newBuilder()
+            val transferMsg = Model.TransferMessage.newBuilder().setSent(now)
 
             when (out.contentCase) {
                 Model.OutboundMessage.ContentCase.REACTION ->
@@ -838,6 +839,7 @@ internal class CryptoWorker(
                         Model.Hello.parseFrom(transferMsg.hello)
                     )
                     Model.TransferMessage.ContentCase.WEBRTCSIGNAL -> messaging.notifyWebRTCSignal(
+                        transferMsg.sent,
                         senderId,
                         senderAddress.deviceId.toString(),
                         transferMsg.webRTCSignal

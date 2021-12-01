@@ -123,6 +123,7 @@ class Messaging(
     internal val introductionsDisappearAfterSeconds: Int = 86400 * 7, // 7 days
     internal val provisionalContactsExpireAfterSeconds: Long = 300, // 5 minutes
     internal val name: String = "messaging",
+    private val webRTCSignalingTimeoutMillis: Long = 30L.secondsToMillis,
     private val defaultConfiguration: Messages.Configuration = Messages.Configuration.newBuilder()
         .setMaxAttachmentSize(100000000).build(),
 ) : Closeable {
@@ -854,6 +855,7 @@ class Messaging(
     ) {
         val recipientId = unsafeRecipientId.sanitizedContactId
         val msg = Model.TransferMessage.newBuilder()
+            .setSent(now)
             .setWebRTCSignal(content.byteString()).build()
         cryptoWorker.submit {
             cryptoWorker.sendEphemeral(
@@ -886,10 +888,16 @@ class Messaging(
     }
 
     internal fun notifyWebRTCSignal(
+        sent: Long,
         senderId: String,
         senderDeviceId: String,
         content: ByteString
     ) {
+        val delta = now - sent
+        if (delta > webRTCSignalingTimeoutMillis || delta < -1 * webRTCSignalingTimeoutMillis) {
+            logger.debug("dropping past or future webrtc signal")
+            return
+        }
         val signal = WebRTCSignal(senderId, senderDeviceId, content.toByteArray())
         webRTCSignalingSubscribers.values.forEach { subscriber ->
             subscriber(signal)
