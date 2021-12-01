@@ -1820,7 +1820,7 @@ class MessagingTest : BaseMessagingTest() {
                             assertEquals(1, result.successfulDeviceIds?.size)
 
                             // wait for cat to potentially receive 2nd signal (which it shouldn't)
-                            delay(5000)
+                            delay(5L.secondsToMillis)
 
                             assertEquals(mapOf(dogId to "first"), receivedSignals)
 
@@ -1843,6 +1843,44 @@ class MessagingTest : BaseMessagingTest() {
                                 true,
                                 result.deviceErrors?.containsKey(badDeviceId.toString())
                             )
+
+                            logger.debug("reopen cat with a very short webRTC signal timeout")
+                            cat.close()
+
+                            newMessaging(
+                                catDB,
+                                "cat",
+                                webRTCSignalingTimeoutMillis = 1
+                            ).with { reopenedCat ->
+                                val newReceivedSignals = HashMap<String, String>()
+                                reopenedCat.subscribeToWebRTCSignals("subscriberId") { signal ->
+                                    receivedSignals.put(
+                                        signal.senderId,
+                                        signal.content.toString(Charsets.UTF_8)
+                                    )
+                                    receivedFirstSignal.complete(null)
+                                }
+
+                                resultFuture = CompletableFuture<MultiDeviceResult>()
+                                dog.sendWebRTCSignal(
+                                    catId,
+                                    "shouldGetLost".toByteArray(Charsets.UTF_8)
+                                ) {
+                                    resultFuture.complete(it)
+                                }
+                                result = resultFuture.get()
+                                assertTrue(result.succeeded)
+                                assertEquals(1, result.successfulDeviceIds?.size)
+
+                                // wait for reopenedCat to receive signal
+                                delay(5L.secondsToMillis)
+
+                                assertEquals(
+                                    mapOf(),
+                                    newReceivedSignals,
+                                    "reopenedCat shouldn't have received signal"
+                                )
+                            }
                         }
                     }
                 }
@@ -2652,6 +2690,7 @@ class MessagingTest : BaseMessagingTest() {
         stopSendRetryAfterMillis: Long = 5L.minutesToMillis,
         orphanedAttachmentCutoffSeconds: Int = 1,
         provisionalContactsExpireAfterSeconds: Long = 20,
+        webRTCSignalingTimeoutMillis: Long = 10L.secondsToMillis,
         start: Boolean = true
     ): Messaging {
         val result = Messaging(
@@ -2671,6 +2710,7 @@ class MessagingTest : BaseMessagingTest() {
             stopSendRetryAfterMillis = stopSendRetryAfterMillis,
             orphanedAttachmentCutoffSeconds = orphanedAttachmentCutoffSeconds,
             provisionalContactsExpireAfterSeconds = provisionalContactsExpireAfterSeconds,
+            webRTCSignalingTimeoutMillis = webRTCSignalingTimeoutMillis,
             name = name
         )
         if (start) {
