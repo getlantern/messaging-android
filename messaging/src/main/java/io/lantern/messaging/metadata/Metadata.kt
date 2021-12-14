@@ -77,10 +77,14 @@ class Metadata(
         }
 
         private fun visualMetadata(file: File, mimeType: String?): Metadata {
+            val additionalMetadata: MutableMap<String, String>? = null
             val bmp = when {
                 mimeType?.startsWith("image") == true -> rotatedBitmap(file)
                 mimeType?.startsWith("video") == true -> {
                     val retriever = MediaMetadataRetriever()
+                    additionalMetadata?.set(
+                        "orientation", retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION).toString() // ktlint-disable max-line-length
+                    )
                     try {
                         retriever.setDataSource(file.absolutePath)
                         retriever.getFrameAtTime(0)
@@ -91,7 +95,7 @@ class Metadata(
                 else -> null
             }
             val thumbnail = scaledThumbnail(bmp)
-            return Metadata(mimeType, thumbnail, thumbnail.let { "image/webp" })
+            return Metadata(mimeType, thumbnail, thumbnail.let { "image/webp" }, additionalMetadata)
         }
 
         /**

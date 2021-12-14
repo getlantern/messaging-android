@@ -54,6 +54,13 @@ class MetadataTest : BaseTest() {
     }
 
     @Test
+    fun testUpsideDownVideo() {
+        val file = assetToFile("upside_down_test.mp4")
+        val md = Metadata.analyze(file)
+        assertEquals("180", md.additionalMetadata?.get("orientation"))
+    }
+
+    @Test
     fun testAudio() {
         val file = assetToFile("clap.opus")
         val md = Metadata.analyze(file)
