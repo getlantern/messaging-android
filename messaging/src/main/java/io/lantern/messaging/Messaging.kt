@@ -104,6 +104,8 @@ private const val fingerprintIterations = 5200
  *                                        aren't in the database ("orphaned") and are older than
  *                                        orphanedAttachmentCutoffSeconds will be deleted from disk
  * @param name a name to use for this Messaging instance in logs
+ * @param webRTCSignalingTimeoutMillis WebRTC signaling messages received outside of now +- this
+ *                                     timeout will be dropped
  * @param defaultConfiguration the default configuration to use prior to receiving a configuration
  *                             from tassis
  */
@@ -123,6 +125,7 @@ class Messaging(
     internal val introductionsDisappearAfterSeconds: Int = 86400 * 7, // 7 days
     internal val provisionalContactsExpireAfterSeconds: Long = 300, // 5 minutes
     internal val name: String = "messaging",
+    private val webRTCSignalingTimeoutMillis: Long = 30L.secondsToMillis,
     private val defaultConfiguration: Messages.Configuration = Messages.Configuration.newBuilder()
         .setMaxAttachmentSize(100000000).build(),
 ) : Closeable {
@@ -304,8 +307,6 @@ class Messaging(
 
     /**
      * Returns the recovery code used by this Messaging instance encoded in base32.
-     *
-     * TODO: use constant-time implementation of base32 encoding
      */
     val recoveryCode: String
         get() = recoveryKey.base32
@@ -324,7 +325,6 @@ class Messaging(
         }
 
         kill()
-        // TODO: use constant-time implementation of base32 decoding
         val rk = recoveryCode.fromBase32
         db.mutate { tx ->
             tx.put(Schema.PATH_RECOVERY_KEY, rk)
@@ -854,6 +854,7 @@ class Messaging(
     ) {
         val recipientId = unsafeRecipientId.sanitizedContactId
         val msg = Model.TransferMessage.newBuilder()
+            .setSent(now)
             .setWebRTCSignal(content.byteString()).build()
         cryptoWorker.submit {
             cryptoWorker.sendEphemeral(
@@ -886,10 +887,16 @@ class Messaging(
     }
 
     internal fun notifyWebRTCSignal(
+        sent: Long,
         senderId: String,
         senderDeviceId: String,
         content: ByteString
     ) {
+        val delta = now - sent
+        if (delta > webRTCSignalingTimeoutMillis || delta < -1 * webRTCSignalingTimeoutMillis) {
+            logger.debug("dropping past or future webrtc signal")
+            return
+        }
         val signal = WebRTCSignal(senderId, senderDeviceId, content.toByteArray())
         webRTCSignalingSubscribers.values.forEach { subscriber ->
             subscriber(signal)

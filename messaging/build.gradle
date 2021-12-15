@@ -76,7 +76,7 @@ dependencies {
 
     api 'com.github.getlantern:db-android:2f1b7bfea1'
     implementation "com.github.getlantern.curve25519-java:curve25519-java:cb0f93fdc1"
-    implementation 'com.github.getlantern.libsignal-protocol-java:signal-protocol-java:1dfb5ed869'
+    implementation 'com.github.getlantern.libsignal-protocol-java:signal-protocol-java:61bc062cc6'
     implementation 'com.github.getlantern:libsignal-metadata-java:77a7a914d4'
 
     testImplementation 'junit:junit:4.13.2'
