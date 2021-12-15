@@ -12,6 +12,7 @@ import androidx.core.graphics.scale
 import androidx.exifinterface.media.ExifInterface
 import com.j256.simplemagic.ContentInfoUtil
 import io.lantern.messaging.Model
+import mu.KotlinLogging
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -21,7 +22,6 @@ import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.floor
-import mu.KotlinLogging
 
 private val logger = KotlinLogging.logger {}
 
@@ -34,7 +34,6 @@ class Metadata(
     val thumbnailMimeType: String?,
     val additionalMetadata: Map<String, String>? = null
 ) {
-
     companion object {
         private const val numberOfBars = 1000 // resolution of waveform in bars
         private const val maxQuantizedValue = 255 // the maximum value of a bar
@@ -77,22 +76,25 @@ class Metadata(
         }
 
         private fun visualMetadata(file: File, mimeType: String?): Metadata {
-            val additionalMetadata: MutableMap<String, String>? = null
+            val retriever = MediaMetadataRetriever()
             val bmp = when {
                 mimeType?.startsWith("image") == true -> rotatedBitmap(file)
                 mimeType?.startsWith("video") == true -> {
-                    val retriever = MediaMetadataRetriever()
-                    additionalMetadata?.set(
-                        "orientation", retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION).toString() // ktlint-disable max-line-length
-                    )
                     try {
                         retriever.setDataSource(file.absolutePath)
                         retriever.getFrameAtTime(0)
-                    } finally {
-                        retriever.release()
+                    } catch (t: Throwable) {
+                        null
                     }
                 }
                 else -> null
+            }
+            val additionalMetadata = try {
+                mutableMapOf("rotation" to retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION).toString())
+            } catch (t: Throwable) {
+                null
+            } finally {
+                retriever.release()
             }
             val thumbnail = scaledThumbnail(bmp)
             return Metadata(mimeType, thumbnail, thumbnail.let { "image/webp" }, additionalMetadata)

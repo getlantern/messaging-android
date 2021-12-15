@@ -9,6 +9,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.Test
+import kotlin.test.assertFalse
 
 class MetadataTest : BaseTest() {
     @Test
@@ -57,7 +58,18 @@ class MetadataTest : BaseTest() {
     fun testUpsideDownVideo() {
         val file = assetToFile("upside_down_test.mp4")
         val md = Metadata.analyze(file)
-        assertEquals("180", md.additionalMetadata?.get("orientation"))
+        // usual tests should pass
+        assertEquals("video/mp4", md.mimeType)
+        assertNotNull(md.thumbnail)
+        assertTrue(md.thumbnail!!.size <= file.length())
+        assertEquals("image/webp", md.thumbnailMimeType)
+        // test additionalMetadata
+        val additionalMetadata = md.additionalMetadata
+        assertNotNull(additionalMetadata)
+        // test rotation - should be 180
+        val rotation = additionalMetadata["rotation"]
+        assertNotNull(rotation)
+        assertEquals("180", rotation)
     }
 
     @Test
