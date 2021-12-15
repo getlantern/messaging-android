@@ -51,6 +51,13 @@ class MetadataTest : BaseTest() {
         assertNotNull(md.thumbnail)
         assertTrue(md.thumbnail!!.size <= file.length())
         assertEquals("image/webp", md.thumbnailMimeType)
+        // test additionalMetadata - should exist
+        val additionalMetadata = md.additionalMetadata
+        assertNotNull(additionalMetadata)
+        // test rotation - should exist and be 0
+        val rotation = additionalMetadata["rotation"]
+        assertNotNull(rotation)
+        assertEquals("0", rotation)
     }
 
     @Test
@@ -62,10 +69,10 @@ class MetadataTest : BaseTest() {
         assertNotNull(md.thumbnail)
         assertTrue(md.thumbnail!!.size <= file.length())
         assertEquals("image/webp", md.thumbnailMimeType)
-        // test additionalMetadata
+        // test additionalMetadata - should exist
         val additionalMetadata = md.additionalMetadata
         assertNotNull(additionalMetadata)
-        // test rotation - should be 180
+        // test rotation - should exist and be 180
         val rotation = additionalMetadata["rotation"]
         assertNotNull(rotation)
         assertEquals("180", rotation)
