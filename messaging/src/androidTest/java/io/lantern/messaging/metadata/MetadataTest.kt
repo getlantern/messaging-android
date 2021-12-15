@@ -37,10 +37,15 @@ class MetadataTest : BaseTest() {
 
     @Test
     fun testVideo() {
-        doTests("video.mp4", "0")
+        doTestVideo("video.mp4", "0")
     }
 
-    private fun doTests(fileName: String, expectedRotation: String) {
+    @Test
+    fun testUpsideDownVideo() {
+        doTestVideo("upside_down_test.mp4", "180")
+    }
+
+    private fun doTestVideo(fileName: String, expectedRotation: String) {
         val file = assetToFile(fileName)
         val md = Metadata.analyze(file)
         assertEquals("video/mp4", md.mimeType)
@@ -54,11 +59,6 @@ class MetadataTest : BaseTest() {
         val rotation = additionalMetadata["rotation"]
         assertNotNull(rotation)
         assertEquals(expectedRotation, rotation)
-    }
-
-    @Test
-    fun testUpsideDownVideo() {
-        doTests("upside_down_test.mp4", "180")
     }
 
     @Test
