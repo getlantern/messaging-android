@@ -2,6 +2,8 @@ package io.lantern.messaging
 
 import com.google.protobuf.ByteString
 import io.lantern.db.DB
+import io.lantern.db.SearchResult
+import io.lantern.db.SnippetConfig
 import io.lantern.db.Transaction
 import io.lantern.messaging.conversions.byteString
 import io.lantern.messaging.metadata.Metadata
@@ -18,25 +20,38 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.math.BigInteger
 import java.nio.ByteBuffer
+import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.collections.HashSet
 import mu.KotlinLogging
 import org.whispersystems.libsignal.DeviceId
+import org.whispersystems.libsignal.InvalidKeyException
+import org.whispersystems.libsignal.ecc.ECKeyPair
+import org.whispersystems.libsignal.ecc.ECPublicKey
+import org.whispersystems.libsignal.fingerprint.NumericFingerprintGenerator
+import org.whispersystems.libsignal.util.InvalidCharacterException
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherInputStream
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
 import org.whispersystems.signalservice.internal.util.Util
 
 /**
- * This exception indicates that a message was received from an unknown sender (i.e. someone not in
- * the local contact list).
+ * This exception indicates that a provisional message like a hello was received from an unknown
+ * sender (i.e. someone not in the list of provisional contacts)
  */
-class UnknownSenderException(internal val senderId: String) :
-    Exception("Unknown sender")
+class UnknownProvisionalSenderException : Exception("Unknown provisional sender")
+
+/**
+ * This exception indicates that a message was received from a blocked sender.
+ */
+class BlockedSenderException(internal val senderId: String) :
+    Exception("Blocked sender")
 
 /**
  * This exception indicates that an attempt was made to upload an attachment larger than the
@@ -48,6 +63,23 @@ class AttachmentTooBigException(val maxAttachmentBytes: Long) : Exception("Attac
  * This exception indicates that the file from which we attempted to create an attachment is missing
  */
 class AttachmentPlainTextMissingException : Exception("Attachment Plaintext File Is Missing")
+
+/**
+ * The result of adding a provisional contact.
+ */
+data class ProvisionalContactResult(
+    // The timestamp of the most recent hello we received from this contact prior to adding a
+    // provisional contact. A value greater than 0 means that we already have a Contact entry.
+    val mostRecentHelloTsMillis: Long,
+    // The timestamp in milliseconds since epoch when the provisional contact expires. A value of 0
+    // means that  we didn't add a provisional contact and don't have to worry about it expiring.
+    val expiresAtMillis: Long
+)
+
+private val emptyBytes = ByteArray(0)
+
+// we use 5200 fingerprint iterations just like Signal does
+private const val fingerprintIterations = 5200
 
 /**
  * Messaging provides an API for End to End Encrypted (E2EE) messaging, using a tassis server for
@@ -72,31 +104,65 @@ class AttachmentPlainTextMissingException : Exception("Attachment Plaintext File
  *                                        aren't in the database ("orphaned") and are older than
  *                                        orphanedAttachmentCutoffSeconds will be deleted from disk
  * @param name a name to use for this Messaging instance in logs
+ * @param webRTCSignalingTimeoutMillis WebRTC signaling messages received outside of now +- this
+ *                                     timeout will be dropped
  * @param defaultConfiguration the default configuration to use prior to receiving a configuration
  *                             from tassis
  */
 class Messaging(
-    parentDB: DB,
+    private val parentDB: DB,
     private val attachmentsDirectory: File,
     transportFactory: TransportFactory,
     clientTimeoutMillis: Long = 10L.secondsToMillis,
     redialBackoffMillis: Long = 500L,
     maxRedialDelayMillis: Long = 15L.secondsToMillis,
-    failedSendRetryDelayMillis: Long = 5L.secondsToMillis,
-    stopSendRetryAfterMillis: Long = 1000 * 365 * 24L.hoursToMillis, // approximately 1000 years
-    numInitialPreKeysToRegister: Int = 5,
+    private val failedSendRetryDelayMillis: Long = 5L.secondsToMillis,
+    private val stopSendRetryAfterMillis: Long =
+        1000 * 365 * 24L.hoursToMillis, // approximately 1000 years
+    private val numInitialPreKeysToRegister: Int = 5,
     private val defaultMessagesDisappearAfterSeconds: Int = 86400, // 1 day
     private val orphanedAttachmentCutoffSeconds: Int = 86400, // 1 day
     internal val introductionsDisappearAfterSeconds: Int = 86400 * 7, // 7 days
     internal val provisionalContactsExpireAfterSeconds: Long = 300, // 5 minutes
     internal val name: String = "messaging",
-    defaultConfiguration: Messages.Configuration = Messages.Configuration.newBuilder()
-        .setMaxAttachmentSize(100000000).build()
+    private val webRTCSignalingTimeoutMillis: Long = 30L.secondsToMillis,
+    private val defaultConfiguration: Messages.Configuration = Messages.Configuration.newBuilder()
+        .setMaxAttachmentSize(100000000).build(),
 ) : Closeable {
     internal val logger = KotlinLogging.logger(name)
-    internal val store = MessagingProtocolStore(parentDB)
+    private val started = AtomicBoolean()
     val db = parentDB.withSchema("messaging")
     private val webRTCSignalingSubscribers = ConcurrentHashMap<String, (WebRTCSignal) -> Unit>()
+    private val cfg = AtomicReference<Messages.Configuration>()
+    private val identityKeyPairRef = AtomicReference<ECKeyPair>()
+    internal val identityKeyPair: ECKeyPair get() = identityKeyPairRef.get()
+    val store: MessagingProtocolStore get() = MessagingProtocolStore(parentDB, identityKeyPair)
+    internal val deviceId: DeviceId get() = store.deviceId
+
+    // All processing that involves crypto operations happens on this executor to keep the
+    // SignalProtocolStore in a consistent state
+    private val cryptoWorkerRef = AtomicReference<CryptoWorker>()
+    internal val cryptoWorker: CryptoWorker get() = cryptoWorkerRef.get()
+    private val myIdRef = AtomicReference<Model.ContactId>()
+    val myId: Model.ContactId get() = myIdRef.get()
+
+    internal val anonymousClientWorker =
+        AnonymousClientWorker(
+            transportFactory,
+            this,
+            clientTimeoutMillis,
+            redialBackoffMillis,
+            maxRedialDelayMillis
+        )
+
+    internal val authenticatedClientWorker =
+        AuthenticatedClientWorker(
+            transportFactory,
+            this,
+            clientTimeoutMillis,
+            redialBackoffMillis,
+            maxRedialDelayMillis
+        )
 
     init {
         // register protocol buffer types before starting crypto worker or doing anything else that
@@ -107,11 +173,32 @@ class Messaging(
         db.registerType(23, Model.OutboundMessage::class.java)
         db.registerType(24, Model.InboundAttachment::class.java)
         db.registerType(25, Model.ProvisionalContact::class.java)
+
+        // apply migrations
+        Migrations(this).apply()
+
+        // auto-start if database already contains recovery key
+        if (db.contains(Schema.PATH_RECOVERY_KEY)) {
+            logger.debug("auto-starting ")
+            start()
+        }
     }
 
-    private val cfg = AtomicReference<Messages.Configuration>()
+    private fun deriveIdentityKeyPair() {
+        identityKeyPairRef.set(recoveryKey.keyPair("kp0"))
+    }
 
-    init {
+    private fun startCryptoWorker() {
+        cryptoWorkerRef.set(
+            CryptoWorker(
+                this,
+                failedSendRetryDelayMillis,
+                stopSendRetryAfterMillis
+            )
+        )
+    }
+
+    private fun initialize() {
         // initialize configuration
         db.mutate { tx ->
             val latestCfg =
@@ -119,51 +206,27 @@ class Messaging(
             cfg.set(latestCfg)
             tx.put(Schema.PATH_CONFIG, latestCfg)
         }
-    }
 
-    internal val identityKeyPair = store.identityKeyPair
-    internal val deviceId: DeviceId = store.deviceId
+        startCryptoWorker()
 
-    // All processing that involves crypto operations happens on this executor to keep the
-    // SignalProtocolStore in a consistent state
-    internal val cryptoWorker =
-        CryptoWorker(
-            this,
-            failedSendRetryDelayMillis,
-            stopSendRetryAfterMillis
-        )
-    internal val anonymousClientWorker =
-        AnonymousClientWorker(
-            transportFactory,
-            this,
-            clientTimeoutMillis,
-            redialBackoffMillis,
-            maxRedialDelayMillis
-        )
-    internal val authenticatedClientWorker =
-        AuthenticatedClientWorker(
-            transportFactory,
-            this,
-            clientTimeoutMillis,
-            redialBackoffMillis,
-            maxRedialDelayMillis
-        )
-
-    val myId: Model.ContactId
-
-    init {
         // make sure we have a contact entry for ourselves
         val me = db.mutate { tx ->
-            tx.get(Schema.PATH_ME) ?: tx.put(
+            tx.put(
                 Schema.PATH_ME,
-                Model.Contact.newBuilder()
-                    .setContactId(identityKeyPair.publicKey.toString().directContactId).build()
+                (tx.get<Model.Contact>(Schema.PATH_ME)?.toBuilder() ?: Model.Contact.newBuilder())
+                    .setContactId(identityKeyPair.publicKey.toString().directContactId)
+                    .setIsMe(true)
+                    .setVerificationLevel(Model.VerificationLevel.VERIFIED)
+                    .build()
             )
         }
-        myId = me.contactId
+        myIdRef.set(me.contactId)
 
-        // add myself as a contact user to start "talking"
-        addOrUpdateContact(myId, "Note to self")
+        // add myself as a contact to record notes to myself
+        doAddOrUpdateContact(myId) { contact, _ ->
+            contact.isMe = true
+            contact.verificationLevel = Model.VerificationLevel.VERIFIED
+        }
 
         // immediately request some upload authorizations so that we're ready to upload attachments
         cryptoWorker.submit { cryptoWorker.getMoreUploadAuthorizationsIfNecessary() }
@@ -194,47 +257,247 @@ class Messaging(
         // on startup, go through all attachments older than orphanedAttachmentCutoffSeconds and
         // delete any that are not in the database
         deleteOrphanedAttachments()
+
+        // on startup, request ChatNumbers for any direct contacts that don't yet have them
+        db.listPaths(
+            Schema.PATH_CONTACTS.path(Schema.CONTACT_DIRECT_PREFIX)
+        ).forEach { path ->
+            lookupChatNumberIfNecessary(path)
+        }
+    }
+
+    private val recoveryKey: RecoveryKey
+        get() = db.mutate { tx ->
+            tx.get(Schema.PATH_RECOVERY_KEY) ?: run {
+                val newRecoveryKey = generateRecoveryKey()
+                tx.put(Schema.PATH_RECOVERY_KEY, newRecoveryKey)
+                newRecoveryKey
+            }
+        }
+
+    /**
+     * Starts the messaging system. Until start() is called the first time, the data remains
+     * unitialized. start() must be called before attempting to use any of the other functions.
+     */
+    @Synchronized
+    fun start() {
+        if (started.compareAndSet(false, true)) {
+            logger.debug("starting")
+            deriveIdentityKeyPair()
+            authenticatedClientWorker.autoConnectIfNecessary()
+            initialize()
+        } else {
+            logger.debug("already started, not starting again")
+        }
     }
 
     /**
-     * Updates the displayName associated with the "me" contact entry.
+     * Kill disconnects from servers and wipes the database.
      */
-    fun setMyDisplayName(displayName: String) {
+    @Synchronized
+    fun kill() {
+        if (started.compareAndSet(true, false)) {
+            cryptoWorker.close()
+            authenticatedClientWorker.disconnect()
+            anonymousClientWorker.disconnect()
+        }
+        db.withSchema("messaging_protocol_store").clear()
+        db.clear()
+    }
+
+    /**
+     * Returns the recovery code used by this Messaging instance encoded in base32.
+     */
+    val recoveryCode: String
+        get() = recoveryKey.base32
+
+    /**
+     * Recovers the messaging system using the given recoveryKey. All existing data will be erased.
+     *
+     * If an invalid recoveryCode is provided, this will throw an InvalidKeyException and leave the
+     * system in its current state.
+     */
+    @Throws(InvalidKeyException::class)
+    fun recover(recoveryCode: String) {
+        val newRecoveryKey = recoveryCode.fromBase32
+        if (newRecoveryKey.size != recoveryKey.size) {
+            throw InvalidKeyException("Invalid recovery code")
+        }
+
+        kill()
+        val rk = recoveryCode.fromBase32
         db.mutate { tx ->
-            tx.put(
-                Schema.PATH_ME,
-                tx.get<Model.Contact>(Schema.PATH_ME)!!.toBuilder()
-                    .setDisplayName(displayName).build()
+            tx.put(Schema.PATH_RECOVERY_KEY, rk)
+        }
+        start()
+    }
+
+    /**
+     * Adds or updates the given direct contact. The contact is identified by either unsafeId or
+     * chatNumber.
+     *
+     * @param unsafeId the base32 encoded public identity key of the contact
+     *                 (if unspecified, chatNumber is used instead)
+     * @param displayName optional human-friendly display name for this contact
+     *                    (if unspecified, existing displayName is left alone)
+     * @param source optional identifier of the source of this contact
+     *               (if unspecified, existing source is left alone)
+     * @param applicationIds optional map of application-specific ids to associate with the user.
+     *                       ID is limited to int32.
+     *                       (application IDs are added to existing set)
+     * @param minimumVerificationLevel the contact's verification will be set to the greater of this
+     *                                 or the current verificationLevel (defaults to UNVERIFIED)
+     * @param chatNumber the ChatNumber to associate with this contact
+     *                   (if unspecified, the existing ChatNumber is left alone)
+     * @param updateApplicationData optional function to manipulate application specific data on the
+     *                              contact
+     * @return the created or updated Contact
+     */
+    @Throws(
+        InvalidKeyException::class,
+        InvalidCharacterException::class,
+        java.lang.IllegalArgumentException::class,
+    )
+    fun addOrUpdateDirectContact(
+        unsafeId: String? = null,
+        displayName: String? = null,
+        source: Model.ContactSource? = null,
+        applicationIds: Map<Int, String>? = null,
+        minimumVerificationLevel: Model.VerificationLevel =
+            Model.VerificationLevel.UNACCEPTED,
+        chatNumber: Model.ChatNumber? = null,
+        updateApplicationData: ((MutableMap<String, Any>) -> Unit)? = null
+    ): Model.Contact {
+        if (unsafeId == null && chatNumber == null) {
+            throw java.lang.IllegalArgumentException("Please specify either unsafeId or chatNumber")
+        }
+
+        val contactId = when {
+            unsafeId != null -> unsafeId.directContactId
+            chatNumber != null -> chatNumber.directContactId
+            else -> throw java.lang.IllegalArgumentException("Please specify either unsafeId or chatNumber") // ktlint-disable max-line-length
+        }
+
+        return cryptoWorker.submitForValue {
+            addOrUpdateContact(
+                contactId,
+                displayName,
+                source,
+                applicationIds,
+                minimumVerificationLevel,
+                chatNumber,
+                updateApplicationData
             )
         }
     }
 
-    /**
-     * Adds or updates the given direct contact.
-     *
-     * @param id the base32 encoded public identity key of the contact
-     * @param displayName the human-friendly display name for this contact
-     * @return the created or updated Contact
-     */
-    fun addOrUpdateDirectContact(id: String, displayName: String): Model.Contact =
-        addOrUpdateContact(id.directContactId, displayName)
-
-    private fun addOrUpdateContact(
-        contactId: Model.ContactId,
-        displayName: String
-    ): Model.Contact {
-        return cryptoWorker.submitForValue {
-            doAddOrUpdateContact(contactId, displayName)
+    @Throws(InvalidKeyException::class)
+    internal fun addOrUpdateContact(
+        unsafeContactId: Model.ContactId,
+        displayName: String? = null,
+        source: Model.ContactSource? = null,
+        applicationIds: Map<Int, String>? = null,
+        minimumVerificationLevel: Model.VerificationLevel,
+        chatNumber: Model.ChatNumber? = null,
+        updateApplicationData: ((MutableMap<String, Any>) -> Unit)? = null
+    ): Model.Contact =
+        doAddOrUpdateContact(unsafeContactId) { contact, _ ->
+            chatNumber?.let {
+                if (chatNumber.isComplete) {
+                    // only record complete ChatNumbers
+                    // if we don't have a complete ChatNumber, we'll later get it from the server
+                    contact.chatNumber = chatNumber
+                }
+            }
+            displayName?.let { contact.displayName = it }
+            source?.let { it -> contact.source = it }
+            applicationIds?.let { it ->
+                contact.putAllApplicationIds(it)
+            }
+            contact.verificationLevelValue =
+                minimumVerificationLevel.number.coerceAtLeast(contact.verificationLevelValue)
+            updateApplicationData?.let { update ->
+                val appData = mutableMapOf<String, Any>()
+                contact.applicationDataMap.forEach { (key, value) ->
+                    appData[key] = when (value.valueCase) {
+                        Model.Datum.ValueCase.STRING -> value.string
+                        Model.Datum.ValueCase.FLOAT -> value.float
+                        Model.Datum.ValueCase.INT -> value.int
+                        Model.Datum.ValueCase.BOOL -> value.bool
+                        Model.Datum.ValueCase.BYTES -> value.bytes.toByteArray()
+                        Model.Datum.ValueCase.VALUE_NOT_SET ->
+                            throw Error("Value on Datum should always be set")
+                    }
+                }
+                contact.clearApplicationData()
+                update(appData)
+                val updatedAppData = mutableMapOf<String, Model.Datum>()
+                appData.forEach { (key, value) ->
+                    val datum = Model.Datum.newBuilder()
+                    when (value) {
+                        is String -> datum.string = value
+                        is Double -> datum.float = value
+                        is Float -> datum.float = value.toDouble()
+                        is Long -> datum.int = value
+                        is Int -> datum.int = value.toLong()
+                        is Boolean -> datum.bool = value
+                        is ByteArray -> datum.bytes = value.byteString()
+                        else -> throw RuntimeException(
+                            "Unrecognized value type ${value.javaClass.name}"
+                        )
+                    }
+                    updatedAppData[key] = datum.build()
+                }
+                contact.putAllApplicationData(updatedAppData)
+            }
         }
-    }
 
+    /**
+     * Accepts a previously unaccepted Contact, putting it into UNVERIFIED status.
+     */
+    fun acceptDirectContact(unsafeId: String) =
+        doAddOrUpdateContact(unsafeId.directContactId) { contact, _ ->
+            contact.verificationLevel = Model.VerificationLevel.UNVERIFIED
+        }
+
+    /**
+     * Marks a contact as VERIFIED.
+     */
+    fun markDirectContactVerified(unsafeId: String) =
+        doAddOrUpdateContact(unsafeId.directContactId) { contact, _ ->
+            contact.verificationLevel = Model.VerificationLevel.VERIFIED
+        }
+
+    /**
+     * Blocks a direct contact, resulting in all of their past and future communication going into a
+     * spam folder.
+     */
+    fun blockDirectContact(unsafeId: String) =
+        doAddOrUpdateContact(unsafeId.directContactId) { contact, _ ->
+            contact.blocked = true
+        }
+
+    /**
+     * Unblocks a direct contact, allowing us to receive messages from this contact again.
+     */
+    fun unblockDirectContact(unsafeId: String) =
+        doAddOrUpdateContact(unsafeId.directContactId) { contact, _ ->
+            contact.blocked = false
+        }
+
+    /**
+     * Adds or updates the contact identified by the given unsafeContactId, using the provided
+     * update function to set properties of the Contact.
+     */
+    @Throws(InvalidKeyException::class)
     internal fun doAddOrUpdateContact(
-        contactId: Model.ContactId,
-        displayName: String,
-        mostRecentHelloTs: Long? = null,
+        unsafeContactId: Model.ContactId,
+        update: (Model.Contact.Builder, Boolean) -> Unit,
     ): Model.Contact {
+        val contactId = unsafeContactId.sanitized
         val path = contactId.contactPath
-        return db.mutate { tx ->
+
+        val result = db.mutate { tx ->
             val existingContact = tx.get<Model.Contact>(path)
             val contactBuilder = existingContact?.toBuilder() ?: Model.Contact.newBuilder()
                 .setContactId(contactId)
@@ -243,17 +506,48 @@ class Messaging(
                 contactBuilder.createdTs = now
                 contactBuilder.messagesDisappearAfterSeconds =
                     defaultMessagesDisappearAfterSeconds
+                contactBuilder.numericFingerprint = numericFingerprintFor(contactId)
             }
-            mostRecentHelloTs?.let { contactBuilder.setMostRecentHelloTs(it) }
-            val contact =
-                contactBuilder.setContactId(contactId).setDisplayName(displayName).build()
-            tx.put(path, contact)
-            // decrypt any "spam" we received from this Contact prior to adding them
-            db.list<ByteArray>(contact.spamQuery)
-                .forEach { (spamPath, unidentifiedSenderMessage) ->
-                    cryptoWorker.doDecryptAndStore(unidentifiedSenderMessage)
-                    tx.delete(spamPath)
+            update(contactBuilder, isNew)
+            contactBuilder.displayName = contactBuilder.displayName.sanitizedDisplayName
+            val contact = contactBuilder.build()
+            tx.put(path, contact, fullText = contact.fullText)
+
+            val wasBlocked = existingContact?.blocked == true
+            val becameBlocked = !wasBlocked && contact.blocked
+            if (becameBlocked) {
+                // contact became blocked, delete messages and such
+                deleteContactActivity(tx, contact.contactId)
+            }
+
+            val verificationLevelChanged =
+                existingContact != null &&
+                    existingContact.verificationLevel != contact.verificationLevel
+            if (verificationLevelChanged) {
+                // when verification level changes, update the constrained verification level on all
+                // invitations from this contact.
+                val introductions =
+                    tx.listDetails<Model.StoredMessage>(contactId.introductionMessagesFromQuery)
+                introductions.forEach { msg ->
+                    val updatedIntroduction = msg.value.introduction.toBuilder()
+                        .setConstrainedVerificationLevelValue(
+                            msg.value.introduction.verificationLevelValue.coerceAtMost(
+                                contact.verificationLevelValue
+                            )
+                        ).build()
+                    tx.put(
+                        msg.detailPath,
+                        msg.value.toBuilder().setIntroduction(updatedIntroduction).build()
+                    )
                 }
+
+                // also update the best introductions for all relevant introductions
+                tx.listDetails<Model.StoredMessage>(contactId.introductionMessagesFromQuery)
+                    .forEach { introduction ->
+                        updateBestIntroduction(tx, introduction.value.introduction.to)
+                    }
+            }
+
             if (isNew) {
                 // send our disappear settings as a kind of "hello", that also makes sure we're in sync on retention period
                 sendDisappearSettings(
@@ -262,7 +556,95 @@ class Messaging(
                     contact.messagesDisappearAfterSeconds
                 )
             }
+
             contact
+        }
+
+        lookupChatNumberIfNecessary(path)
+        return result
+    }
+
+    /**
+     * Looks up a ChatNumber from the short version of the number.
+     *
+     * @param shortNumber the short number by which to search
+     * @param cb callback that gets called with result (or exception if something went wrong)
+     */
+    fun findChatNumberByShortNumber(
+        shortNumber: String,
+        cb: (Model.ChatNumber?, Throwable?) -> Unit
+    ) {
+        anonymousClientWorker.withClient { client ->
+            client.findChatNumberByShortNumber(
+                shortNumber,
+                object : Callback<Messages.ChatNumber> {
+                    override fun onSuccess(result: Messages.ChatNumber) {
+                        if (!result.number.startsWith(shortNumber)) {
+                            cb(
+                                null,
+                                RuntimeException("Server returned mismatched ChatNumber, this should not happen!") // ktlint-disable max-line-length
+                            )
+                        } else {
+                            cb(result.pbuf, null)
+                        }
+                    }
+
+                    override fun onError(err: Throwable) {
+                        cb(null, err)
+                    }
+                }
+            )
+        }
+    }
+
+    private fun lookupChatNumberIfNecessary(
+        path: String,
+        cumulativeDelay: Long = failedSendRetryDelayMillis
+    ) {
+        db.get<Model.Contact>(path)?.let { contact ->
+            if (
+                contact.contactId.type == Model.ContactType.DIRECT &&
+                contact.chatNumber.number.isEmpty()
+            ) {
+                val identityKey = ECPublicKey(contact.contactId.id)
+                anonymousClientWorker.withClient { client ->
+                    client.findChatNumberByIdentityKey(
+                        identityKey,
+                        object : Callback<Messages.ChatNumber> {
+                            override fun onSuccess(result: Messages.ChatNumber) {
+                                db.mutate { tx ->
+                                    tx.get<Model.Contact>(path)?.let { latestContact ->
+                                        if (
+                                            ChatNumberEncoding.identityKey(result.number) !=
+                                            identityKey ||
+                                            !result.number.startsWith(result.shortNumber)
+                                        ) {
+                                            logger.error("Server returned mismatched ChatNumber. This should not happen!") // ktlint-disable max-line-length
+                                        } else {
+                                            tx.put(
+                                                path,
+                                                latestContact.toBuilder().setChatNumber(result.pbuf)
+                                                    .build()
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            override fun onError(err: Throwable) {
+                                val delay = cumulativeDelay * 2
+                                if (delay > stopSendRetryAfterMillis) {
+                                    logger.error("Permanently failed to look up ChatNumber with error: ${err.message}") // ktlint-disable max-line-length
+                                    return
+                                }
+                                anonymousClientWorker.submitDelayed(delay) {
+                                    lookupChatNumberIfNecessary(path, delay)
+                                }
+                            }
+                        }
+                    )
+                }
+            }
         }
     }
 
@@ -270,13 +652,21 @@ class Messaging(
     //
     // If they're already a contact, this simply sends them a hello but doesn't add a provisional
     // contact.
-    //
-    // @return the timestamp of the most recent hello received from this contact.
-    fun addProvisionalContact(contactId: String): Long {
-        val provisionalContact = Model.ProvisionalContact.newBuilder()
+    @Throws(InvalidKeyException::class)
+    fun addProvisionalContact(
+        unsafeContactId: String,
+        source: Model.ContactSource? = null,
+        verificationLevel: Model.VerificationLevel = Model.VerificationLevel.VERIFIED,
+    ): ProvisionalContactResult {
+        val contactId = unsafeContactId.sanitizedContactId
+
+        val expiresAt = now + provisionalContactsExpireAfterSeconds.secondsToMillis
+        val provisionalContactBuilder = Model.ProvisionalContact.newBuilder()
             .setContactId(contactId)
-            .setExpiresAt(now + provisionalContactsExpireAfterSeconds.secondsToMillis)
-            .build()
+            .setExpiresAt(expiresAt)
+            .setVerificationLevel(verificationLevel)
+        source?.let { _ -> provisionalContactBuilder.source = source }
+        val provisionalContact = provisionalContactBuilder.build()
 
         var mostRecentHelloTs = 0L
         db.mutate { tx ->
@@ -287,12 +677,25 @@ class Messaging(
             }
             sendHello(tx, contactId)
         }
-        return mostRecentHelloTs
+
+        return ProvisionalContactResult(
+            mostRecentHelloTs,
+            if (mostRecentHelloTs == 0L) expiresAt else 0
+        )
     }
 
-    fun deleteProvisionalContact(contactId: String) {
+    fun deleteProvisionalContact(unsafeContactId: String) {
+        val contactId = unsafeContactId.sanitizedContactId
+
+        // delete provisional contacts in crypto worker's thread to avoid race conditions on
+        // managing Signal session
+        cryptoWorker.submitForValue {
+            doDeleteProvisionalContact(contactId)
+        }
+    }
+
+    internal fun doDeleteProvisionalContact(contactId: String) {
         db.mutate { tx ->
-            store.deleteAllSessions(contactId)
             tx.delete(contactId.provisionalContactPath)
         }
     }
@@ -300,32 +703,28 @@ class Messaging(
     /**
      * Deletes the specified contact and all associated data.
      *
-     * @param id the base32 encoded public identity key of the contact
+     * @param unsafeContactId the base32 encoded public identity key of the contact
      */
-    fun deleteDirectContact(id: String) {
-        deleteContact(id.directContactId)
+    fun deleteDirectContact(unsafeContactId: String) {
+        val contactId = unsafeContactId.sanitizedContactId
+        deleteContact(contactId.directContactId)
     }
 
     private fun deleteContact(contactId: Model.ContactId) {
-        return cryptoWorker.submitForValue {
-            db.mutate { tx ->
-                tx.list<String>(contactId.contactMessagesQuery)
-                    .forEach { doDeleteLocally(tx, it.value) }
-                db.listPaths(contactId.contactByActivityQuery).forEach {
-                    tx.delete(it)
-                }
-                tx.listPaths(contactId.spamQuery).forEach { path -> tx.delete(path) }
-                when (contactId.type) {
-                    Model.ContactType.DIRECT -> {
-                        store.deleteAllSessions(contactId.id)
-                    }
-                    else -> {
-                        // TODO: support group contacts
-                    }
-                }
-                tx.delete(contactId.contactPath)
-            }
+        db.mutate { tx ->
+            deleteContactActivity(tx, contactId)
+            store.deleteAllSessions(contactId.id)
+            tx.delete(contactId.contactPath)
         }
+    }
+
+    private fun deleteContactActivity(tx: Transaction, contactId: Model.ContactId) {
+        tx.list<String>(contactId.contactMessagesQuery)
+            .forEach { doDeleteLocally(tx, it.value) }
+        db.listPaths(contactId.contactByActivityQuery).forEach {
+            tx.delete(it)
+        }
+        tx.listPaths(contactId.introductionMessagesFromQuery).forEach { path -> tx.delete(path) }
     }
 
     // TODO: implement the below using a GroupCipher
@@ -338,21 +737,24 @@ class Messaging(
     /**
      * Send an outbound message from the user to a direct contact.
      *
-     * @param recipientId the base32 encoded public identity key of the recipient
+     * @param unsafeRecipientId the base32 encoded public identity key of the recipient
      * @param text text for the message
-     * @param replyToSenderId the id of the sender of the message to which we're replying
+     * @param unsafeReplyToSenderId the id of the sender of the message to which we're replying
      * @param replyToId the id of the message to which we're replying (if replying to a message)
      * @param attachments any attachments to include with the message
      */
     @Throws(IllegalArgumentException::class)
     fun sendToDirectContact(
-        recipientId: String,
+        unsafeRecipientId: String,
         text: String? = null,
-        replyToSenderId: String? = null,
+        unsafeReplyToSenderId: String? = null,
         replyToId: String? = null,
         attachments: Array<Model.StoredAttachment>? = null,
         introduction: Model.IntroductionDetails? = null,
     ): Model.StoredMessage {
+        val recipientId = unsafeRecipientId.sanitizedContactId
+        val replyToSenderId = unsafeReplyToSenderId?.sanitizedContactId
+
         if (text.isNullOrBlank() && attachments?.size == 0 && introduction == null)
             throw IllegalArgumentException(
                 "Please specify either text, an introduction or at least one attachment"
@@ -421,7 +823,7 @@ class Messaging(
         val msg = msgBuilder.build()
         return db.mutate { tx ->
             // save the message in a list of all messages
-            tx.put(msg.dbPath, msg)
+            tx.put(msg.dbPath, msg, fullText = msg.fullText)
             // update the relevant contact
             updateContactMetaData(tx, msg)
             // save the message under the relevant contact messages
@@ -437,7 +839,7 @@ class Messaging(
      * persisted on disk and are not queued for send. We attempt to send them immediately, and if
      * that doesn't work for any reason, the return Future will throw an exception.
      *
-     * @param recipientId the base32 encoded public identity key of the recipient
+     * @param unsafeRecipientId the base32 encoded public identity key of the recipient
      * @param content the content of the signal to send
      * @param deviceId optionally, a specific device ID to which to send the signal
      * @param onComplete callback for when sending is complete (whether successful or failed)
@@ -445,12 +847,14 @@ class Messaging(
      * @return a Future MultiDeviceResult with the result of sending to the relevant devices
      */
     fun sendWebRTCSignal(
-        recipientId: String,
+        unsafeRecipientId: String,
         content: ByteArray,
         deviceId: String? = null,
         onComplete: (MultiDeviceResult) -> Unit
     ) {
+        val recipientId = unsafeRecipientId.sanitizedContactId
         val msg = Model.TransferMessage.newBuilder()
+            .setSent(now)
             .setWebRTCSignal(content.byteString()).build()
         cryptoWorker.submit {
             cryptoWorker.sendEphemeral(
@@ -483,10 +887,16 @@ class Messaging(
     }
 
     internal fun notifyWebRTCSignal(
+        sent: Long,
         senderId: String,
         senderDeviceId: String,
         content: ByteString
     ) {
+        val delta = now - sent
+        if (delta > webRTCSignalingTimeoutMillis || delta < -1 * webRTCSignalingTimeoutMillis) {
+            logger.debug("dropping past or future webrtc signal")
+            return
+        }
         val signal = WebRTCSignal(senderId, senderDeviceId, content.toByteArray())
         webRTCSignalingSubscribers.values.forEach { subscriber ->
             subscriber(signal)
@@ -552,6 +962,17 @@ class Messaging(
                 )
             }
             tx.put(msgPath, builder.build())
+
+            if (builder.direction == Model.MessageDirection.IN) {
+                tx.get<Model.Contact>(builder.contactId.contactPath)?.let { contact ->
+                    tx.put(
+                        contact.dbPath,
+                        contact.toBuilder()
+                            .setNumUnviewedMessages(contact.numUnviewedMessages - 1)
+                            .build()
+                    )
+                }
+            }
         }
     }
 
@@ -621,9 +1042,10 @@ class Messaging(
 
     private fun sendDisappearSettings(
         tx: Transaction,
-        contactId: String,
+        unsafeContactId: String,
         disappearAfterSeconds: Int
     ) {
+        val contactId = unsafeContactId.sanitizedContactId
         val disappearSettings = Model.DisappearSettings.newBuilder()
             .setMessagesDisappearAfterSeconds(disappearAfterSeconds)
             .build().toByteString()
@@ -637,14 +1059,11 @@ class Messaging(
         contactId: String,
         final: Boolean = false,
     ) {
-        tx.get<Model.Contact>(Schema.PATH_ME).let { me ->
-            val hello = Model.Hello.newBuilder()
-                .setDisplayName(me!!.displayName)
-                .setFinal(final)
-                .build().toByteString()
-            send(tx, contactId) { out ->
-                out.hello = hello
-            }
+        val hello = Model.Hello.newBuilder()
+            .setFinal(final)
+            .build().toByteString()
+        send(tx, contactId) { out ->
+            out.hello = hello
         }
     }
 
@@ -748,9 +1167,14 @@ class Messaging(
                     // Delete index entries for introductions
                     tx.delete(msg.senderId.introductionIndexPathByFrom(msg.introduction.to.id))
                     tx.delete(msg.introduction.to.id.introductionIndexPathByTo(msg.senderId))
+                    updateBestIntroduction(tx, msg.introduction.to)
                 }
 
                 // Update the Contact metadata based on the most recent remaining message
+                val changeToUnviewed = if (
+                    msg.direction == Model.MessageDirection.IN && msg.firstViewedAt == 0L
+                ) -1
+                else 0
                 tx.listDetails<Model.StoredMessage>(
                     msg.contactMessagesQuery,
                     count = 1,
@@ -758,9 +1182,14 @@ class Messaging(
                 ).let { storedMessages ->
                     val mostRecentMsg = storedMessages.firstOrNull()
                     if (mostRecentMsg != null) {
-                        updateContactMetaData(tx, mostRecentMsg.value, force = true)
+                        updateContactMetaData(
+                            tx,
+                            mostRecentMsg.value,
+                            force = true,
+                            changeToUnviewed = changeToUnviewed
+                        )
                     } else {
-                        clearContactMetaData(tx, msg.contactId)
+                        clearContactMetaData(tx, msg.contactId, changeToUnviewed)
                     }
                 }
             }
@@ -914,28 +1343,34 @@ class Messaging(
         tx: Transaction,
         msg: Model.StoredMessage,
         force: Boolean = false,
+        changeToUnviewed: Int = 0,
     ) {
         val contactPath = msg.contactId.contactPath
         val contact = tx.get<Model.Contact>(contactPath)
             ?: throw IllegalArgumentException("unknown contact")
-        if (!force && msg.ts <= contact.mostRecentMessageTs) {
+        if (!force && changeToUnviewed == 0 && msg.ts <= contact.mostRecentMessageTs) {
             return
         }
         // delete existing index entry
         tx.delete(contact.timestampedIdxPath)
         // update the contact
         val updatedContactBuilder = contact.toBuilder()
-            .setMostRecentMessageTs(msg.ts)
-            .setMostRecentMessageDirection(msg.direction)
-            .setMostRecentMessageText(msg.text)
-            .setHasReceivedMessage(true)
-        if (msg.attachmentsCount > 0) {
-            updatedContactBuilder.mostRecentAttachmentMimeType =
-                msg.attachmentsMap.values.iterator().next().attachment.mimeType
+        if (force || msg.ts > contact.mostRecentMessageTs) {
+            updatedContactBuilder.mostRecentMessageTs = msg.ts
+            updatedContactBuilder.mostRecentMessageDirection = msg.direction
+            updatedContactBuilder.mostRecentMessageText = msg.text
+            if (msg.attachmentsCount > 0) {
+                updatedContactBuilder.mostRecentAttachmentMimeType =
+                    msg.attachmentsMap.values.iterator().next().attachment.mimeType
+            }
+        }
+        if (msg.direction == Model.MessageDirection.IN) {
+            updatedContactBuilder.hasReceivedMessage = true
         }
         if (contact.firstReceivedMessageTs == 0L && msg.direction == Model.MessageDirection.IN) {
             updatedContactBuilder.firstReceivedMessageTs = now
         }
+        updatedContactBuilder.numUnviewedMessages += changeToUnviewed
         val updatedContact = updatedContactBuilder.build()
         tx.put(contactPath, updatedContact)
         // create a new index entry
@@ -944,7 +1379,8 @@ class Messaging(
 
     private fun clearContactMetaData(
         tx: Transaction,
-        contactId: Model.ContactId
+        contactId: Model.ContactId,
+        changeToUnviewed: Int
     ) {
         val contactPath = contactId.contactPath
         tx.get<Model.Contact>(contactPath)?.let { contact ->
@@ -956,7 +1392,8 @@ class Messaging(
                     .clearMostRecentMessageTs()
                     .clearMostRecentMessageDirection()
                     .clearMostRecentMessageText()
-                    .clearMostRecentAttachmentMimeType().build()
+                    .clearMostRecentAttachmentMimeType()
+                    .setNumUnviewedMessages(contact.numUnviewedMessages + changeToUnviewed).build()
             tx.put(contactPath, updatedContact)
         }
     }
@@ -987,10 +1424,19 @@ class Messaging(
 
     private fun deleteOrphanedAttachments() {
         // first build a set of all known attachment paths
-        val knownAttachmentPaths = db
-            .list<Model.StoredMessage>(Schema.PATH_MESSAGES.path("%"))
-            .flatMap { msg ->
-                msg.value.attachmentsMap.values.map { attachment -> attachment.encryptedFilePath }
+        val knownAttachmentPaths = mutableListOf<String>()
+        db.list<Model.StoredMessage>(Schema.PATH_MESSAGES.path("%"))
+            .forEach { msg ->
+                knownAttachmentPaths.addAll(
+                    msg.value.attachmentsMap.values.map { attachment ->
+                        attachment.encryptedFilePath
+                    }
+                )
+                knownAttachmentPaths.addAll(
+                    msg.value.attachmentsMap.values.map { attachment ->
+                        attachment.thumbnail.encryptedFilePath
+                    }
+                )
             }
         // the walk the attachments directory tree and delete any old files with no known attachment
         // path
@@ -1032,9 +1478,30 @@ class Messaging(
     }
 
     @Throws(IllegalArgumentException::class)
-    fun introduce(recipientIds: List<String>) {
-        if (recipientIds.size < 2) {
+    fun introduce(unsafeRecipientIds: List<String>) {
+        doIntroduce(unsafeRecipientIds) { to ->
+            Model.IntroductionDetails.newBuilder()
+                .setTo(to.contactId)
+                .setDisplayName(to.displayName)
+                .setVerificationLevel(to.verificationLevel).build()
+        }
+    }
+
+    /**
+     * Like introduce, but accepting a function that builds the introduction, used only for testing.
+     */
+    @Throws(IllegalArgumentException::class)
+    internal fun doIntroduce(
+        unsafeRecipientIds: List<String>,
+        buildIntroduction: (Model.Contact) -> Model.IntroductionDetails
+    ) {
+        if (unsafeRecipientIds.size < 2) {
             throw IllegalArgumentException("Please specify at least 2 recipients to introduce")
+        }
+
+        val recipientIds = unsafeRecipientIds.map { it.sanitizedContactId }
+        if (recipientIds.contains(myId.id)) {
+            throw IllegalArgumentException("You cannot introduce contacts to yourself")
         }
 
         val introducedParties = recipientIds.map { recipientId ->
@@ -1046,12 +1513,7 @@ class Messaging(
             introducedParties.forEach { a ->
                 introducedParties.forEach { b ->
                     if (a.contactId.id != b.contactId.id) {
-                        sendToDirectContact(
-                            a.contactId.id,
-                            introduction = Model.IntroductionDetails.newBuilder()
-                                .setTo(b.contactId)
-                                .setDisplayName(b.displayName).build()
-                        )
+                        sendToDirectContact(a.contactId.id, introduction = buildIntroduction(b))
                     }
                 }
             }
@@ -1059,38 +1521,120 @@ class Messaging(
     }
 
     @Throws(IllegalArgumentException::class)
-    fun acceptIntroduction(fromId: String, toId: String) {
+    fun acceptIntroduction(unsafeFromId: String, unsafeToId: String) {
+        val fromId = unsafeFromId.sanitizedContactId
+        val toId = unsafeToId.sanitizedContactId
+
         cryptoWorker.submitForValue {
-            db.mutate { tx ->
-                val introductionMessage = tx.introductionMessage(fromId, toId)?.value?.value
-                    ?: throw IllegalArgumentException("Introduction not found")
-
-                val introduction = introductionMessage.introduction
-                doAddOrUpdateContact(introduction.to.id.directContactId, introduction.displayName)
-
-                // Update status on all introductions
-                tx.introductionMessagesTo(toId).forEach {
-                    val updatedIntroduction = it.value.introduction.toBuilder()
-                        .setStatus(
-                            Model.IntroductionDetails.IntroductionStatus.ACCEPTED
-                        )
-                        // we update the displayName on all introductions to match the name that we
-                        // accepted
-                        .setDisplayName(introduction.displayName).build()
-                    tx.put(
-                        it.value.dbPath,
-                        it.value.toBuilder().setIntroduction(updatedIntroduction).build()
-                    )
-                }
-            }
+            doAcceptIntroduction(fromId, toId)
         }
     }
 
-    fun rejectIntroduction(fromId: String, toId: String) {
+    internal fun doAcceptIntroduction(fromId: String, toId: String) {
+        db.mutate { tx ->
+            val introductionMessage = tx.introductionMessage(fromId, toId)?.value?.value
+                ?: throw IllegalArgumentException("Introduction not found")
+            tx.get<Model.Contact>(fromId.directContactPath)
+                ?: throw IllegalArgumentException("Introducer not found")
+
+            val introduction = introductionMessage.introduction
+            doAddOrUpdateContact(introduction.to.id.directContactId) { contact, isNew ->
+                if (isNew) {
+                    contact.displayName = introduction.displayName
+                    contact.source = Model.ContactSource.INTRODUCTION
+                    contact.verificationLevel =
+                        introduction.constrainedVerificationLevel
+                } else if (
+                    introduction.constrainedVerificationLevel > contact.verificationLevel
+                ) {
+                    // auto-upgrade contact's verification level
+                    contact.verificationLevel = introduction.verificationLevel
+                }
+            }
+
+            // Update status on all introductions
+            tx.introductionMessagesTo(toId).forEach { msg ->
+                val updatedIntroduction = msg.value.introduction.toBuilder()
+                    .setStatus(
+                        Model.IntroductionDetails.IntroductionStatus.ACCEPTED
+                    )
+                    // we update the displayName on all introductions to match the name that we
+                    // accepted
+                    .setDisplayName(introduction.displayName.sanitizedDisplayName).build()
+                tx.put(
+                    msg.detailPath,
+                    msg.value.toBuilder().setIntroduction(updatedIntroduction).build()
+                )
+            }
+
+            // Remove "best" introduction
+            tx.delete(introduction.to.id.introductionsIndexPathBest)
+        }
+    }
+
+    fun rejectIntroduction(unsafeFromId: String, unsafeToId: String) {
+        val fromId = unsafeFromId.sanitizedContactId
+        val toId = unsafeToId.sanitizedContactId
+
         db.get<String>(fromId.introductionIndexPathByFrom(toId))?.let { path ->
             deleteLocally(path)
         }
+
+        db.get<String>(toId.introductionIndexPathByTo(fromId))?.let { path ->
+            deleteLocally(path)
+        }
     }
+
+    internal fun updateBestIntroduction(tx: Transaction, to: Model.ContactId) {
+        val storedIntros = tx.introductionMessagesTo(to.id).map { it.value }
+        val introsByVerificationLevel = sortedSetOf<Model.StoredMessage>(
+            { a, b ->
+                b.introduction.constrainedVerificationLevelValue -
+                    a.introduction.constrainedVerificationLevelValue
+            },
+            *storedIntros.toTypedArray()
+        )
+        if (introsByVerificationLevel.isEmpty()) {
+            tx.delete(to.id.introductionsIndexPathBest)
+        } else {
+            val bestIntro = introsByVerificationLevel.first()
+            tx.put(bestIntro.introduction.to.id.introductionsIndexPathBest, bestIntro.dbPath)
+        }
+    }
+
+    /**
+     * Searches contacts using the given full-text query.
+     */
+    fun searchContacts(
+        query: String,
+        snippetConfig: SnippetConfig = SnippetConfig(numTokens = 10),
+    ): List<SearchResult<Model.Contact>> =
+        db.search<Model.Contact>(
+            Schema.PATH_CONTACTS.path("%"),
+            query,
+            snippetConfig
+        ).map {
+            SearchResult(it.path, it.value, it.snippet.split("\n")[0])
+        }
+
+    /**
+     * Searches messages using the given full-text query.
+     */
+    fun searchMessages(
+        query: String,
+        snippetConfig: SnippetConfig = SnippetConfig(numTokens = 10),
+    ): List<SearchResult<Model.StoredMessage>> =
+        db.search(Schema.PATH_MESSAGES.path("%"), query, snippetConfig)
+
+    internal fun numericFingerprintFor(contactId: Model.ContactId): String =
+        NumericFingerprintGenerator(fingerprintIterations)
+            .createFor(
+                0,
+                emptyBytes,
+                listOf(ECPublicKey(myId.id)),
+                emptyBytes,
+                listOf(ECPublicKey(contactId.id))
+            ).displayableFingerprint.displayText
 
     /**
      * Closes this Messaging instance, including stopping all workers and disconnecting from tassis.
@@ -1104,7 +1648,7 @@ class Messaging(
             anonymousClientWorker.executor.awaitTermination(10, TimeUnit.SECONDS)
             authenticatedClientWorker.executor.awaitTermination(10, TimeUnit.SECONDS)
         } catch (t: Throwable) {
-            logger.error(t.message)
+            logger.error("error closing Messaging: ${t.message}", t)
         }
     }
 }
@@ -1125,6 +1669,51 @@ internal val randomMessageId: ByteString
 val now: Long
     get() = System.currentTimeMillis()
 
+/**
+ * Sanitizes string contact ids that are supposed to be in human-friendly Base32 encoding.
+ * Human-friendly base32 encoding supports substitutions for certain characters (for example, o is
+ * replaced by 0) and it also assumes everything is lowercase. So, this function converts everything
+ * to lowercase and round trips it through ECPublicKey so that we end up with the canonical human-
+ * friendly representation. That avoids scenarios like having to contact entries at different
+ * database paths that are in fact the same contact id, like '.......o.....' and '.......0.....'.
+ *
+ * This sanitizing should be performed anywhere that a contact ID is passed in externally, either
+ * from user input or through a message received from another user such as an Introduction.
+ *
+ * @throws InvalidKeyException if the ID doesn't decode to the right length (52 bytes)
+ */
+val String.sanitizedContactId: String
+    @Throws(InvalidKeyException::class)
+    get() {
+        return ECPublicKey(this.toLowerCase(Locale.ROOT).trim()).toString()
+    }
+
+/**
+ * Applies #String.sanitizedContactId to a Model.ContactId.
+ */
+val Model.ContactId.sanitized: Model.ContactId
+    @Throws(InvalidKeyException::class)
+    get() {
+        return toBuilder().setId(id.sanitizedContactId).build()
+    }
+
+/**
+ * This regex matches any character that's not a letter, number or the space character
+ */
+internal val invalidDisplayNameCharacters = Regex("[^\\p{L}\\p{N} ]")
+
+/**
+ * This regex matches 2 or more spaces in a row
+ */
+internal val multipleSpaces = Regex(" +")
+
+val String.sanitizedDisplayName: String
+    get() {
+        return this.replace(invalidDisplayNameCharacters, "")
+            .replace(multipleSpaces, " ")
+            .trim()
+    }
+
 val Model.StoredAttachment.inputStream: InputStream
     get() = AttachmentCipherInputStream.createForAttachment(
         File(encryptedFilePath),
@@ -1132,3 +1721,14 @@ val Model.StoredAttachment.inputStream: InputStream
         attachment.keyMaterial.toByteArray(),
         attachment.digest.toByteArray()
     )
+
+private val maxSha1Hash = BigInteger.valueOf(2).pow(160)
+
+/**
+ * Calculates a SHA1 hash of the string's UTF-8 representation, coerced to a scaled integer between
+ * 0 and max inclusive.
+ */
+fun String.sha1(max: Long): Long {
+    val bytes = MessageDigest.getInstance("SHA-1").digest(this.toByteArray(Charsets.UTF_8))
+    return BigInteger(1, bytes).times(BigInteger.valueOf(max)).div(maxSha1Hash).toLong()
+}

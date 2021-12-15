@@ -8,6 +8,7 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.os.Build
+import android.webkit.MimeTypeMap
 import androidx.core.graphics.scale
 import androidx.exifinterface.media.ExifInterface
 import com.j256.simplemagic.ContentInfoUtil
@@ -59,7 +60,13 @@ class Metadata(
                 util.findMatch(file)?.mimeType
             } catch (t: Throwable) {
                 null
-            } ?: defaultMimeType
+            } ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(
+                file.extension.toLowerCase()
+            ) ?: when (file.extension.toLowerCase()) {
+                "heic" -> "image/heic"
+                "heif" -> "image/heif"
+                else -> defaultMimeType
+            }
 
             return try {
                 if (mimeType != null &&
@@ -183,7 +190,7 @@ class Metadata(
             }
             val totalDurationUs = format.getLong(MediaFormat.KEY_DURATION)
             val mimeType = format.getString(MediaFormat.KEY_MIME)
-            if (mimeType!! != "application/ogg" && !mimeType!!.startsWith("audio/")) {
+            if (mimeType!! != "application/ogg" && !mimeType.startsWith("audio/")) {
                 throw IOException("Mime not audio")
             }
             val fileSize = file.length()

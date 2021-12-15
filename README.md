@@ -7,6 +7,12 @@ messaging-android is currently used in [Lantern](https://lantern.io/) but is int
 by other parties in their own clients. tassis will eventually support federation, such that 3rd
 parties can host their own back end and interoperate with other messaging clients.
 
+## Testing
+- Run all tests in `androidTest` with `./gradlew connectedDebugAndroidTest`
+  - Those require a running emulator
+- Run a specific test with `./gradlew -P android.testInstrumentationRunnerArguments.class=com.your.test.package#testWhatever connectedAndroidTest`
+  - e.g., `./gradlew -P android.testInstrumentationRunnerArguments.class=io.lantern.messaging.MessagingTest#testRecovery connectedAndroidTest` to run [`testRecovery`](https://github.com/getlantern/messaging-android/blob/8ba858806331c79eec26785257cd2edb6cba37a2/messaging/src/androidTest/java/io/lantern/messaging/MessagingTest.kt#L2127)
+
 ## Protocol Buffers
 messaging-android communicates with Tassis and internally stores data using protocol buffers.
 Messages exchanged with tassis are defined in [Messages.proto](messaging/src/main/protos/Messages.proto),
@@ -17,6 +23,9 @@ The messaging-android data model is defined in [Model.proto](messaging/src/main/
 ## Data Model
 messaging-android stores data in an [encrypted key-value store](https://github.com/getlantern/db-android/)
 using keys that follow the below convention.
+
+### /rkey
+The recovery key from which all other keys are derived.
 
 ### /me (Model.Contact)
 The contact entry for the user themselves.
@@ -41,9 +50,6 @@ An index of all messages for a given Contact, by the sent timestamp of the messa
 ### /dm/[disappearAt]/[senderIdentityKey]/[messageId]
 An index of all messages that are supposed to auto disappear by some time (in unix milliseconds)
 
-### /spam/[senderIdentityKey]/[timestamp]/[randomId] (Model.StoredMessage)
-Messages that aren't worth showing to the user for one reason or another.
-
 ### /o/[timestamp]/[messageId] (Model.OutboundMessage)
 A queue of outbound messages that are pending send. If sending to some recipients fails, messages
 will be re-queued here for a limited period of time until they either send successfully or time
@@ -60,6 +66,10 @@ whom we're being introduced.
 ### /intro/to/[toIdentityKey]/[fromIdentityKey]
 An index of Introduction messages keyed to the contact to whom we're being introduced and then the
 contact who introduced us.
+
+### /intro/best/[toIdentityKey]
+An index to the "best" introduction message for a given contact to which we're being introduced.
+"Best" means most trusted (highest verification level).
 
 ## Included Signal Code
 The included Signal code (like AttachmentCipherInputStream) comes from https://github.com/signalapp/Signal-Android, not from https://github.com/signalapp/libsignal-service-java

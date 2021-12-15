@@ -31,6 +31,9 @@ import org.whispersystems.libsignal.state.SignedPreKeyRecord
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
 import org.whispersystems.signalservice.internal.util.Util
 
+private val disappearingMessagesSubscriberID = "disappearingMessagesSubscriber"
+private val provisionalContactsSubscriberID = "provisionalContactsSubscriber"
+
 /**
  * CryptoWorker handles all sending and receiving of messages.
  *
@@ -56,7 +59,7 @@ internal class CryptoWorker(
         // them for deletion
         db.subscribe(
             object : Subscriber<String>(
-                "disappearingMessagesSubscriber",
+                disappearingMessagesSubscriberID,
                 Schema.PATH_DISAPPEARING_MESSAGES.path('%')
             ) {
                 override fun onChanges(changes: ChangeSet<String>) {
@@ -71,7 +74,7 @@ internal class CryptoWorker(
                                         tx.delete(path)
                                     }
                                 } catch (t: Throwable) {
-                                    logger.error("failed to delete disappearing message: ${t.message}") // ktlint-disable max-line-length
+                                    logger.error("failed to delete disappearing message: ${t.message}", t) // ktlint-disable max-line-length
                                 }
                             },
                             delayMillis, TimeUnit.MILLISECONDS
@@ -86,7 +89,7 @@ internal class CryptoWorker(
         // them for deletion
         db.subscribe(
             object : Subscriber<Model.ProvisionalContact>(
-                "provisionalContactsSubscriber",
+                provisionalContactsSubscriberID,
                 Schema.PATH_PROVISIONAL_CONTACTS.path('%')
             ) {
                 override fun onChanges(changes: ChangeSet<Model.ProvisionalContact>) {
@@ -102,7 +105,7 @@ internal class CryptoWorker(
                                             // check the expiration again in case the provisional
                                             // contact's expiration was extended
                                             if (it.expiresAt < now) {
-                                                messaging.deleteProvisionalContact(pc.contactId)
+                                                messaging.doDeleteProvisionalContact(pc.contactId)
                                             }
                                         }
                                     }
@@ -173,7 +176,8 @@ internal class CryptoWorker(
             if (hasIntroduction()) {
                 msgBuilder.introduction = Model.Introduction.newBuilder()
                     .setId(introduction.to.id.fromBase32.byteString())
-                    .setDisplayName(introduction.displayName).build()
+                    .setDisplayName(introduction.displayName)
+                    .setVerificationLevel(introduction.verificationLevel).build()
             }
             return msgBuilder.build()
         }
@@ -312,22 +316,23 @@ internal class CryptoWorker(
                     afterSuccess = ::afterSendSuccess
                 ) {
                     Model.TransferMessage.newBuilder()
+                        .setSent(now)
                         .setMessage(msg.message.toByteString()).build()
                         .toByteArray()
                 }
             }
         } else {
-            val transferMsg = Model.TransferMessage.newBuilder()
+            val transferMsg = Model.TransferMessage.newBuilder().setSent(now)
 
             when (out.contentCase) {
                 Model.OutboundMessage.ContentCase.REACTION ->
-                    transferMsg.setReaction(out.reaction)
+                    transferMsg.reaction = out.reaction
                 Model.OutboundMessage.ContentCase.DELETEMESSAGEID ->
-                    transferMsg.setDeleteMessageId(out.deleteMessageId)
+                    transferMsg.deleteMessageId = out.deleteMessageId
                 Model.OutboundMessage.ContentCase.DISAPPEARSETTINGS ->
-                    transferMsg.setDisappearSettings(out.disappearSettings)
+                    transferMsg.disappearSettings = out.disappearSettings
                 Model.OutboundMessage.ContentCase.HELLO ->
-                    transferMsg.setHello(out.hello)
+                    transferMsg.hello = out.hello
                 else -> {
                     logger.error("unknown outbound message content type")
                     return
@@ -550,12 +555,12 @@ internal class CryptoWorker(
                         }
                     }
                 } catch (t: Throwable) {
-                    logger.error("unexpected error marking successful send: ${t.message}")
+                    logger.error("unexpected error marking successful send: ${t.message}", t)
                     retryFailed { encryptAndSendOutboundTo(out, deviceId, afterSuccess, build) }
                 }
             },
             { err ->
-                logger.error("failed to send: ${err.message}")
+                logger.error("failed to send: ${err.message}", err)
                 retryFailed { encryptAndSendOutboundTo(out, deviceId, afterSuccess, build) }
             }
         )
@@ -576,8 +581,9 @@ internal class CryptoWorker(
             val paddedPlainText = Padding.padMessage(plainText)
             val to =
                 SignalProtocolAddress(recipientIdentityKey, deviceId)
-            val unidentifiedSenderMessage: ByteArray =
+            val unidentifiedSenderMessage: ByteArray = db.mutate {
                 cipher.encrypt(to, paddedPlainText)
+            }
 
             messaging.anonymousClientWorker.withClient { client ->
                 client.sendUnidentifiedSenderMessage(
@@ -705,7 +711,7 @@ internal class CryptoWorker(
             }
 
             override fun onFailure(call: Call, e: IOException) {
-                logger.error("failed to upload attachment, will try again: ${e.message}")
+                logger.error("failed to upload attachment, will try again: ${e.message}", e)
                 retryFailed { uploadAttachment(out, msg, id, attachment, isThumbnail) }
             }
         })
@@ -759,17 +765,11 @@ internal class CryptoWorker(
     internal fun doDecryptAndStore(unidentifiedSenderMessage: ByteArray) {
         try {
             attemptDecryptAndStore(unidentifiedSenderMessage)
-        } catch (e: UnknownSenderException) {
-            logger.error("message from unknown sender, saving to spam")
-            db.mutate { tx ->
-                tx.put(
-                    e.senderId.randomSpamPath,
-                    unidentifiedSenderMessage
-                )
-            }
+        } catch (e: BlockedSenderException) {
+            logger.error("message from blocked sender, dropping")
         } catch (e: Exception) {
             logger.error(
-                "unexpected problem decrypting and storing message, dropping: ${e.message}"
+                "unexpected problem decrypting and storing message, dropping: ${e.message}", e
             )
         }
     }
@@ -781,11 +781,26 @@ internal class CryptoWorker(
             val transferMsg = Model.TransferMessage.parseFrom(plainText)
             val senderAddress = decryptionResult.senderAddress
             val senderId = senderAddress.identityKey.toString()
+            val sender = tx.get<Model.Contact>(senderId.directContactPath)
+            val senderUnknown = sender == null
 
-            if (transferMsg.contentCase != Model.TransferMessage.ContentCase.HELLO &&
-                !tx.contains(senderId.directContactPath)
-            ) {
-                throw UnknownSenderException(senderId)
+            when (transferMsg.contentCase) {
+                Model.TransferMessage.ContentCase.HELLO ->
+                    if (senderUnknown && !tx.contains(senderId.provisionalContactPath)) {
+                        throw UnknownProvisionalSenderException()
+                    }
+                else ->
+                    if (senderUnknown) {
+                        // automatically add unaccepted contact
+                        messaging.addOrUpdateContact(
+                            senderId.directContactId,
+                            "",
+                            Model.ContactSource.UNSOLICITED,
+                            minimumVerificationLevel = Model.VerificationLevel.UNACCEPTED
+                        )
+                    } else if (sender!!.blocked) {
+                        throw BlockedSenderException(senderId)
+                    }
             }
 
             if (transferMsg.contentCase == Model.TransferMessage.ContentCase.MESSAGE) {
@@ -824,6 +839,7 @@ internal class CryptoWorker(
                         Model.Hello.parseFrom(transferMsg.hello)
                     )
                     Model.TransferMessage.ContentCase.WEBRTCSIGNAL -> messaging.notifyWebRTCSignal(
+                        transferMsg.sent,
                         senderId,
                         senderAddress.deviceId.toString(),
                         transferMsg.webRTCSignal
@@ -841,21 +857,23 @@ internal class CryptoWorker(
 
         // save the introduction if one was included
         if (msg.hasIntroduction()) {
-            val matchingContact = tx.findOne<Model.Contact>(
-                msg.introduction.id.directContactID.contactPath
-            )
-            if (matchingContact != null) {
-                logger.debug("received introduction to known contact, ignoring")
-                return
-            }
+            val sender = tx.get<Model.Contact>(senderId.directContactPath)!!
+            val toId = msg.introduction.id.directContactID.sanitized
+            val constrainedVerificationLevelValue =
+                msg.introduction.verificationLevelValue.coerceAtMost(
+                    sender.verificationLevelValue
+                )
 
+            val sanitizedDisplayName = msg.introduction.displayName.sanitizedDisplayName
             val introduction = Model.IntroductionDetails.newBuilder()
-                .setTo(msg.introduction.id.directContactID)
-                .setDisplayName(msg.introduction.displayName)
-                .setOriginalDisplayName(msg.introduction.displayName).build()
+                .setTo(toId)
+                .setDisplayName(sanitizedDisplayName)
+                .setOriginalDisplayName(sanitizedDisplayName)
+                .setVerificationLevel(msg.introduction.verificationLevel)
+                .setConstrainedVerificationLevelValue(constrainedVerificationLevelValue).build()
             storedMsgBuilder.introduction = introduction
 
-            // Delete any existing introduction message of this kind
+            // Delete any existing introduction message of this kind from the same sender.
             // This ensures that at any given time, we have at most one introduction message for
             // a given combination of from/to (i.e. each the conversation only has one introduction
             // message per distinct contact)
@@ -906,12 +924,24 @@ internal class CryptoWorker(
 
         // save the stored message
         val storedMsg = storedMsgBuilder.build()
-        tx.put(storedMsg.dbPath, storedMsg)
+        tx.put(storedMsg.dbPath, storedMsg, fullText = storedMsg.fullText)
 
         // update the Contact metadata
-        messaging.updateContactMetaData(tx, storedMsg)
+        messaging.updateContactMetaData(tx, storedMsg, changeToUnviewed = 1)
         // save a pointer to the message under the contact message path
         tx.put(storedMsg.contactMessagePath, storedMsg.dbPath)
+
+        if (msg.hasIntroduction()) {
+            messaging.updateBestIntroduction(tx, storedMsg.introduction.to)
+
+            val toId = msg.introduction.id.directContactID.sanitized
+            tx.findOne<Model.Contact>(toId.contactPath)?.let { existingContact ->
+                if (existingContact.verificationLevel > Model.VerificationLevel.UNACCEPTED) {
+                    // we got an introduction to an existing accepted contact, automatically accept
+                    messaging.doAcceptIntroduction(senderId, toId.id)
+                }
+            }
+        }
     }
 
     private fun storeReaction(tx: Transaction, senderId: String, reaction: Model.Reaction) {
@@ -956,19 +986,21 @@ internal class CryptoWorker(
         hello: Model.Hello
     ) {
         val provisionalContactPath = senderId.provisionalContactPath
-        tx.get<Model.ProvisionalContact>(provisionalContactPath)?.let {
-            messaging.doAddOrUpdateContact(
-                senderId.directContactId,
-                hello.displayName,
-                mostRecentHelloTs = now
-            )
+        tx.get<Model.ProvisionalContact>(provisionalContactPath)?.let { provisionalContact ->
+            messaging.doAddOrUpdateContact(senderId.directContactId) { contact, isNew ->
+                if (isNew) {
+                    provisionalContact.source?.let { source -> contact.source = source }
+                }
+                contact.mostRecentHelloTs = now
+                contact.verificationLevel = provisionalContact.verificationLevel
+            }
             tx.delete(senderId.provisionalContactPath)
             if (!hello.final) {
                 // send a hello just in case they couldn't process our first one
                 messaging.sendHello(tx, senderId, final = true)
             }
         } ?: tx.get<Model.Contact>(senderId.directContactPath)?.let {
-            // just update teh mostRecentHelloTs
+            // just update the mostRecentHelloTs
             tx.put(
                 senderId.directContactPath, it.toBuilder().setMostRecentHelloTs(now).build()
             )
@@ -996,7 +1028,7 @@ internal class CryptoWorker(
                                     Util.copy(response.body!!.byteStream(), out)
                                 }
                             } catch (t: Throwable) {
-                                logger.error("error downloading attachment data, will try again: ${t.message}") // ktlint-disable max-line-length
+                                logger.error("error downloading attachment data, will try again: ${t.message}", t) // ktlint-disable max-line-length
                                 retryFailed { downloadAttachment(inbound, attachment) }
                                 return
                             }
@@ -1057,7 +1089,7 @@ internal class CryptoWorker(
                 }
 
                 override fun onFailure(call: Call, e: IOException) {
-                    logger.error("failed to download attachment, will try again: ${e.message}")
+                    logger.error("failed to download attachment, will try again: ${e.message}", e)
                     retryFailed { downloadAttachment(inbound, attachment) }
                 }
             })
@@ -1096,6 +1128,8 @@ internal class CryptoWorker(
     }
 
     override fun close() {
+        db.unsubscribe(disappearingMessagesSubscriberID)
+        db.unsubscribe(provisionalContactsSubscriberID)
         encryptAttachmentsExecutor.shutdownNow()
         super.close()
     }

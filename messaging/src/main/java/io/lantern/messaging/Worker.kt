@@ -49,7 +49,24 @@ internal abstract class Worker(
                 }
             }
         } catch (t: Throwable) {
-            logger.error(t.message)
+            logger.error(t.message, t)
+        }
+    }
+
+    internal fun submitDelayed(delayMillis: Long, cmd: () -> Unit) {
+        try {
+            executor.schedule(
+                {
+                    try {
+                        cmd()
+                    } catch (t: Throwable) {
+                        logger.error(t.message, t)
+                    }
+                },
+                delayMillis, TimeUnit.MILLISECONDS
+            )
+        } catch (t: Throwable) {
+            logger.error(t.message, t)
         }
     }
 
@@ -61,7 +78,7 @@ internal abstract class Worker(
         }
     }
 
-    protected fun retryFailed(cmd: () -> Unit) {
+    internal fun retryFailed(cmd: () -> Unit) {
         if (retryDelayMillis == null) {
             throw Exception("Attempted to retry but retries are disabled")
         }

@@ -4,11 +4,13 @@ import com.google.protobuf.ByteString
 import io.lantern.db.Detail
 import io.lantern.db.Queryable
 import io.lantern.db.Raw
+import io.lantern.messaging.tassis.Messages
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.ecc.ECPublicKey
 import org.whispersystems.libsignal.util.Base32
 
 object Schema {
+    const val PATH_RECOVERY_KEY = "/rc"
     const val PATH_CONFIG = "/cfg"
     const val PATH_OUTBOUND = "/o"
     const val PATH_INBOUND_ATTACHMENTS = "/ia"
@@ -20,9 +22,9 @@ object Schema {
     const val PATH_CONTACTS_BY_ACTIVITY = "/cba"
     const val PATH_CONTACT_MESSAGES = "/cm"
     const val PATH_DISAPPEARING_MESSAGES = "/dm"
-    const val PATH_SPAM = "/spam"
     const val PATH_INTRODUCTIONS_BY_FROM = "/intro/from"
     const val PATH_INTRODUCTIONS_BY_TO = "/intro/to"
+    const val PATH_INTRODUCTIONS_BEST = "/intro/best"
     const val PATH_PROVISIONAL_CONTACTS = "/pc"
 }
 
@@ -92,13 +94,6 @@ val Model.Contact.timestampedIdxPath: String
 val Model.ContactId.contactByActivityQuery: String
     get() = Schema.PATH_CONTACTS_BY_ACTIVITY.path("%", pathSegment)
 
-val Model.Contact.spamQuery: String get() = contactId.spamQuery
-
-val Model.ContactId.spamQuery: String get() = Schema.PATH_SPAM.path(id, "%")
-
-val String.randomSpamPath: String
-    get() = Schema.PATH_SPAM.path(this, now, randomMessageId.base32)
-
 val Model.StoredMessage.contactMessagePath: String
     get() =
         Schema.PATH_CONTACT_MESSAGES.path(
@@ -129,6 +124,12 @@ fun String.introductionIndexPathByFrom(toId: String) =
 fun String.introductionIndexPathByTo(fromId: String) =
     Schema.PATH_INTRODUCTIONS_BY_TO.path(this, fromId)
 
+val String.introductionsIndexPathBest: String
+    get() = Schema.PATH_INTRODUCTIONS_BEST.path(this)
+
+val Model.ContactId.introductionMessagesFromQuery: String
+    get() = Schema.PATH_INTRODUCTIONS_BY_FROM.path(id, "%")
+
 val ByteArray.base32: String get() = Base32.humanFriendly.encodeToString(this)
 
 val ByteString.base32: String get() = Base32.humanFriendly.encodeToString(toByteArray())
@@ -157,3 +158,29 @@ fun Queryable.introductionMessagesTo(to: String): List<Detail<Model.StoredMessag
 
 fun Queryable.introductionMessage(from: String, to: String): Detail<Raw<Model.StoredMessage>>? =
     listDetailsRaw<Model.StoredMessage>(from.introductionIndexPathByFrom(to)).firstOrNull()
+
+val Model.Contact.fullText: String
+    get() {
+        val result = "$displayName\n${contactId.id}"
+        return applicationIdsMap?.let {
+            val idsString = it.values.joinToString("\n")
+            "$result\n$idsString"
+        } ?: result
+    }
+
+val Model.StoredMessage.fullText: String?
+    get() = text
+
+val Messages.ChatNumber.pbuf: Model.ChatNumber
+    get() = Model.ChatNumber.newBuilder()
+        .setNumber(number)
+        .setShortNumber(shortNumber)
+        .setDomain(domain).build()
+
+val Model.ChatNumber.directContactId: Model.ContactId
+    get() = ECPublicKey(
+        ChatNumberEncoding.decodeFromString(number, 32)
+    ).toString().directContactId
+
+val Model.ChatNumber.isComplete: Boolean
+    get() = number.isNotEmpty() && shortNumber.isNotEmpty() && domain.isNotEmpty()

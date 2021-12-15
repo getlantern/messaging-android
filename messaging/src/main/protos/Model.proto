@@ -20,11 +20,49 @@ message ContactId {
   string id = 2; // the public IdentityKey for direct contacts, the globally unique group id (type 4 UUID) for groups, both base32 encoded
 }
 
+// A numeric version of the IdentityKey encoded in a phone-number like encoding
+message ChatNumber {
+  string number = 1; // the full contact number (82 or more digits)
+  string shortNumber = 2; // the short version of the number by which the contact is registered with tassis
+  string domain = 3; // the domain on which the short number is registered (e.g. lantern.io)
+}
+
+enum ContactSource {
+  UNKNOWN = 0; // source of contact is unknown
+  INTRODUCTION = 1; // contact was added through introduction
+  APP1 = 2; // application-specific source 1
+  APP2 = 3; // application-specific source 2
+  APP3 = 4; // application-specific source 3
+  APP4 = 5; // application-specific source 4
+  APP5 = 6; // application-specific source 5
+  UNSOLICITED = 7; // contact was added upon receipt of unsolicited message
+}
+
+// How well do we know a contact. Lower numbers equate to a lower verification level.
+enum VerificationLevel {
+  UNACCEPTED = 0; // contact hasn't even been accepted into contact list yet
+  UNVERIFIED = 1; // we think we know who this is, but we haven't verified their key fingerprint
+  VERIFIED = 2; // we've verified their key fingerprint
+}
+
+// A typed datum
+message Datum {
+  oneof value {
+    string string = 1;
+    double float = 2;
+    int64 int = 3;
+    bool bool = 4;
+    bytes bytes = 5;
+  }
+}
+
 // A contact in the address book
 message Contact {
   ContactId contactId = 1;
+  map<int32, string> applicationIds = 14; // application-specific contacts ids like usernames, phone numbers, etc. keyed to an integer type (type is application-defined)
   repeated string memberIds = 2; // the ids of group member Contacts, base32 encoded (only applies to Contacts of type GROUP)
   string displayName = 3; // the display name shown for this Contact (specific to our current device, the contact may have different display names in other people's address books)
+  ContactSource source = 13; // source from which the Contact was added
   int64 createdTs = 4; // the millisecond unix timestamp when this contact was created
   int64 mostRecentMessageTs = 5; // the millisecond unix timestamp of the most recent message with this contact (excluding control messages)
   MessageDirection mostRecentMessageDirection = 6; // direction of the most recent message with this contact
@@ -34,6 +72,13 @@ message Contact {
   int64 firstReceivedMessageTs = 10; // the timestamp of when the first message was received from this contact (excluding control messages)
   bool hasReceivedMessage = 11; // boolean indicating whether or not the contact has received any message (including control messages)
   int64 mostRecentHelloTs = 12; // the timestamp of the most recent hello received from this Contact (used for bidirectional contact adding)
+  VerificationLevel verificationLevel = 15; // how well do we know this contact
+  string numericFingerprint = 16; // a numeric fingerprint of this contact (depends on our own messenger ID)
+  bool blocked = 17; // flag indicating of the contact is blocked
+  map<string, Datum> applicationData = 18; // place for applications to store app-specific data associated with the Contact
+  ChatNumber chatNumber = 19; // for direct contacts, this is their chat number (looks like a phone number)
+  bool isMe = 20; // if true, this contact is the "me" contact (i.e. the contact representing the current user)
+  int32 numUnviewedMessages = 21; // the number of messages from this contact that have not been viewed
 }
 
 // A provisional direct contact that is not yet in the address book. If we receive a Hello from that
@@ -43,6 +88,8 @@ message Contact {
 message ProvisionalContact {
   string contactId = 1; // the ID of the contact (base32 encoded)
   int64 expiresAt = 2; // the unix timestamp in milliseconds of when this provisional contact expires
+  ContactSource source = 3; // source from which the Contact was added
+  VerificationLevel verificationLevel = 4; // how well do we know this contact
 }
 
 // An attachment to a Message
@@ -82,9 +129,10 @@ message AttachmentWithThumbnail {
 message Introduction {
   bytes id = 1; // the id of the person to whom you're being introduced
   string displayName = 2; // the display name of person to whom you're being introduced
+  VerificationLevel verificationLevel = 3; // how well does the introducer know this contact
 }
 
-// Details of an Introduction (attached to both a StoredMessage as well as a StoredIntroduction
+// Details of an Introduction (attached to a StoredMessage)
 message IntroductionDetails {
   enum IntroductionStatus {
     PENDING = 0; // introduction has been made but has not yet been accepted/rejected
@@ -93,10 +141,12 @@ message IntroductionDetails {
 
   ContactId to = 1; // the id of the contact to which we're being introduced
   string displayName = 2; // the display name of the contact to whom we're being introduced. This
-                          // may change when accepting an Introduction to the same contact made by
-                          // someone else.
+  // may change when accepting an Introduction to the same contact made by
+  // someone else.
   string originalDisplayName = 3; // the original display name of the introduction, this will never change
   IntroductionStatus status = 4; // the status of the introduction
+  VerificationLevel verificationLevel = 5; // how well does the introducer know this contact
+  VerificationLevel constrainedVerificationLevel = 6; // verificationLevel constrained by introducer's verification level
 }
 
 // A text message with attachments, the primary type of message exchanged by users.
@@ -155,7 +205,6 @@ message DisappearSettings {
 // A Hello from a Contact. If this Hello is not marked as final, we'll respond with a final Hello of
 // our own. Hellos are only processed in conjunction with ProvisionalContacts.
 message Hello {
-  string displayName = 1; // the display name that we should use for this Contact
   bool final = 2; // indicates whether this is a final hello
 }
 
@@ -169,6 +218,8 @@ message TransferMessage {
     bytes hello = 5; // serialized Hello
     bytes webRTCSignal = 6; // the content of a WebRTCSignal
   }
+
+  int64 sent = 10000; // the unix timestamp in milliseconds of when this TransferMessage was sent
 }
 
 // An outbound Message
