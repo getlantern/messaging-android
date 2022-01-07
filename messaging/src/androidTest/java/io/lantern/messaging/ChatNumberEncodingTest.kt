@@ -7,8 +7,8 @@ import org.whispersystems.libsignal.util.Base32
 
 class ChatNumberEncodingTest {
     @Test
-    open fun testEncodeToString() {
-        val b = Base32.humanFriendly.decodeFromString(
+    fun testEncodeToString() {
+        val b = Base32.decode(
             "rfu2495fqazzpq1e3xkj1skmr9785hwbxggpr17ut1htj4h9nhyy"
         )
         assertEquals(
@@ -27,7 +27,7 @@ class ChatNumberEncodingTest {
             val actual = ChatNumberEncoding.encodeToString(
                 ChatNumberEncoding.decodeFromString(
                     // insert spurious 5's to make sure they're ignored
-                    "55${expected!!.substring(0, 12)}55${expected!!.substring(12)}",
+                    "55${expected.substring(0, 12)}55${expected.substring(12)}",
                     32
                 ),
                 82
