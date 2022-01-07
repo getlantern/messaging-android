@@ -301,7 +301,7 @@ class MessagingTest : BaseMessagingTest() {
                             assertEquals(
                                 1,
                                 dog.db.listPaths(Schema.PATH_CONTACTS.path("%")).count(),
-                                "dog now have a permanent contact"
+                                "dog now has a permanent contact"
                             )
                             assertEquals(
                                 0,
@@ -350,9 +350,9 @@ class MessagingTest : BaseMessagingTest() {
                             )
 
                             assertEquals(
-                                2,
+                                1,
                                 dog.db.listPaths(Schema.PATH_CONTACT_MESSAGES.path("%")).count(),
-                                "dog should have 2 messages from cat, the message sent while cat was not a contact should have been included" // ktlint-disable max-line-length
+                                "dog should have 1 message from cat, the message sent while cat was not a contact should have been included" // ktlint-disable max-line-length
                             )
                         }
                     }
