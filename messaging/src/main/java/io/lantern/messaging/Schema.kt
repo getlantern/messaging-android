@@ -130,11 +130,11 @@ val String.introductionsIndexPathBest: String
 val Model.ContactId.introductionMessagesFromQuery: String
     get() = Schema.PATH_INTRODUCTIONS_BY_FROM.path(id, "%")
 
-val ByteArray.base32: String get() = Base32.humanFriendly.encodeToString(this)
+val ByteArray.base32: String get() = Base32.encodeToString(this)
 
-val ByteString.base32: String get() = Base32.humanFriendly.encodeToString(toByteArray())
+val ByteString.base32: String get() = Base32.encodeToString(toByteArray())
 
-val String.fromBase32: ByteArray get() = Base32.humanFriendly.decodeFromString(this)
+val String.fromBase32: ByteArray get() = Base32.decode(this)
 
 fun String.path(vararg elements: Any): String {
     val builder = StringBuilder(this)
