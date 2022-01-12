@@ -3,12 +3,12 @@ package io.lantern.messaging
 import java.util.Random
 import kotlin.test.assertEquals
 import org.junit.Test
-import org.whispersystems.libsignal.util.Base32
+import org.whispersystems.libsignal.util.HFBase32
 
 class ChatNumberEncodingTest {
     @Test
     fun testEncodeToString() {
-        val b = Base32.decode(
+        val b = HFBase32.decode(
             "rfu2495fqazzpq1e3xkj1skmr9785hwbxggpr17ut1htj4h9nhyy"
         )
         assertEquals(

@@ -7,7 +7,7 @@ import io.lantern.db.Raw
 import io.lantern.messaging.tassis.Messages
 import org.whispersystems.libsignal.DeviceId
 import org.whispersystems.libsignal.ecc.ECPublicKey
-import org.whispersystems.libsignal.util.Base32
+import org.whispersystems.libsignal.util.HFBase32
 
 object Schema {
     const val PATH_RECOVERY_KEY = "/rc"
@@ -130,11 +130,11 @@ val String.introductionsIndexPathBest: String
 val Model.ContactId.introductionMessagesFromQuery: String
     get() = Schema.PATH_INTRODUCTIONS_BY_FROM.path(id, "%")
 
-val ByteArray.base32: String get() = Base32.encodeToString(this)
+val ByteArray.base32: String get() = HFBase32.encodeToString(this)
 
-val ByteString.base32: String get() = Base32.encodeToString(toByteArray())
+val ByteString.base32: String get() = HFBase32.encodeToString(toByteArray())
 
-val String.fromBase32: ByteArray get() = Base32.decode(this)
+val String.fromBase32: ByteArray get() = HFBase32.decode(this)
 
 fun String.path(vararg elements: Any): String {
     val builder = StringBuilder(this)
