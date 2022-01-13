@@ -4,7 +4,6 @@ import java.io.Closeable
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
-import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import mu.KotlinLogging
 
@@ -15,28 +14,11 @@ import mu.KotlinLogging
 internal abstract class Worker(
     protected val messaging: Messaging,
     name: String,
-    private val retryDelayMillis: Long? = null
 ) : Closeable {
     protected val logger = KotlinLogging.logger("${messaging.logger.name}-$name")
 
     internal val executor = Executors.newSingleThreadScheduledExecutor {
         Thread(it, "${messaging.name}-$name-executor")
-    }
-
-    private val retries = LinkedBlockingQueue<() -> Unit>()
-
-    init {
-        if (retryDelayMillis != null) {
-            logger.debug("will automatically retry every ${retryDelayMillis}ms")
-            executor.scheduleAtFixedRate(
-                {
-                    while (true) {
-                        retries.poll()?.let { submit(it) } ?: return@scheduleAtFixedRate
-                    }
-                },
-                retryDelayMillis, retryDelayMillis, TimeUnit.MILLISECONDS
-            )
-        }
     }
 
     internal fun submit(cmd: () -> Unit) {
@@ -76,13 +58,6 @@ internal abstract class Worker(
         } catch (e: ExecutionException) {
             throw e.cause ?: e
         }
-    }
-
-    internal fun retryFailed(cmd: () -> Unit) {
-        if (retryDelayMillis == null) {
-            throw Exception("Attempted to retry but retries are disabled")
-        }
-        retries.add(cmd)
     }
 
     override fun close() {

@@ -13,6 +13,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import okhttp3.Call
 import okhttp3.MultipartBody
@@ -43,18 +44,29 @@ private val provisionalContactsSubscriberID = "provisionalContactsSubscriber"
  */
 internal class CryptoWorker(
     messaging: Messaging,
-    retryDelayMillis: Long,
+    private val retryDelayMillis: Long,
     private val stopSendRetryAfterMillis: Long,
 ) :
-    Worker(messaging, "crypto", retryDelayMillis = retryDelayMillis) {
+    Worker(messaging, "crypto") {
     private val db = messaging.db
     private val store = messaging.store
     private val httpClient = OkHttpClient() // TODO: configure support for proxying and stuff
     private val cipher = SealedSessionCipher(store, store.deviceId)
     private val uploadAuthorizations = ArrayDeque<Messages.UploadAuthorization>()
     private val encryptAttachmentsExecutor = Executors.newSingleThreadExecutor()
+    private var retries = LinkedBlockingQueue<() -> Unit>()
 
     init {
+        logger.debug("will automatically retry every ${retryDelayMillis}ms")
+        executor.scheduleAtFixedRate(
+            {
+                while (true) {
+                    retries.poll()?.let { submit(it) } ?: return@scheduleAtFixedRate
+                }
+            },
+            retryDelayMillis, retryDelayMillis, TimeUnit.MILLISECONDS
+        )
+
         // find out about all disappearing messages (including previously saved ones) and schedule
         // them for deletion
         db.subscribe(
@@ -1125,6 +1137,10 @@ internal class CryptoWorker(
                 )
             }
         }
+    }
+
+    internal fun retryFailed(cmd: () -> Unit) {
+        retries.add(cmd)
     }
 
     override fun close() {
