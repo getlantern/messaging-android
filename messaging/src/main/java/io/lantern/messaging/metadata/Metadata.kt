@@ -13,7 +13,6 @@ import androidx.core.graphics.scale
 import androidx.exifinterface.media.ExifInterface
 import com.j256.simplemagic.ContentInfoUtil
 import io.lantern.messaging.Model
-import mu.KotlinLogging
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -23,6 +22,7 @@ import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.floor
+import mu.KotlinLogging
 
 private val logger = KotlinLogging.logger {}
 
@@ -90,7 +90,9 @@ class Metadata(
                     val retriever = MediaMetadataRetriever()
                     try {
                         retriever.setDataSource(file.absolutePath)
-                        additionalMetadata["rotation"] = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION).toString()
+                        additionalMetadata["rotation"] = retriever.extractMetadata(
+                            MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION
+                        ).toString()
                         retriever.getFrameAtTime(0)
                     } finally {
                         retriever.release()
@@ -195,7 +197,7 @@ class Metadata(
             }
             val fileSize = file.length()
             val bytesPerBar = fileSize / numberOfBars
-            val targetBytesPerBar = Math.min(fileSize, maxBytesToProcess) / numberOfBars
+            val targetBytesPerBar = fileSize.coerceAtMost(maxBytesToProcess) / numberOfBars
             val codec = MediaCodec.createDecoderByType(mimeType)
             if (totalDurationUs == 0L) {
                 throw IOException("Zero duration")
@@ -208,7 +210,7 @@ class Metadata(
                 // read all encoded samples (mp3, opus, whatever) and submit them to the MediaCodec
                 // for decoding
                 var sawInputEOS = false
-                var scratchBuffer = ByteBuffer.allocate(1024768)
+                val scratchBuffer = ByteBuffer.allocate(1024768)
                 var bytesProcessedForCurrentBar = 0
                 while (!sawInputEOS) {
                     val inputBufIndex = codec.dequeueInputBuffer(dequeueTimeoutUs)
@@ -255,8 +257,8 @@ class Metadata(
 
             // read all decoded samples (assumed to be in 16 bit PCM format, possibly multiple
             // channels
-            var decodedSamples = ArrayList<Long>()
-            var decodedSampleTimesUs = ArrayList<Long>()
+            val decodedSamples = ArrayList<Long>()
+            val decodedSampleTimesUs = ArrayList<Long>()
             var totalDecodedDurationUs = 0L
 
             var sawOutputEOS = false
@@ -301,8 +303,8 @@ class Metadata(
             val wave = LongArray(numberOfBars)
             val waveSamples = IntArray(numberOfBars)
             for (i in 0 until decodedSamples.size) {
-                var ts = decodedSampleTimesUs.get(i)
-                var sample = decodedSamples.get(i)
+                val ts = decodedSampleTimesUs[i]
+                val sample = decodedSamples[i]
                 val barIndex = (numberOfBars * ts / totalDecodedDurationUs).toInt()
                 if (barIndex in 0 until numberOfBars) {
                     wave[barIndex] += sample
