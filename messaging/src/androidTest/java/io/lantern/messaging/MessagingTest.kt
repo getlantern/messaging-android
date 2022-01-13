@@ -2126,12 +2126,13 @@ class MessagingTest : BaseMessagingTest() {
 
     @Test
     fun testIntroductionsBest() {
-        testIntroductionsWith { dog, cat, fish, _ ->
+        testIntroductionsWith { dog, cat, fish, owner ->
             val dogId = dog.myId.id
             val catId = cat.myId.id
             val fishId = fish.myId.id
+            val ownerId = owner.myId.id
 
-            // start with unsolicited introduction from dog
+            // start with unverified contacts from dog
             dog.addOrUpdateDirectContact(
                 catId,
                 "Cat",
@@ -2142,8 +2143,26 @@ class MessagingTest : BaseMessagingTest() {
                 "Fish",
                 minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
             )
+            dog.addOrUpdateDirectContact(
+                ownerId,
+                "Owner",
+                minimumVerificationLevel = Model.VerificationLevel.UNVERIFIED
+            )
+
+            // dog and fish verify each other
             dog.markDirectContactVerified(fishId)
             fish.markDirectContactVerified(dogId)
+
+            // create unaccepted contact for fish on cat to make sure we still get an introduction
+            // to that contact
+            cat.addOrUpdateDirectContact(
+                fishId,
+                "Fish",
+                minimumVerificationLevel = Model.VerificationLevel.UNACCEPTED
+            )
+
+            // introduce cat and fish. Since cat never added dog as a contact, for cat this will be
+            // an  unsolicited introduction from an unaccepted contact (dog)
             dog.introduce(listOf(catId, fishId))
 
             cat.waitFor<String>(
@@ -2177,6 +2196,40 @@ class MessagingTest : BaseMessagingTest() {
                     Schema.PATH_INTRODUCTIONS_BEST.path('%')
                 ).firstOrNull()?.value?.introduction?.constrainedVerificationLevel,
                 "after verifying dog, cat's introduction should be verified"
+            )
+
+            cat.blockDirectContact(fishId)
+            assertNull(
+                cat.db.listDetails<Model.StoredMessage>(
+                    Schema.PATH_INTRODUCTIONS_BEST.path('%')
+                ).firstOrNull(),
+                "after blocking fish, cat should have no best introduction to fish"
+            )
+
+            cat.unblockDirectContact(fishId)
+            assertNotNull(
+                cat.db.listDetails<Model.StoredMessage>(
+                    Schema.PATH_INTRODUCTIONS_BEST.path('%')
+                ).firstOrNull(),
+                "after unblocking fish, cat should have a best introduction to fish again"
+            )
+
+            // make sure that we ignore introductions to already verified contacts
+            owner.addOrUpdateDirectContact(
+                catId,
+                "Cat",
+                minimumVerificationLevel = Model.VerificationLevel.VERIFIED
+            )
+            dog.introduce(listOf(ownerId, catId))
+            owner.waitFor<String>(
+                dogId.introductionIndexPathByFrom(catId),
+                "Owner should have gotten an introduction to cat",
+            )
+            assertNull(
+                owner.db.listDetails<Model.StoredMessage>(
+                    Schema.PATH_INTRODUCTIONS_BEST.path('%')
+                ).firstOrNull(),
+                "best introductions should exclude introduction to already verified cat"
             )
         }
     }

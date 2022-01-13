@@ -515,9 +515,12 @@ class Messaging(
 
             val wasBlocked = existingContact?.blocked == true
             val becameBlocked = !wasBlocked && contact.blocked
+            val becameUnblocked = wasBlocked && !contact.blocked
             if (becameBlocked) {
-                // contact became blocked, delete messages and such
                 deleteContactActivity(tx, contact.contactId)
+                updateBestIntroduction(tx, contact.contactId)
+            } else if (becameUnblocked) {
+                updateBestIntroduction(tx, contact.contactId)
             }
 
             val verificationLevelChanged =
@@ -1586,7 +1589,20 @@ class Messaging(
     }
 
     internal fun updateBestIntroduction(tx: Transaction, to: Model.ContactId) {
-        val storedIntros = tx.introductionMessagesTo(to.id).map { it.value }
+        val existingTo = tx.get<Model.Contact>(to.contactPath)
+
+        val storedIntros = tx.introductionMessagesTo(to.id).map {
+            it.value
+        }.filter {
+            // don't include introductions to existing contacts who are already at a higher
+            // verification level or which are blocked
+            if (existingTo == null)
+                true
+            else
+                !existingTo.blocked &&
+                    existingTo.verificationLevel < it.introduction.verificationLevel
+        }
+
         val introsByVerificationLevel = sortedSetOf<Model.StoredMessage>(
             { a, b ->
                 b.introduction.constrainedVerificationLevelValue -

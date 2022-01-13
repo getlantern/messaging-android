@@ -43,10 +43,10 @@ private val provisionalContactsSubscriberID = "provisionalContactsSubscriber"
  */
 internal class CryptoWorker(
     messaging: Messaging,
-    retryDelayMillis: Long,
+    private val retryDelayMillis: Long,
     private val stopSendRetryAfterMillis: Long,
 ) :
-    Worker(messaging, "crypto", retryDelayMillis = retryDelayMillis) {
+    Worker(messaging, "crypto") {
     private val db = messaging.db
     private val store = messaging.store
     private val httpClient = OkHttpClient() // TODO: configure support for proxying and stuff
@@ -1125,6 +1125,10 @@ internal class CryptoWorker(
                 )
             }
         }
+    }
+
+    internal fun retryFailed(cmd: () -> Unit) {
+        executor.schedule(cmd, retryDelayMillis, TimeUnit.MILLISECONDS)
     }
 
     override fun close() {
