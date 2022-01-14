@@ -47,10 +47,10 @@ object ChatNumberEncoding {
      * @return
      */
     fun encodeToString(b: ByteArray, targetLength: Int): String {
-        val _b = b.copyOf()
-        val head = (byteToUnsigned(_b[0]) ushr 6).toByte()
-        _b[0] = (byteToUnsigned(_b[0]) shl 2).toByte()
-        val tail = shiftBase9(BigInteger(1, _b).toString(9))
+        val cb = b.copyOf()
+        val head = (byteToUnsigned(cb[0]) ushr 6).toByte()
+        cb[0] = (byteToUnsigned(cb[0]) shl 2).toByte()
+        val tail = shiftBase9(BigInteger(1, cb).toString(9))
         val result = StringBuilder(targetLength)
         result.append(base4Table[head])
         var padding = targetLength - 1 - tail.length
@@ -69,19 +69,15 @@ object ChatNumberEncoding {
      * contain enough data to fill targetSize, the byte[] will contain leading zeros.
      *
      * This function ignores any leading characters other than 2, 3, 4 or 6, and any subsequent 5s.
-     *
-     * @param s
-     * @param targetSize
-     * @return
      */
     fun decodeFromString(string: String, targetSize: Int): ByteArray {
         val s = string.replace("^[015789]+".toRegex(), "")
         val head = base4TableReverse[s[0]]!!
-        var _tail = BigInteger(unshiftBase9(s.substring(1)), 9)
+        var itail = BigInteger(unshiftBase9(s.substring(1)), 9)
         val buf = ByteBuffer.allocate(targetSize)
         for (i in targetSize / 4 - 1 downTo 0) {
-            buf.putInt(i * 4, _tail.toInt())
-            _tail = _tail.shiftRight(32)
+            buf.putInt(i * 4, itail.toInt())
+            itail = itail.shiftRight(32)
         }
         val tail = buf.array()
         tail[0] = (head shl 6 or (byteToUnsigned(tail[0]) ushr 2)).toByte()
@@ -96,12 +92,11 @@ object ChatNumberEncoding {
 
     private fun shiftBase9(s: String): String {
         val result = StringBuilder(s.length)
-        for (element in s) {
-            val c = element
+        for (c in s) {
             if (c < '5') {
                 result.append(c)
             } else {
-                result.append((c.toInt() + 1).toChar())
+                result.append((c.code + 1).toChar())
             }
         }
         return result.toString()
@@ -109,14 +104,17 @@ object ChatNumberEncoding {
 
     private fun unshiftBase9(s: String): String {
         val result = StringBuilder(s.length)
-        for (element in s) {
-            val c = element
-            if (c < '5') {
-                result.append(c)
-            } else if (c == '5') {
-                // ignore 5s
-            } else {
-                result.append((c.toInt() - 1).toChar())
+        for (c in s) {
+            when {
+                c < '5' -> {
+                    result.append(c)
+                }
+                c == '5' -> {
+                    // ignore 5s
+                }
+                else -> {
+                    result.append((c.code - 1).toChar())
+                }
             }
         }
         return result.toString()

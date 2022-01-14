@@ -22,7 +22,7 @@ class MultiDeviceResult(
         private val onComplete: (MultiDeviceResult) -> Unit
     ) {
         val successfulDeviceIds = ConcurrentSkipListSet<String>()
-        val deviceErrors = ConcurrentHashMap<String, Throwable>()
+        private val deviceErrors = ConcurrentHashMap<String, Throwable>()
 
         internal fun fail(err: Throwable) {
             onComplete(MultiDeviceResult(error = err))
@@ -34,7 +34,7 @@ class MultiDeviceResult(
         }
 
         internal fun deviceFailed(deviceId: String, err: Throwable) {
-            deviceErrors.put(deviceId, err)
+            deviceErrors[deviceId] = err
             attemptToComplete()
         }
 

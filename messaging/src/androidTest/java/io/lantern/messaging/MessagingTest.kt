@@ -1,3 +1,5 @@
+@file:Suppress("BlockingMethodInNonBlockingContext")
+
 package io.lantern.messaging
 
 import androidx.test.platform.app.InstrumentationRegistry
@@ -14,10 +16,12 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java9.util.concurrent.CompletableFuture
 import kotlin.collections.ArrayList
+import kotlin.collections.HashMap
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
@@ -26,8 +30,8 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.ExperimentalTime
-import kotlin.time.seconds
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -155,7 +159,7 @@ class MessagingTest : BaseMessagingTest() {
                             val now = now
                             var catContact =
                                 dog.addOrUpdateDirectContact(
-                                    " ${catId.toUpperCase()} ",
+                                    " ${catId.uppercase(Locale.getDefault())} ",
                                     "\uD83D\uDE00   Cat\n",
                                     source = Model.ContactSource.APP1,
                                     applicationIds = mapOf(0 to "appid")
@@ -291,7 +295,7 @@ class MessagingTest : BaseMessagingTest() {
                                 "hello again dog"
                             )
 
-                            dog.deleteDirectContact(catId.toUpperCase())
+                            dog.deleteDirectContact(catId.uppercase(Locale.getDefault()))
                             assertFalse(dog.db.contains(catId.directContactId.contactPath))
                             assertFalse(dog.db.contains(msgs.received.dbPath))
                             assertEquals(
@@ -1236,8 +1240,8 @@ class MessagingTest : BaseMessagingTest() {
                         sentMsg.dbPath,
                         "dog should receive message with 2 completed attachments"
                     ) {
-                        it.attachmentsMap.values.count {
-                            it.status == Model.StoredAttachment.Status.DONE
+                        it.attachmentsMap.values.count { attachment ->
+                            attachment.status == Model.StoredAttachment.Status.DONE
                         } == 2
                     }
 
@@ -1405,7 +1409,7 @@ class MessagingTest : BaseMessagingTest() {
                             )
 
                             // try to remotely delete message with someone other than sender
-                            var bogusContactId = "blahblah".directContactId
+                            val bogusContactId = "blahblah".directContactId
                             try {
                                 dog.deleteLocally(
                                     replyMsgs.received.dbPath,
@@ -1784,10 +1788,8 @@ class MessagingTest : BaseMessagingTest() {
                             val receivedFirstSignal = CompletableFuture<Void>()
                             val receivedSignals = HashMap<String, String>()
                             cat.subscribeToWebRTCSignals("subscriberId") { signal ->
-                                receivedSignals.put(
-                                    signal.senderId,
+                                receivedSignals[signal.senderId] =
                                     signal.content.toString(Charsets.UTF_8)
-                                )
                                 receivedFirstSignal.complete(null)
                             }
 
@@ -1830,7 +1832,7 @@ class MessagingTest : BaseMessagingTest() {
                             dog.sendWebRTCSignal(
                                 catId,
                                 "first".toByteArray(Charsets.UTF_8),
-                                deviceId = badDeviceId.toString()
+                                deviceId = badDeviceId
                             ) {
                                 resultFuture.complete(it)
                             }
@@ -1841,7 +1843,7 @@ class MessagingTest : BaseMessagingTest() {
                             )
                             assertEquals(
                                 true,
-                                result.deviceErrors?.containsKey(badDeviceId.toString())
+                                result.deviceErrors?.containsKey(badDeviceId)
                             )
 
                             logger.debug("reopen cat with a very short webRTC signal timeout")
@@ -1854,10 +1856,8 @@ class MessagingTest : BaseMessagingTest() {
                             ).with { reopenedCat ->
                                 val newReceivedSignals = HashMap<String, String>()
                                 reopenedCat.subscribeToWebRTCSignals("subscriberId") { signal ->
-                                    receivedSignals.put(
-                                        signal.senderId,
+                                    receivedSignals[signal.senderId] =
                                         signal.content.toString(Charsets.UTF_8)
-                                    )
                                     receivedFirstSignal.complete(null)
                                 }
 
@@ -1975,7 +1975,7 @@ class MessagingTest : BaseMessagingTest() {
 
             // Introduce dog and cat to each other. We use a custom introduction builder to mess up the
             // displayName on the introduction to test sanitizing inbound introductions.
-            owner.doIntroduce(listOf(dogId, catId.toUpperCase())) { to ->
+            owner.doIntroduce(listOf(dogId, catId.uppercase(Locale.getDefault()))) { to ->
                 Model.IntroductionDetails.newBuilder()
                     .setDisplayName("\uD83D\uDE00   ${to.displayName}  \n")
                     .build()
@@ -1983,7 +1983,7 @@ class MessagingTest : BaseMessagingTest() {
 
             // introduce all pets again, including dog and cat, to make sure we can handle duplicate
             // introductions
-            owner.introduce(listOf(dogId, catId, fishId.toUpperCase()))
+            owner.introduce(listOf(dogId, catId, fishId.uppercase(Locale.getDefault())))
 
             // make sure everyone received an introduction to everyone
             val introducedParties = listOf(dog, cat, fish)
@@ -2044,7 +2044,7 @@ class MessagingTest : BaseMessagingTest() {
                 dog.db.get<Model.Contact>(fishId.directContactPath)?.verificationLevel,
                 "intro to verified contact from verified contact should look verified"
             )
-            cat.acceptIntroduction(ownerId, dogId.toUpperCase())
+            cat.acceptIntroduction(ownerId, dogId.uppercase(Locale.getDefault()))
             dog.waitFor<Model.Contact>(
                 catId.directContactPath,
                 "dog's cat contact should show that it received a message after cat accepted introduction" // ktlint-disable max-line-length
@@ -2074,7 +2074,7 @@ class MessagingTest : BaseMessagingTest() {
                 Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
                 cat.db.introductionMessage(dogId, fishId)?.value?.value?.introduction?.status
             )
-            var catToFishFromDog =
+            val catToFishFromDog =
                 cat.db.introductionMessage(ownerId, fishId)?.value?.value
             assertEquals(
                 Model.IntroductionDetails.IntroductionStatus.ACCEPTED,
@@ -2104,7 +2104,7 @@ class MessagingTest : BaseMessagingTest() {
 
             // test deleting introduction messages
             fish.rejectIntroduction(ownerId, dogId)
-            fish.rejectIntroduction(ownerId, catId.toUpperCase())
+            fish.rejectIntroduction(ownerId, catId.uppercase(Locale.getDefault()))
             fish.rejectIntroduction(dogId, catId)
             assertNull(
                 fish.db.findOne(Schema.PATH_INTRODUCTIONS_BY_TO.path("%")),
@@ -2546,11 +2546,11 @@ class MessagingTest : BaseMessagingTest() {
 
         // send a message
         var senderStoredMsg = from.sendToDirectContact(
-            toId.toUpperCase(),
+            toId.uppercase(Locale.getDefault()),
             text,
             attachments = attachments,
             replyToId = replyToId,
-            unsafeReplyToSenderId = replyToId?.let { toId.toUpperCase() }
+            unsafeReplyToSenderId = replyToId?.let { toId.uppercase(Locale.getDefault()) }
         )
         assertFalse(senderStoredMsg.id.isNullOrBlank())
         assertEquals(
@@ -2780,7 +2780,7 @@ internal suspend fun <T : Any> Messaging.waitFor(
     duration: Duration = 20.seconds,
     check: ((T) -> Boolean)? = null
 ): T {
-    val maxWait = duration.toLongMilliseconds()
+    val maxWait = duration.inWholeMilliseconds
     var elapsed = 0
     while (elapsed < maxWait) {
         val value = this.db.findOne<T>(path)
@@ -2802,7 +2802,7 @@ internal suspend fun Messaging.waitForNull(
     testCase: String,
     duration: Duration = 10.seconds
 ) {
-    val maxWait = duration.toLongMilliseconds()
+    val maxWait = duration.inWholeMilliseconds
     var elapsed = 0
     while (elapsed < maxWait) {
         val value = this.db.findOne<Any>(path)

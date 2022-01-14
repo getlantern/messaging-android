@@ -31,8 +31,8 @@ import org.whispersystems.libsignal.state.SignedPreKeyRecord
 import org.whispersystems.signalservice.api.crypto.AttachmentCipherOutputStream
 import org.whispersystems.signalservice.internal.util.Util
 
-private val disappearingMessagesSubscriberID = "disappearingMessagesSubscriber"
-private val provisionalContactsSubscriberID = "provisionalContactsSubscriber"
+private const val disappearingMessagesSubscriberID = "disappearingMessagesSubscriber"
+private const val provisionalContactsSubscriberID = "provisionalContactsSubscriber"
 
 /**
  * CryptoWorker handles all sending and receiving of messages.
@@ -762,7 +762,7 @@ internal class CryptoWorker(
         }
     }
 
-    internal fun doDecryptAndStore(unidentifiedSenderMessage: ByteArray) {
+    private fun doDecryptAndStore(unidentifiedSenderMessage: ByteArray) {
         try {
             attemptDecryptAndStore(unidentifiedSenderMessage)
         } catch (e: BlockedSenderException) {

@@ -19,7 +19,9 @@ import java.io.FileInputStream
 import java.io.IOException
 import java.math.RoundingMode
 import java.nio.ByteBuffer
+import java.util.Locale
 import java.util.concurrent.Executors
+import kotlin.collections.ArrayList
 import kotlin.math.abs
 import kotlin.math.floor
 import mu.KotlinLogging
@@ -61,8 +63,8 @@ class Metadata(
             } catch (t: Throwable) {
                 null
             } ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(
-                file.extension.toLowerCase()
-            ) ?: when (file.extension.toLowerCase()) {
+                file.extension.lowercase(Locale.ROOT)
+            ) ?: when (file.extension.lowercase(Locale.ROOT)) {
                 "heic" -> "image/heic"
                 "heif" -> "image/heif"
                 else -> defaultMimeType

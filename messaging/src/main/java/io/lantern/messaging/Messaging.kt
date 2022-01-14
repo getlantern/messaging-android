@@ -1,3 +1,5 @@
+@file:Suppress("unused")
+
 package io.lantern.messaging
 
 import com.google.protobuf.ByteString
@@ -425,8 +427,7 @@ class Messaging(
                         Model.Datum.ValueCase.INT -> value.int
                         Model.Datum.ValueCase.BOOL -> value.bool
                         Model.Datum.ValueCase.BYTES -> value.bytes.toByteArray()
-                        Model.Datum.ValueCase.VALUE_NOT_SET ->
-                            throw Error("Value on Datum should always be set")
+                        else -> throw Error("Value on Datum should always be set")
                     }
                 }
                 contact.clearApplicationData()
@@ -927,14 +928,15 @@ class Messaging(
                         throw IllegalArgumentException("Message is still in the process of sending")
                     Model.StoredMessage.DeliveryStatus.COMPLETELY_SENT ->
                         throw IllegalArgumentException("Message was already successfully sent")
+                    else -> {
+                        val out = Model.OutboundMessage.newBuilder().setMessageId(messageId)
+                            .setSent(now)
+                            .setSenderId(myId.id)
+                            .setRecipientId(msg.contactId.id)
+                        tx.put(out.dbPath, out.build())
+                        cryptoWorker.submit { cryptoWorker.processOutbound(out) }
+                    }
                 }
-
-                val out = Model.OutboundMessage.newBuilder().setMessageId(messageId)
-                    .setSent(now)
-                    .setSenderId(myId.id)
-                    .setRecipientId(msg.contactId.id)
-                tx.put(out.dbPath, out.build())
-                cryptoWorker.submit { cryptoWorker.processOutbound(out) }
             }
         }
     }
@@ -1642,7 +1644,7 @@ class Messaging(
     ): List<SearchResult<Model.StoredMessage>> =
         db.search(Schema.PATH_MESSAGES.path("%"), query, snippetConfig)
 
-    internal fun numericFingerprintFor(contactId: Model.ContactId): String =
+    private fun numericFingerprintFor(contactId: Model.ContactId): String =
         NumericFingerprintGenerator(fingerprintIterations)
             .createFor(
                 0,
@@ -1701,7 +1703,7 @@ val now: Long
 val String.sanitizedContactId: String
     @Throws(InvalidKeyException::class)
     get() {
-        return ECPublicKey(this.toLowerCase(Locale.ROOT).trim()).toString()
+        return ECPublicKey(this.lowercase(Locale.ROOT).trim()).toString()
     }
 
 /**
