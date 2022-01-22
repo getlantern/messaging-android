@@ -19,7 +19,7 @@ class WebSocketTransportTest {
     @Test
     fun testClosedLocally() {
         val factory =
-            WebSocketTransportFactory("wss://tassis.lantern.io/api", connectTimeoutMillis = 5000)
+            WebSocketTransportFactory("wss://tassis-test.lantern.io/api", connectTimeoutMillis = 5000)
         val handler = TestHandler()
         Thread {
             factory.connect(handler)
@@ -35,7 +35,7 @@ class WebSocketTransportTest {
     @Test
     fun testClosedRemotely() {
         val factory =
-            WebSocketTransportFactory("wss://tassis.lantern.io/api", connectTimeoutMillis = 5000)
+            WebSocketTransportFactory("wss://tassis-test.lantern.io/api", connectTimeoutMillis = 5000)
         val handler = TestHandler()
         Thread {
             factory.connect(handler)
@@ -51,7 +51,7 @@ class WebSocketTransportTest {
     @Test
     fun testCancel() {
         val factory =
-            WebSocketTransportFactory("wss://tassis.lantern.io/api", connectTimeoutMillis = 5000)
+            WebSocketTransportFactory("wss://tassis-test.lantern.io/api", connectTimeoutMillis = 5000)
         val handler = TestHandler()
         Thread {
             factory.connect(handler)
@@ -67,7 +67,7 @@ class WebSocketTransportTest {
     @Test
     fun testConnectFailure() {
         val factory =
-            WebSocketTransportFactory("wss://badtassis.lantern.io/api", connectTimeoutMillis = 5000)
+            WebSocketTransportFactory("wss://badtassis-test.lantern.io/api", connectTimeoutMillis = 5000)
         val handler = TestHandler()
         Thread {
             factory.connect(handler)
@@ -80,7 +80,7 @@ class WebSocketTransportTest {
     fun testReadTimeout() {
         val factory =
             WebSocketTransportFactory(
-                "wss://badtassis.lantern.io/api",
+                "wss://badtassis-test.lantern.io/api",
                 connectTimeoutMillis = 5000,
                 readTimeoutMillis = 100
             )

@@ -235,7 +235,6 @@ class Metadata(
                                 // on large files, this will skip some data in order to save CPU and
                                 // speed up waveform generation
                                 while (!sawInputEOS && bytesProcessedForCurrentBar < bytesPerBar) {
-                                    println("skipping")
                                     bytesProcessedForCurrentBar += extractor.readSampleData(
                                         scratchBuffer,
                                         0

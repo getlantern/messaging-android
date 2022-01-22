@@ -20,7 +20,7 @@ class ClientTest {
     @Test
     fun testClosedLocally() {
         val factory =
-            WebSocketTransportFactory("wss://tassis.lantern.io/api", connectTimeoutMillis = 5000)
+            WebSocketTransportFactory("wss://tassis-test.lantern.io/api", connectTimeoutMillis = 5000)
         val delegate = Delegate()
         val client = AnonymousClient(delegate, 5000)
         Thread {
@@ -35,7 +35,7 @@ class ClientTest {
     fun testCloseTimeout() {
         val factory =
             object : WebSocketTransportFactory(
-                "wss://tassis.lantern.io/api",
+                "wss://tassis-test.lantern.io/api",
                 connectTimeoutMillis = 5000,
                 callTimeoutMillis = 1000
             ) {
@@ -62,7 +62,7 @@ class ClientTest {
     @Test
     fun testConnectFailure() {
         val factory =
-            WebSocketTransportFactory("wss://badtassis.lantern.io/api", connectTimeoutMillis = 5000)
+            WebSocketTransportFactory("wss://badtassis-test.lantern.io/api", connectTimeoutMillis = 5000)
         val delegate = Delegate()
         val client = AnonymousClient(delegate, 5000)
         Thread {
@@ -75,7 +75,7 @@ class ClientTest {
     fun testRoundTripTimeout() {
         val factory =
             object : WebSocketTransportFactory(
-                "wss://tassis.lantern.io/api",
+                "wss://tassis-test.lantern.io/api",
                 connectTimeoutMillis = 5000
             ) {
                 override fun buildTransport(

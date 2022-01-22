@@ -2753,7 +2753,7 @@ class MessagingTest : BaseMessagingTest() {
                 "attachments"
             ),
             BrokenTransportFactory(
-                "wss://tassis.lantern.io/api",
+                "wss://tassis-test.lantern.io/api",
                 (clientTimeoutMillis / 2)
             ),
             clientTimeoutMillis = clientTimeoutMillis,
@@ -2846,7 +2846,7 @@ internal suspend fun Messaging.with(fn: suspend (messaging: Messaging) -> Unit) 
 internal class BrokenTransportFactory(url: String, connectTimeoutMillis: Long) :
     WebSocketTransportFactory(url, connectTimeoutMillis = connectTimeoutMillis) {
     override fun getUrl(): String =
-        if (succeedDialing.get()) super.getUrl() else "wss://badtassis.lantern.io:9436"
+        if (succeedDialing.get()) super.getUrl() else "wss://badtassis-test.lantern.io:9436"
 
     override fun buildListener(
         handler: MessageHandler
