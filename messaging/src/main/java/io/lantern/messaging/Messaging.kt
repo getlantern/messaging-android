@@ -279,7 +279,7 @@ class Messaging(
 
     /**
      * Starts the messaging system. Until start() is called the first time, the data remains
-     * unitialized. start() must be called before attempting to use any of the other functions.
+     * uninitialized. start() must be called before attempting to use any of the other functions.
      */
     @Synchronized
     fun start() {
